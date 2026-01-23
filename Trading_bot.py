@@ -21,6 +21,8 @@ import json
 from flask import Flask, request
 import threading
 
+print("trading_bot.py chargé avec succès")
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================

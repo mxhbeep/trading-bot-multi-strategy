@@ -1,6 +1,0 @@
-ccxt
-pandas
-numpy
-requests
-flask
-gunicorn  # Pour servir l'app sur Heroku

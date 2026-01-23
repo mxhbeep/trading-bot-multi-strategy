@@ -1,0 +1,1 @@
+web: gunicorn trading_bot:app  # Remplace trading_bot par le nom de ton fichier.py sans .py, et :app pour Flask

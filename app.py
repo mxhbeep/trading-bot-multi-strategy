@@ -213,7 +213,7 @@ def get_signal(a4: dict, a1: dict) -> str | None:
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         logger.warning("Webhook reçu sans JSON")
         return "Données invalides", 400
@@ -222,23 +222,31 @@ def webhook():
 
     try:
         symbol = data['symbol']
-        st_signal = data['signal']  # ex: 'buy' / 'sell'
+        st_signal = data['signal']
         price = data.get('price', 0)
+
+        logger.info(f"Symbole reçu : {symbol}")
+        logger.info(f"Signal reçu : {st_signal}")
 
         if symbol not in symbols:
             logger.warning(f"Symbole {symbol} non dans watchlist")
             return "Symbole non surveillé", 200
 
+        logger.info("Symbole trouvé - fetch 4H...")
         df4 = fetch_ohlcv(symbol, CONFIG['TF_4H'])
+        logger.info("Fetch 4H terminé - fetch 1H...")
         df1 = fetch_ohlcv(symbol, CONFIG['TF_1H'])
 
+        logger.info("Fetch terminé - analyse 4H...")
         a4 = analyze_tf(df4, '4h')
+        logger.info("Analyse 4H terminée - analyse 1H...")
         a1 = analyze_tf(df1, '1h')
 
         if not a4 or not a1:
             logger.warning(f"Données incomplètes pour {symbol}")
             return "Données incomplètes", 200
 
+        logger.info("Analyse terminée - détection signal...")
         signal_type = 'LONG' if st_signal.lower() == 'buy' else 'SHORT' if st_signal.lower() == 'sell' else None
 
         if signal_type and get_signal(a4, a1) == signal_type:
@@ -248,13 +256,9 @@ def webhook():
 
         return "Webhook traité", 200
 
-    except KeyError as e:
-        logger.error(f"Clé manquante dans webhook : {e}")
-        return f"Clé manquante : {e}", 400
-
     except Exception as e:
-        logger.error(f"Erreur inattendue dans webhook : {e}")
-        return "Erreur interne", 500
+        logger.error(f"Erreur dans webhook : {type(e).__name__} - {str(e)}", exc_info=True)
+        return "Erreur interne du serveur", 500
 
 # ============================================================================
 # BOUCLE PRINCIPALE

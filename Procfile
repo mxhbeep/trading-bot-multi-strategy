@@ -1,1 +1,1 @@
-web: gunicorn trading_bot:app
+web: gunicorn app:app

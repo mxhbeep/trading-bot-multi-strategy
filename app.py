@@ -222,11 +222,11 @@ def webhook():
 
     logger.info(f"Webhook reçu : {data}")
 
-    global symbols  # ← Résout le NameError
+    global symbols  # ← AJOUTE CETTE LIGNE ICI (résout le NameError)
 
     try:
         symbol = data['symbol']
-        st_signal = data['signal']  # ex: 'buy' / 'sell'
+        st_signal = data['signal']
         price = data.get('price', 0)
 
         logger.info(f"Symbole reçu : {symbol}")
@@ -236,6 +236,7 @@ def webhook():
             logger.warning(f"Symbole {symbol} non dans watchlist")
             return "Symbole non surveillé", 200
 
+        # ... le reste du code (fetch, analyse, etc.)
         logger.info("Symbole trouvé - fetch 4H...")
         df4 = fetch_ohlcv(symbol, CONFIG['TF_4H'])
         logger.info("Fetch 4H terminé - fetch 1H...")

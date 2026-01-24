@@ -220,6 +220,8 @@ def webhook():
 
     logger.info(f"Webhook reçu : {data}")
 
+    global symbols  # ← AJOUTE CETTE LIGNE ICI
+
     try:
         symbol = data['symbol']
         st_signal = data['signal']

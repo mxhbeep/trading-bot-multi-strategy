@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trading Monitor Bot - Version finale propre (24 janvier 2026)
-- Exchange : OKX spot
-- Watchlist : dynamique depuis watchlist.txt (modifiable sans repush)
-- 4H : MACD (12, 34, 9)
-- 1H : Biais EMA(13) vs SMA(34)
-- Webhook TradingView pour ST Context / SuperTrend AI
-- Alertes Telegram quand alignement
+Trading Monitor Bot - Paires fixes dans le code (BTC, ETH, SOL, XRP, CRV, PEPE, DOGE, WIF, BONK, CVX)
+Exchange : OKX spot
+4H : MACD (12, 34, 9)
+1H : Biais EMA(13) vs SMA(34)
+Alerte Telegram quand alignement
 """
 
 import ccxt
@@ -17,8 +15,6 @@ import time
 import requests
 from datetime import datetime, timezone
 import logging
-import os
-import json
 from flask import Flask, request
 import threading
 
@@ -34,7 +30,19 @@ CONFIG = {
     'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
     'TELEGRAM_CHAT_ID': '6473214015',
     
-    'WATCHLIST_FILE': 'watchlist.txt',
+    # Paires fixes dans le code (tu peux en ajouter/supprimer ici)
+    'SYMBOLS': [
+        'BTC/USDT',
+        'ETH/USDT',
+        'SOL/USDT',
+        'XRP/USDT',
+        'CRV/USDT',
+        'PEPE/USDT',
+        'DOGE/USDT',
+        'WIF/USDT',
+        'BONK/USDT',
+        'CVX/USDT'
+    ],
     
     # Timeframes et indicateurs
     'TF_4H': '4h',
@@ -73,25 +81,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Globales
-symbols = []
 exchange = None
-
-# ============================================================================
-# LECTURE WATCHLIST (dynamique depuis fichier)
-# ============================================================================
-
-def load_watchlist() -> list[str]:
-    path = CONFIG['WATCHLIST_FILE']
-    if not os.path.exists(path):
-        logger.error(f"Fichier watchlist introuvable : {path}")
-        return []
-    
-    with open(path, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
-    
-    symbols_list = [line.strip() for line in lines if line.strip() and not line.strip().startswith('#')]
-    logger.info(f"Watchlist chargée : {len(symbols_list)} actifs")
-    return symbols_list
 
 # ============================================================================
 # INDICATEURS
@@ -273,17 +263,13 @@ def webhook():
 def main_loop():
     global symbols, exchange
 
-    symbols = load_watchlist()
-    if not symbols:
-        logger.error("Aucun symbole dans la watchlist → arrêt")
-        return
+    symbols = CONFIG['SYMBOLS']
+    logger.info(f"Watchlist chargée : {len(symbols)} actifs ({', '.join(symbols)})")
 
     # Message de démarrage Telegram
     try:
         start_msg = f"Bot démarré - Surveillance de {len(symbols)} actifs :\n"
-        start_msg += "\n".join([f"• {s}" for s in symbols[:12]])
-        if len(symbols) > 12:
-            start_msg += f"\n... et {len(symbols)-12} autres"
+        start_msg += "\n".join([f"• {s}" for s in symbols])
         start_msg += f"\n\nIntervalle : {CONFIG['CHECK_INTERVAL']/60} min"
 
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"

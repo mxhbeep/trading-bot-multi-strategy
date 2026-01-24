@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trading Monitor Bot - Paires fixes dans le code (BTC, ETH, SOL, XRP, CRV, PEPE, DOGE, WIF, BONK, CVX)
-Exchange : OKX spot
-4H : MACD (12, 34, 9)
-1H : Biais EMA(13) vs SMA(34)
-Alerte Telegram quand alignement
+Trading Monitor Bot - Version finale propre (24 janvier 2026)
+- Exchange : OKX spot
+- Watchlist : fixe dans le code (10 paires)
+- 4H : MACD (12, 34, 9)
+- 1H : Biais EMA(13) vs SMA(34)
+- Webhook TradingView pour ST Context / SuperTrend AI
+- Alertes Telegram quand alignement
 """
 
 import ccxt
@@ -30,7 +32,7 @@ CONFIG = {
     'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
     'TELEGRAM_CHAT_ID': '6473214015',
     
-    # Paires fixes dans le code (tu peux en ajouter/supprimer ici)
+    # Paires fixes dans le code
     'SYMBOLS': [
         'BTC/USDT',
         'ETH/USDT',
@@ -208,7 +210,7 @@ def get_signal(a4: dict, a1: dict) -> str | None:
     return None
 
 # ============================================================================
-# WEBHOOK TRADINGVIEW (ST Context 1H + SuperTrend AI 4H)
+# WEBHOOK TRADINGVIEW (ST Context)
 # ============================================================================
 
 @app.route('/webhook', methods=['POST'])
@@ -220,11 +222,11 @@ def webhook():
 
     logger.info(f"Webhook reçu : {data}")
 
-    global symbols  # ← AJOUTE CETTE LIGNE ICI
+    global symbols  # ← Résout le NameError
 
     try:
         symbol = data['symbol']
-        st_signal = data['signal']
+        st_signal = data['signal']  # ex: 'buy' / 'sell'
         price = data.get('price', 0)
 
         logger.info(f"Symbole reçu : {symbol}")
@@ -257,6 +259,10 @@ def webhook():
             logger.info(f"Signal {st_signal} pour {symbol} non aligné")
 
         return "Webhook traité", 200
+
+    except KeyError as e:
+        logger.error(f"Clé manquante dans webhook : {e}")
+        return f"Clé manquante : {e}", 400
 
     except Exception as e:
         logger.error(f"Erreur dans webhook : {type(e).__name__} - {str(e)}", exc_info=True)

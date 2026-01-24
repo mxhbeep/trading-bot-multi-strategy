@@ -32,7 +32,7 @@ CONFIG = {
     'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
     'TELEGRAM_CHAT_ID': '6473214015',
     
-    # Paires fixes dans le code
+    # Paires fixes dans le code (modifiable ici directement)
     'SYMBOLS': [
         'BTC/USDT',
         'ETH/USDT',
@@ -58,7 +58,7 @@ CONFIG = {
     
     # Paramètres bot
     'CHECK_INTERVAL': 300,          # 5 minutes
-    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,  # 30 min mini entre 2 alertes identiques par symbole
+    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,  # 30 min mini entre 2 alertes identiques
     'DATA_LIMIT': 300,
     'RETRY_DELAY': 12,
     'MAX_RETRIES': 4,
@@ -210,88 +210,53 @@ def get_signal(a4: dict, a1: dict) -> str | None:
     return None
 
 # ============================================================================
-# WEBHOOK TRADINGVIEW (ST Context 1H + SuperTrend AI 4H)
+# WEBHOOK TRADINGVIEW (ST Context)
 # ============================================================================
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """
-    Endpoint webhook pour recevoir les signaux depuis TradingView.
-    Accepte les signaux de :
-    - ST Context 1H (valeur numérique Short time context)
-    - SuperTrend AI 4H (signal 'buy' ou 'sell')
-    Vérifie les conditions et envoie alertes Telegram si alignement.
-    """
     data = request.get_json(silent=True)
-    if not data or not isinstance(data, dict):
-        logger.warning("Webhook reçu sans JSON valide")
-        return "Données invalides (JSON attendu)", 400
+    if not data:
+        logger.warning("Webhook reçu sans JSON")
+        return "Données invalides", 400
 
     logger.info(f"Webhook reçu : {data}")
 
-    global symbols, exchange  # Accès aux globals (watchlist et exchange)
+    global symbols  # Résout le NameError
 
     try:
-        symbol = data.get('symbol')
-        st_signal = data.get('signal')  # 'buy', 'sell' pour SuperTrend, ou 'st_context' pour ST Context
-        value = data.get('value')        # valeur numérique pour ST Context (Short time context)
-        tf = data.get('tf', 'unknown')   # '1h' ou '4h' pour distinguer
-        price = data.get('price', 0)     # optionnel
+        symbol = data['symbol']
+        st_signal = data['signal']  # ex: 'buy' / 'sell'
+        price = data.get('price', 0)
 
-        if not symbol or not st_signal:
-            logger.error("Symbole ou signal manquant dans le webhook")
-            return "Symbole ou signal manquant", 400
-
-        # Normalisation du symbole (gère les variantes TradingView)
-        symbol = symbol.strip().upper().replace('USDT', '/USDT').replace(':USDT', '/USDT')
-
-        logger.info(f"Symbole normalisé : {symbol}")
+        logger.info(f"Symbole reçu : {symbol}")
         logger.info(f"Signal reçu : {st_signal}")
-        logger.info(f"TF reçu : {tf}")
-        logger.info(f"Value reçu : {value}")
 
-        # Vérifie si le symbole est surveillé
         if symbol not in symbols:
-            logger.warning(f"Symbole {symbol} non dans watchlist ({symbols})")
+            logger.warning(f"Symbole {symbol} non dans watchlist")
             return "Symbole non surveillé", 200
 
-        # Mise à jour de l'état du symbole
-        if symbol not in LAST_SIGNALS:
-            LAST_SIGNALS[symbol] = {
-                'st_context_1h': None,
-                'supertrend_4h': None,
-                'last_update': 0
-            }
+        logger.info("Symbole trouvé - fetch 4H...")
+        df4 = fetch_ohlcv(symbol, CONFIG['TF_4H'])
+        logger.info("Fetch 4H terminé - fetch 1H...")
+        df1 = fetch_ohlcv(symbol, CONFIG['TF_1H'])
 
-        state = LAST_SIGNALS[symbol]
+        logger.info("Fetch terminé - analyse 4H...")
+        a4 = analyze_tf(df4, '4h')
+        logger.info("Analyse 4H terminée - analyse 1H...")
+        a1 = analyze_tf(df1, '1h')
 
-        # Mise à jour selon la source (tf)
-        updated = False
-        if tf == '1h' and signal == 'st_context' and value is not None:
-            state['st_context_1h'] = float(value)
-            updated = True
-            logger.info(f"ST Context 1H mis à jour : {value}")
-        elif tf == '4h' and st_signal in ['buy', 'sell', 'BUY', 'SELL']:
-            state['supertrend_4h'] = st_signal.lower()
-            updated = True
-            logger.info(f"SuperTrend AI 4H mis à jour : {st_signal}")
+        if not a4 or not a1:
+            logger.warning(f"Données incomplètes pour {symbol}")
+            return "Données incomplètes", 200
 
-        if not updated:
-            logger.warning(f"Signal non reconnu ou tf manquant : {data}")
-            return "Signal non reconnu", 200
+        logger.info("Analyse terminée - détection signal...")
+        signal_type = 'LONG' if st_signal.lower() == 'buy' else 'SHORT' if st_signal.lower() == 'sell' else None
 
-        # Fetch données 2D pour vérifier alignement
-        logger.info(f"Fetch 2D pour {symbol}...")
-        df2d = fetch_ohlcv(symbol, CONFIG['TF_2D'])
-        a2d = analyze_2d(df2d)
-
-        if not a2d:
-            logger.warning(f"Données 2D incomplètes pour {symbol}")
-            return "Données 2D incomplètes", 200
-
-        # Évaluation complète des conditions
-        logger.info("Évaluation des conditions...")
-        evaluate_conditions(symbol, a2d, state['st_context_1h'], state['supertrend_4h'])
+        if signal_type and get_signal(a4, a1) == signal_type:
+            send_alert(symbol, signal_type, a4['price'], a4, a1)
+        else:
+            logger.info(f"Signal {st_signal} pour {symbol} non aligné")
 
         return "Webhook traité", 200
 
@@ -299,12 +264,8 @@ def webhook():
         logger.error(f"Clé manquante dans webhook : {e}")
         return f"Clé manquante : {e}", 400
 
-    except ValueError as e:
-        logger.error(f"Valeur invalide dans webhook : {e}")
-        return f"Valeur invalide : {e}", 400
-
     except Exception as e:
-        logger.error(f"Erreur critique dans webhook : {type(e).__name__} - {str(e)}", exc_info=True)
+        logger.error(f"Erreur dans webhook : {type(e).__name__} - {str(e)}", exc_info=True)
         return "Erreur interne du serveur", 500
 
 # ============================================================================

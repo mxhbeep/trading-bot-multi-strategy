@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trading Monitor Bot - Version finale propre
+Trading Monitor Bot - Version finale propre (24 janvier 2026)
+- Exchange : OKX spot
+- Watchlist : dynamique depuis watchlist.txt (modifiable sans repush)
+- 4H : MACD (12, 34, 9)
+- 1H : Biais EMA(13) vs SMA(34)
+- Webhook TradingView pour ST Context / SuperTrend AI
+- Alertes Telegram quand alignement
 """
 
 import ccxt
@@ -41,25 +47,37 @@ CONFIG = {
     'SMA_1H': 34,
     
     # Paramètres bot
-    'CHECK_INTERVAL': 300,
-    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
+    'CHECK_INTERVAL': 300,          # 5 minutes
+    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,  # 30 min mini entre 2 alertes identiques par symbole
     'DATA_LIMIT': 300,
     'RETRY_DELAY': 12,
     'MAX_RETRIES': 4,
     
+    # Webhook Flask
     'WEBHOOK_PORT': 5000,
     'WEBHOOK_HOST': '0.0.0.0',
 }
 
+# État anti-spam par symbole
 LAST_SIGNALS = {}
-logging.basicConfig(level=logging.INFO, format='%(asctime)s  %(levelname)-7s  %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s  %(levelname)-7s  %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
+
+# Flask app
 app = Flask(__name__)
+
+# Globales
 symbols = []
 exchange = None
 
 # ============================================================================
-# LECTURE WATCHLIST
+# LECTURE WATCHLIST (dynamique depuis fichier)
 # ============================================================================
 
 def load_watchlist() -> list[str]:
@@ -260,7 +278,7 @@ def main_loop():
         logger.error("Aucun symbole dans la watchlist → arrêt")
         return
 
-    # Message de démarrage
+    # Message de démarrage Telegram
     try:
         start_msg = f"Bot démarré - Surveillance de {len(symbols)} actifs :\n"
         start_msg += "\n".join([f"• {s}" for s in symbols[:12]])

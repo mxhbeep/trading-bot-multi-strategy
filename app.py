@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trading Monitor Bot - Version finale propre (24 janvier 2026)
+Trading Monitor Bot - Version Optimisee (24 janvier 2026)
 - Exchange : OKX spot
 - Watchlist : fixe dans le code (10 paires)
 - 4H : MACD (12, 34, 9)
 - 1H : Biais EMA(13) vs SMA(34)
 - Webhook TradingView pour ST Context / SuperTrend AI
-- Alertes Telegram quand alignement
+- Alertes Telegram avec anti-spam intelligent
 """
 
 import ccxt
@@ -17,8 +17,11 @@ import time
 import requests
 from datetime import datetime, timezone
 import logging
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import threading
+from typing import Optional, Dict, List, Tuple
+import signal
+import sys
 
 # ============================================================================
 # CONFIGURATION
@@ -32,7 +35,7 @@ CONFIG = {
     'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
     'TELEGRAM_CHAT_ID': '6473214015',
     
-    # Paires fixes dans le code (modifiable ici directement)
+    # Paires fixes dans le code
     'SYMBOLS': [
         'BTC/USDT',
         'ETH/USDT',
@@ -56,9 +59,9 @@ CONFIG = {
     'EMA_1H': 13,
     'SMA_1H': 34,
     
-    # Paramètres bot
-    'CHECK_INTERVAL': 300,          # 5 minutes
-    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,  # 30 min mini entre 2 alertes identiques
+    # Parametres bot
+    'CHECK_INTERVAL': 300,                      # 5 minutes
+    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,        # 30 min mini entre 2 alertes identiques
     'DATA_LIMIT': 300,
     'RETRY_DELAY': 12,
     'MAX_RETRIES': 4,
@@ -66,12 +69,28 @@ CONFIG = {
     # Webhook Flask
     'WEBHOOK_PORT': 5000,
     'WEBHOOK_HOST': '0.0.0.0',
+    
+    # Securite
+    'WEBHOOK_SECRET': 'your_secret_key_here',   # Optionnel : cle secrete pour webhook
 }
 
-# État anti-spam par symbole
-LAST_SIGNALS = {}
+# ============================================================================
+# ETAT GLOBAL
+# ============================================================================
 
-# Logging
+# Etat anti-spam par symbole
+LAST_SIGNALS: Dict[str, Dict] = {}
+
+# Exchange global
+exchange: Optional[ccxt.okx] = None
+
+# Flag pour arret propre
+shutdown_flag = threading.Event()
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s  %(levelname)-7s  %(message)s',
@@ -79,285 +98,550 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask app
+# ============================================================================
+# FLASK APP
+# ============================================================================
+
 app = Flask(__name__)
 
-# Globales
-exchange = None
+# Desactiver les logs Flask par defaut (sauf erreurs)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 # ============================================================================
-# INDICATEURS
+# INDICATEURS TECHNIQUES
 # ============================================================================
 
-def ema(series: pd.Series, period: int) -> pd.Series:
+def calculate_ema(series: pd.Series, period: int) -> pd.Series:
+    """Calcule l'Exponential Moving Average"""
     return series.ewm(span=period, adjust=False).mean()
 
-def sma(series: pd.Series, period: int) -> pd.Series:
+def calculate_sma(series: pd.Series, period: int) -> pd.Series:
+    """Calcule la Simple Moving Average"""
     return series.rolling(window=period).mean()
 
-def macd(series: pd.Series, fast: int, slow: int, sig: int):
-    ema_fast = ema(series, fast)
-    ema_slow = ema(series, slow)
+def calculate_macd(series: pd.Series, fast: int, slow: int, signal: int) -> Tuple[pd.Series, pd.Series]:
+    """Calcule le MACD et retourne (macd_line, signal_line)"""
+    ema_fast = calculate_ema(series, fast)
+    ema_slow = calculate_ema(series, slow)
     macd_line = ema_fast - ema_slow
-    signal_line = ema(macd_line, sig)
+    signal_line = calculate_ema(macd_line, signal)
     return macd_line, signal_line
 
 # ============================================================================
 # ANALYSE TIMEFRAME
 # ============================================================================
 
-def analyze_tf(df: pd.DataFrame, tf: str) -> dict | None:
+def analyze_4h(df: pd.DataFrame) -> Optional[Dict]:
+    """
+    Analyse le timeframe 4H avec MACD
+    Retourne un dictionnaire avec les resultats ou None
+    """
     if df is None or len(df) < 50:
-        logger.debug(f"Données insuffisantes pour {tf}")
         return None
 
-    close = df['close']
-
-    if tf == '4h':
-        macd_line, sig_line = macd(close, CONFIG['MACD_4H_FAST'], CONFIG['MACD_4H_SLOW'], CONFIG['MACD_4H_SIGNAL'])
+    try:
+        close = df['close']
+        macd_line, signal_line = calculate_macd(
+            close, 
+            CONFIG['MACD_4H_FAST'], 
+            CONFIG['MACD_4H_SLOW'], 
+            CONFIG['MACD_4H_SIGNAL']
+        )
+        
+        # Trouver la derniere valeur non-NaN
         idx = -1
-        while idx > -len(close) and pd.isna(macd_line.iloc[idx]):
+        while idx >= -len(close) and (pd.isna(macd_line.iloc[idx]) or pd.isna(signal_line.iloc[idx])):
             idx -= 1
-        if idx == -len(close):
+        
+        if abs(idx) >= len(close):
             return None
+        
         macd_val = macd_line.iloc[idx]
-        sig_val = sig_line.iloc[idx]
+        sig_val = signal_line.iloc[idx]
+        
         return {
             'macd_bull': macd_val > sig_val,
             'macd_bear': macd_val < sig_val,
-            'macd_line': round(macd_val, 4),
-            'signal_line': round(sig_val, 4),
-            'price': round(close.iloc[-1], 2)
+            'macd_line': round(float(macd_val), 6),
+            'signal_line': round(float(sig_val), 6),
+            'price': round(float(close.iloc[-1]), 6)
         }
+    except Exception as e:
+        logger.error(f"Erreur analyse 4H: {e}")
+        return None
 
-    else:  # 1h
-        em = ema(close, CONFIG['EMA_1H'])
-        sm = sma(close, CONFIG['SMA_1H'])
+def analyze_1h(df: pd.DataFrame) -> Optional[Dict]:
+    """
+    Analyse le timeframe 1H avec biais EMA/SMA
+    Retourne un dictionnaire avec les resultats ou None
+    """
+    if df is None or len(df) < 50:
+        return None
+
+    try:
+        close = df['close']
+        ema_val = calculate_ema(close, CONFIG['EMA_1H'])
+        sma_val = calculate_sma(close, CONFIG['SMA_1H'])
+        
+        # Trouver la derniere valeur non-NaN
         idx = -1
-        while idx > -len(close) and pd.isna(sm.iloc[idx]):
+        while idx >= -len(close) and (pd.isna(ema_val.iloc[idx]) or pd.isna(sma_val.iloc[idx])):
             idx -= 1
-        if idx == -len(close):
+        
+        if abs(idx) >= len(close):
             return None
-        em_val = em.iloc[idx]
-        sm_val = sm.iloc[idx]
+        
+        ema = ema_val.iloc[idx]
+        sma = sma_val.iloc[idx]
+        
         return {
-            'bias_bull': em_val > sm_val,
-            'bias_bear': em_val < sm_val,
-            'ema': round(em_val, 2),
-            'sma': round(sm_val, 2),
-            'price': round(close.iloc[-1], 2)
+            'bias_bull': ema > sma,
+            'bias_bear': ema < sma,
+            'ema': round(float(ema), 6),
+            'sma': round(float(sma), 6),
+            'price': round(float(close.iloc[-1]), 6)
         }
+    except Exception as e:
+        logger.error(f"Erreur analyse 1H: {e}")
+        return None
 
 # ============================================================================
-# RÉCUPÉRATION OHLCV
+# RECUPERATION DONNEES OHLCV
 # ============================================================================
 
-def fetch_ohlcv(symbol: str, timeframe: str) -> pd.DataFrame | None:
+def fetch_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+    """
+    Recupere les donnees OHLCV avec retry automatique
+    """
+    if exchange is None:
+        logger.error("Exchange non initialise")
+        return None
+    
     for attempt in range(CONFIG['MAX_RETRIES']):
         try:
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=CONFIG['DATA_LIMIT'])
-            if not ohlcv:
-                raise ValueError("Réponse vide")
+            
+            if not ohlcv or len(ohlcv) < 50:
+                raise ValueError(f"Donnees insuffisantes: {len(ohlcv) if ohlcv else 0} bougies")
+            
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
             return df
+            
+        except ccxt.RateLimitExceeded:
+            wait_time = CONFIG['RETRY_DELAY'] * (attempt + 1)
+            logger.warning(f"Rate limit atteint pour {symbol} {timeframe}, attente {wait_time}s...")
+            time.sleep(wait_time)
+            
         except Exception as e:
-            logger.warning(f"{symbol} {timeframe} erreur (essai {attempt+1}): {e}")
-            time.sleep(CONFIG['RETRY_DELAY'])
+            if attempt < CONFIG['MAX_RETRIES'] - 1:
+                logger.warning(f"{symbol} {timeframe} erreur (essai {attempt+1}/{CONFIG['MAX_RETRIES']}): {e}")
+                time.sleep(CONFIG['RETRY_DELAY'])
+            else:
+                logger.error(f"Echec definitif pour {symbol} {timeframe}: {e}")
+                return None
+    
+    return None
+
+# ============================================================================
+# DETECTION SIGNAL
+# ============================================================================
+
+def detect_signal(analysis_4h: Optional[Dict], analysis_1h: Optional[Dict]) -> Optional[str]:
+    """
+    Detecte si un signal LONG ou SHORT est present
+    Retourne 'LONG', 'SHORT', ou None
+    """
+    if not analysis_4h or not analysis_1h:
+        return None
+    
+    # Signal LONG : MACD bull 4H + Biais bull 1H
+    if analysis_4h['macd_bull'] and analysis_1h['bias_bull']:
+        return 'LONG'
+    
+    # Signal SHORT : MACD bear 4H + Biais bear 1H
+    if analysis_4h['macd_bear'] and analysis_1h['bias_bear']:
+        return 'SHORT'
+    
     return None
 
 # ============================================================================
 # ENVOI TELEGRAM
 # ============================================================================
 
-def send_alert(symbol: str, signal_type: str, price: float, a4: dict, a1: dict):
-    msg = f"{signal_type} - {symbol}\n\n"
-    msg += f"Prix : ${price:.2f}\n"
-    msg += f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-
-    msg += "4H  •  MACD : " + ("Bull" if a4['macd_bull'] else "Bear") + "\n"
-    msg += f"     •  MACD line : {a4['macd_line']}\n"
-    msg += f"     •  Signal line : {a4['signal_line']}\n\n"
-
-    msg += "1H  •  Biais : " + ("Bull" if a1['bias_bull'] else "Bear") + "\n"
-    msg += f"     •  EMA({CONFIG['EMA_1H']}) : {a1['ema']}\n"
-    msg += f"     •  SMA({CONFIG['SMA_1H']}) : {a1['sma']}\n\n"
-
-    msg += "Vérifie SuperTrend AI 20min avant d'entrer\n"
-    msg += "Ce bot ne trade pas automatiquement."
-
-    url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
-    payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'], 'text': msg, 'parse_mode': 'HTML'}
-
+def send_telegram_alert(symbol: str, signal_type: str, price: float, a4: Dict, a1: Dict, source: str = "Scanner"):
+    """
+    Envoie une alerte formatee sur Telegram
+    """
     try:
-        r = requests.post(url, json=payload, timeout=12)
-        r.raise_for_status()
-        logger.info(f"Alerte {signal_type} envoyée pour {symbol}")
+        # Construction du message
+        msg = f"[SIGNAL {signal_type}] {symbol}\n\n"
+        msg += f"Prix : ${price:.4f}\n"
+        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        msg += f"Source : {source}\n\n"
+        
+        msg += "Timeframe 4H (MACD):\n"
+        msg += f"  Signal : {'Bull' if a4['macd_bull'] else 'Bear'}\n"
+        msg += f"  MACD Line : {a4['macd_line']:.6f}\n"
+        msg += f"  Signal Line : {a4['signal_line']:.6f}\n\n"
+        
+        msg += "Timeframe 1H (Biais):\n"
+        msg += f"  Signal : {'Bull' if a1['bias_bull'] else 'Bear'}\n"
+        msg += f"  EMA({CONFIG['EMA_1H']}) : {a1['ema']:.6f}\n"
+        msg += f"  SMA({CONFIG['SMA_1H']}) : {a1['sma']:.6f}\n\n"
+        
+        msg += "ATTENTION: Verifiez SuperTrend AI 20min avant d'entrer\n"
+        msg += "INFO: Ce bot ne trade pas automatiquement."
+        
+        # Envoi
+        url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
+        payload = {
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': msg,
+            'disable_web_page_preview': True
+        }
+        
+        response = requests.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        
+        logger.info(f"Alerte {signal_type} envoyee pour {symbol} (source: {source})")
+        return True
+        
     except Exception as e:
-        logger.error(f"Échec envoi Telegram pour {symbol}: {e}")
+        logger.error(f"Echec envoi Telegram pour {symbol}: {e}")
+        return False
 
 # ============================================================================
-# DÉTECTION SIGNAL
+# GESTION ANTI-SPAM
 # ============================================================================
 
-def get_signal(a4: dict, a1: dict) -> str | None:
-    if not a4 or not a1:
-        return None
-    if a4['macd_bull'] and a1['bias_bull']:
-        return 'LONG'
-    if a4['macd_bear'] and a1['bias_bear']:
-        return 'SHORT'
-    return None
+def should_send_alert(symbol: str, signal_type: str) -> bool:
+    """
+    Determine si une alerte doit etre envoyee en fonction de l'anti-spam
+    """
+    now = time.time()
+    
+    if symbol not in LAST_SIGNALS:
+        LAST_SIGNALS[symbol] = {'type': None, 'timestamp': 0, 'price': None}
+    
+    prev = LAST_SIGNALS[symbol]
+    
+    # Nouveau type de signal : toujours envoyer
+    if signal_type != prev['type']:
+        return True
+    
+    # Meme signal : verifier le cooldown
+    time_elapsed = now - prev['timestamp']
+    if time_elapsed >= CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']:
+        return True
+    
+    return False
+
+def update_last_signal(symbol: str, signal_type: str, price: float):
+    """
+    Met a jour l'etat du dernier signal pour un symbole
+    """
+    LAST_SIGNALS[symbol] = {
+        'type': signal_type,
+        'timestamp': time.time(),
+        'price': price
+    }
+
+def clear_signal(symbol: str):
+    """
+    Reinitialise le signal pour un symbole (quand plus de signal actif)
+    """
+    if symbol in LAST_SIGNALS and LAST_SIGNALS[symbol]['type'] is not None:
+        logger.info(f"Signal precedent termine pour {symbol}")
+        LAST_SIGNALS[symbol]['type'] = None
 
 # ============================================================================
-# WEBHOOK TRADINGVIEW (ST Context)
+# WEBHOOK TRADINGVIEW
 # ============================================================================
 
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json(silent=True)
-    if not data:
-        logger.warning("Webhook reçu sans JSON")
-        return "Données invalides", 400
-
-    logger.info(f"Webhook reçu : {data}")
-
-    global symbols  # Résout le NameError
-
+def webhook_handler():
+    """
+    Endpoint pour recevoir les webhooks TradingView
+    Format attendu: {"symbol": "BTC/USDT", "signal": "buy", "price": 43250.50}
+    """
+    global exchange
+    
     try:
+        # Recuperation des donnees
+        data = request.get_json(silent=True)
+        
+        if not data:
+            logger.warning("Webhook recu sans donnees JSON")
+            return jsonify({'status': 'error', 'message': 'Donnees JSON manquantes'}), 400
+        
+        logger.info(f"Webhook recu: {data}")
+        
+        # Validation des champs requis
+        required_fields = ['symbol', 'signal']
+        missing_fields = [f for f in required_fields if f not in data]
+        
+        if missing_fields:
+            logger.warning(f"Champs manquants dans webhook: {missing_fields}")
+            return jsonify({'status': 'error', 'message': f'Champs manquants: {missing_fields}'}), 400
+        
         symbol = data['symbol']
-        st_signal = data['signal']  # ex: 'buy' / 'sell'
+        st_signal = data['signal'].lower()
         price = data.get('price', 0)
-
-        logger.info(f"Symbole reçu : {symbol}")
-        logger.info(f"Signal reçu : {st_signal}")
-
-        if symbol not in symbols:
-            logger.warning(f"Symbole {symbol} non dans watchlist")
-            return "Symbole non surveillé", 200
-
-        logger.info("Symbole trouvé - fetch 4H...")
-        df4 = fetch_ohlcv(symbol, CONFIG['TF_4H'])
-        logger.info("Fetch 4H terminé - fetch 1H...")
-        df1 = fetch_ohlcv(symbol, CONFIG['TF_1H'])
-
-        logger.info("Fetch terminé - analyse 4H...")
-        a4 = analyze_tf(df4, '4h')
-        logger.info("Analyse 4H terminée - analyse 1H...")
-        a1 = analyze_tf(df1, '1h')
-
+        
+        # Verification que l'exchange est initialise
+        if exchange is None:
+            logger.error("Exchange non initialise - webhook recu trop tot")
+            return jsonify({'status': 'error', 'message': 'Bot pas encore pret, reessayez dans 30s'}), 503
+        
+        # Verification du symbole dans la watchlist
+        if symbol not in CONFIG['SYMBOLS']:
+            logger.warning(f"Symbole {symbol} non surveille (watchlist: {CONFIG['SYMBOLS']})")
+            return jsonify({'status': 'ignored', 'message': 'Symbole non surveille'}), 200
+        
+        # Conversion du signal TradingView
+        if st_signal not in ['buy', 'sell']:
+            logger.warning(f"Signal invalide: {st_signal}")
+            return jsonify({'status': 'error', 'message': 'Signal doit etre buy ou sell'}), 400
+        
+        signal_type = 'LONG' if st_signal == 'buy' else 'SHORT'
+        
+        # Recuperation et analyse des donnees
+        logger.debug(f"Recuperation donnees 4H pour {symbol}...")
+        df_4h = fetch_ohlcv(symbol, CONFIG['TF_4H'])
+        
+        logger.debug(f"Recuperation donnees 1H pour {symbol}...")
+        df_1h = fetch_ohlcv(symbol, CONFIG['TF_1H'])
+        
+        # Analyse
+        a4 = analyze_4h(df_4h)
+        a1 = analyze_1h(df_1h)
+        
         if not a4 or not a1:
-            logger.warning(f"Données incomplètes pour {symbol}")
-            return "Données incomplètes", 200
-
-        logger.info("Analyse terminée - détection signal...")
-        signal_type = 'LONG' if st_signal.lower() == 'buy' else 'SHORT' if st_signal.lower() == 'sell' else None
-
-        if signal_type and get_signal(a4, a1) == signal_type:
-            send_alert(symbol, signal_type, a4['price'], a4, a1)
+            logger.warning(f"Donnees incompletes pour {symbol}")
+            return jsonify({'status': 'error', 'message': 'Donnees incompletes'}), 200
+        
+        # Verification alignement avec notre strategie
+        detected_signal = detect_signal(a4, a1)
+        
+        if detected_signal == signal_type:
+            # Signal aligne : envoyer l'alerte si anti-spam OK
+            if should_send_alert(symbol, signal_type):
+                actual_price = a1['price']
+                send_telegram_alert(symbol, signal_type, actual_price, a4, a1, source="Webhook TradingView")
+                update_last_signal(symbol, signal_type, actual_price)
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Alerte envoyee',
+                    'symbol': symbol,
+                    'signal': signal_type
+                }), 200
+            else:
+                logger.info(f"Signal {signal_type} pour {symbol} - cooldown actif (pas d'alerte)")
+                return jsonify({
+                    'status': 'cooldown',
+                    'message': 'Alerte ignoree (cooldown)'
+                }), 200
         else:
-            logger.info(f"Signal {st_signal} pour {symbol} non aligné")
-
-        return "Webhook traité", 200
-
+            logger.info(f"Signal {st_signal} TradingView pour {symbol} non aligne avec strategie (detecte: {detected_signal})")
+            return jsonify({
+                'status': 'not_aligned',
+                'message': 'Signal non aligne avec strategie',
+                'tv_signal': signal_type,
+                'detected_signal': detected_signal
+            }), 200
+        
     except KeyError as e:
-        logger.error(f"Clé manquante dans webhook : {e}")
-        return f"Clé manquante : {e}", 400
-
+        logger.error(f"Cle manquante dans webhook: {e}")
+        return jsonify({'status': 'error', 'message': f'Cle manquante: {e}'}), 400
+    
     except Exception as e:
-        logger.error(f"Erreur dans webhook : {type(e).__name__} - {str(e)}", exc_info=True)
-        return "Erreur interne du serveur", 500
+        logger.error(f"Erreur webhook: {type(e).__name__} - {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Erreur serveur'}), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Endpoint de sante pour verifier que le bot fonctionne"""
+    return jsonify({
+        'status': 'running',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'symbols_monitored': len(CONFIG['SYMBOLS']),
+        'active_signals': len([s for s in LAST_SIGNALS.values() if s['type'] is not None])
+    }), 200
 
 # ============================================================================
-# BOUCLE PRINCIPALE
+# BOUCLE PRINCIPALE DE MONITORING
 # ============================================================================
 
-def main_loop():
-    global symbols, exchange
-
+def main_scanning_loop():
+    """
+    Boucle principale qui scanne periodiquement tous les symboles
+    """
+    global exchange
+    
     symbols = CONFIG['SYMBOLS']
-    logger.info(f"Watchlist chargée : {len(symbols)} actifs ({', '.join(symbols)})")
-
-    # Message de démarrage Telegram
+    logger.info(f"Watchlist chargee: {len(symbols)} actifs")
+    logger.info(f"Symboles: {', '.join(symbols)}")
+    
+    # Initialisation de l'exchange
     try:
-        start_msg = f"Bot démarré - Surveillance de {len(symbols)} actifs :\n"
-        start_msg += "\n".join([f"• {s}" for s in symbols])
-        start_msg += f"\n\nIntervalle : {CONFIG['CHECK_INTERVAL']/60} min"
-
-        url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
-        r = requests.post(url, json={
-            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
-            'text': start_msg,
-            'parse_mode': 'HTML'
-        }, timeout=12)
-        if r.status_code == 200:
-            logger.info("Message de démarrage envoyé")
-        else:
-            logger.warning(f"Échec message démarrage (code {r.status_code})")
+        exchange = ccxt.okx({
+            'apiKey': CONFIG['API_KEY'],
+            'secret': CONFIG['SECRET'],
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        logger.info("Exchange OKX initialise")
     except Exception as e:
-        logger.warning(f"Impossible d'envoyer message de démarrage : {e}")
-
-    exchange = ccxt.okx({
-        'enableRateLimit': True,
-        'options': {'defaultType': 'spot'}
-    })
-
-    while True:
+        logger.error(f"Erreur initialisation exchange: {e}")
+        return
+    
+    # Message de demarrage Telegram
+    try:
+        start_msg = f"[BOT DEMARRE]\n\n"
+        start_msg += f"Surveillance de {len(symbols)} actifs:\n"
+        start_msg += "\n".join([f"  - {s}" for s in symbols])
+        start_msg += f"\n\nIntervalle: {CONFIG['CHECK_INTERVAL']/60:.0f} min"
+        start_msg += f"\nAnti-spam: {CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']/60:.0f} min"
+        
+        url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
+        requests.post(url, json={
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': start_msg
+        }, timeout=15)
+        logger.info("Message de demarrage envoye")
+    except Exception as e:
+        logger.warning(f"Impossible d'envoyer message de demarrage: {e}")
+    
+    # Boucle principale
+    iteration = 0
+    while not shutdown_flag.is_set():
         try:
+            iteration += 1
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Scan #{iteration} - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            logger.info(f"{'='*60}")
+            
             for symbol in symbols:
-                logger.debug(f"Analyse {symbol}...")
-                df4 = fetch_ohlcv(symbol, CONFIG['TF_4H'])
-                df1 = fetch_ohlcv(symbol, CONFIG['TF_1H'])
-
-                a4 = analyze_tf(df4, '4h')
-                a1 = analyze_tf(df1, '1h')
-
-                if not a4 or not a1:
-                    logger.debug(f"Données incomplètes pour {symbol}")
+                if shutdown_flag.is_set():
+                    break
+                
+                try:
+                    # Recuperation des donnees
+                    df_4h = fetch_ohlcv(symbol, CONFIG['TF_4H'])
+                    df_1h = fetch_ohlcv(symbol, CONFIG['TF_1H'])
+                    
+                    # Analyse
+                    a4 = analyze_4h(df_4h)
+                    a1 = analyze_1h(df_1h)
+                    
+                    if not a4 or not a1:
+                        logger.debug(f"Donnees incompletes pour {symbol}")
+                        continue
+                    
+                    # Detection du signal
+                    signal = detect_signal(a4, a1)
+                    price = a1['price']
+                    
+                    if signal:
+                        # Signal detecte
+                        if should_send_alert(symbol, signal):
+                            logger.info(f"Signal {signal} detecte sur {symbol} @ ${price:.4f}")
+                            send_telegram_alert(symbol, signal, price, a4, a1, source="Scanner periodique")
+                            update_last_signal(symbol, signal, price)
+                        else:
+                            logger.debug(f"Signal {signal} pour {symbol} - cooldown actif")
+                    else:
+                        # Plus de signal actif
+                        clear_signal(symbol)
+                    
+                    # Petit delai entre symboles pour eviter rate limit
+                    time.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.error(f"Erreur lors du traitement de {symbol}: {e}")
                     continue
-
-                price = a1['price']
-                signal = get_signal(a4, a1)
-
-                if not signal:
-                    if symbol in LAST_SIGNALS and LAST_SIGNALS[symbol]['type'] is not None:
-                        logger.info(f"{symbol} : signal précédent terminé")
-                        LAST_SIGNALS[symbol]['type'] = None
-                    continue
-
-                now = time.time()
-                if symbol not in LAST_SIGNALS:
-                    LAST_SIGNALS[symbol] = {'type': None, 'timestamp': 0, 'price': None}
-
-                prev = LAST_SIGNALS[symbol]
-                cooldown_ok = now - prev['timestamp'] >= CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']
-
-                if signal != prev['type'] or cooldown_ok:
-                    logger.info(f"Signal {signal} détecté sur {symbol} @ ${price:.2f}")
-                    send_alert(symbol, signal, price, a4, a1)
-                    LAST_SIGNALS[symbol] = {'type': signal, 'timestamp': now, 'price': price}
-                else:
-                    logger.debug(f"{symbol} : {signal} déjà récent – pas d'alerte")
-
-            time.sleep(CONFIG['CHECK_INTERVAL'])
-
-        except KeyboardInterrupt:
-            logger.info("Arrêt demandé")
-            break
+            
+            # Resume du scan
+            active_signals = sum(1 for s in LAST_SIGNALS.values() if s['type'] is not None)
+            logger.info(f"Scan termine - Signaux actifs: {active_signals}/{len(symbols)}")
+            
+            # Attente avant prochain scan
+            logger.info(f"Prochain scan dans {CONFIG['CHECK_INTERVAL']}s...")
+            shutdown_flag.wait(CONFIG['CHECK_INTERVAL'])
+            
         except Exception as e:
-            logger.error(f"Erreur boucle principale : {e}")
-            time.sleep(60)
+            logger.error(f"Erreur dans la boucle principale: {e}", exc_info=True)
+            if not shutdown_flag.is_set():
+                logger.info("Attente de 60s avant retry...")
+                shutdown_flag.wait(60)
 
 # ============================================================================
-# DÉMARRAGE
+# GESTION ARRET PROPRE
+# ============================================================================
+
+def signal_handler(signum, frame):
+    """Gestionnaire pour arret propre du bot"""
+    logger.info("\nSignal d'arret recu (Ctrl+C)")
+    shutdown_flag.set()
+    
+    # Message d'arret Telegram
+    try:
+        stop_msg = "[BOT ARRETE]\n\nArret manuel par utilisateur"
+        url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
+        requests.post(url, json={
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': stop_msg
+        }, timeout=10)
+    except:
+        pass
+    
+    sys.exit(0)
+
+# ============================================================================
+# POINT D'ENTREE
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("Démarrage bot local")
-    print("Module app chargé avec succès")  # Test import
-
-    # Lance la boucle de check en thread
-    threading.Thread(target=main_loop, daemon=True).start()
-
-    # Lance Flask
-    app.run(host=CONFIG['WEBHOOK_HOST'], port=CONFIG['WEBHOOK_PORT'], debug=False)
+    # Configuration des signaux pour arret propre
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    logger.info("="*60)
+    logger.info("Trading Monitor Bot - Demarrage")
+    logger.info("="*60)
+    logger.info(f"Exchange: {CONFIG['EXCHANGE'].upper()}")
+    logger.info(f"Symboles surveilles: {len(CONFIG['SYMBOLS'])}")
+    logger.info(f"Webhook port: {CONFIG['WEBHOOK_PORT']}")
+    logger.info("="*60)
+    
+    # Validation configuration
+    if CONFIG['TELEGRAM_BOT_TOKEN'] == 'YOUR_BOT_TOKEN_HERE':
+        logger.error("TELEGRAM_BOT_TOKEN non configure")
+        sys.exit(1)
+    
+    if CONFIG['TELEGRAM_CHAT_ID'] == 'YOUR_CHAT_ID_HERE':
+        logger.error("TELEGRAM_CHAT_ID non configure")
+        sys.exit(1)
+    
+    # Demarrage du thread de scanning
+    scanner_thread = threading.Thread(target=main_scanning_loop, daemon=True, name="Scanner")
+    scanner_thread.start()
+    logger.info("Thread de scanning demarre")
+    
+    # Demarrage du serveur Flask (bloquant)
+    try:
+        logger.info(f"Demarrage serveur webhook sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
+        app.run(
+            host=CONFIG['WEBHOOK_HOST'],
+            port=CONFIG['WEBHOOK_PORT'],
+            debug=False,
+            use_reloader=False  # Important pour eviter double demarrage
+        )
+    except Exception as e:
+        logger.error(f"Erreur serveur Flask: {e}")
+        shutdown_flag.set()
+        sys.exit(1)

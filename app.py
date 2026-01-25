@@ -632,11 +632,15 @@ def webhook_handler():
             
             # Traitement ST Context 4H
             if tf == '4h':
-                zone = data.get('zone')
                 long_term = data.get('long_term')
+                zone = data.get('zone')
                 
-                if not zone or long_term is None:
-                    return jsonify({'status': 'error', 'message': 'Champs zone et long_term requis pour 4h'}), 400
+                if long_term is None:
+                    return jsonify({'status': 'error', 'message': 'Champ long_term requis pour 4h'}), 400
+                
+                # Si pas de zone specifique, c'est un event d'invalidation (neutral)
+                if not zone:
+                    zone = 'neutral'
                 
                 # Mise a jour de l'etat
                 ST_CONTEXT_STATE[symbol] = {

@@ -104,10 +104,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot trading OK - Monitoring actif"
-
 # Desactiver les logs Flask par defaut (sauf erreurs)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -490,19 +486,6 @@ def main_scanning_loop():
     logger.info(f"Watchlist chargee: {len(symbols)} actifs")
     logger.info(f"Symboles: {', '.join(symbols)}")
     
-    # Initialisation de l'exchange
-    try:
-        exchange = ccxt.okx({
-            'apiKey': CONFIG['API_KEY'],
-            'secret': CONFIG['SECRET'],
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
-        logger.info("Exchange OKX initialise")
-    except Exception as e:
-        logger.error(f"Erreur initialisation exchange: {e}")
-        return
-    
     # Message de demarrage Telegram
     try:
         start_msg = f"[BOT DEMARRE]\n\n"
@@ -629,6 +612,20 @@ if __name__ == "__main__":
     
     if CONFIG['TELEGRAM_CHAT_ID'] == 'YOUR_CHAT_ID_HERE':
         logger.error("TELEGRAM_CHAT_ID non configure")
+        sys.exit(1)
+    
+    # INITIALISATION DE L'EXCHANGE EN PREMIER
+    logger.info("Initialisation de l'exchange OKX...")
+    try:
+        exchange = ccxt.okx({
+            'apiKey': CONFIG['API_KEY'],
+            'secret': CONFIG['SECRET'],
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        logger.info("Exchange OKX initialise avec succes")
+    except Exception as e:
+        logger.error(f"ERREUR CRITIQUE: Impossible d'initialiser l'exchange: {e}")
         sys.exit(1)
     
     # Demarrage du thread de scanning

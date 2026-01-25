@@ -132,6 +132,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+@app.route('/')
+def home():
+    return "Bot trading OK - Monitoring actif"
+
 # Desactiver les logs Flask par defaut (sauf erreurs)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)

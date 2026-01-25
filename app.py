@@ -425,6 +425,43 @@ def send_telegram_alert_macd_bias(symbol: str, signal_type: str, price: float, a
         logger.error(f"Echec envoi Telegram pour {symbol}: {e}")
         return False
 
+def send_telegram_alert_preparation(symbol: str, zone_4h: str, long_term: float, price: float):
+    """
+    Envoie une alerte de preparation sur Telegram
+    """
+    try:
+        direction = "LONG" if zone_4h == "buy" else "SHORT"
+        
+        msg = f"[PREPARATION {direction}] {symbol}\n"
+        msg += f"Strategie: ST Context + SuperTrend AI\n\n"
+        msg += f"Prix : ${price:.2f}\n"
+        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+
+        msg += f"ST Context 4H : Zone {zone_4h.upper()} ACTIVE\n"
+        msg += f"Long Term Context : {long_term:.2f} (VALIDE)\n"
+        msg += f"SuperTrend AI 1H : En attente...\n\n"
+
+        msg += f"PREPARATION: Tiens-toi pret pour un signal {direction}\n"
+        msg += "Surveille le SuperTrend AI sur 1H pour confirmation\n"
+        msg += "INFO: Ce bot ne trade pas automatiquement."
+
+        url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
+        payload = {
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': msg,
+            'disable_web_page_preview': True
+        }
+
+        response = requests.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        
+        logger.info(f"Alerte preparation {direction} envoyee pour {symbol}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Echec envoi Telegram preparation pour {symbol}: {e}")
+        return False
+
 def send_telegram_alert_st_context(symbol: str, signal_type: str, price: float, long_term: float, zone_4h: str, supertrend_1h: str):
     """
     Envoie une alerte formatee sur Telegram (strategie ST Context)
@@ -650,6 +687,21 @@ def webhook_handler():
                 }
                 
                 logger.info(f"ST Context 4H mis a jour pour {symbol}: zone={zone}, long_term={long_term}")
+                
+                # Alerte de preparation si zone valide + long_term dans range
+                if zone.lower() in ['buy', 'sell'] and -2 <= float(long_term) <= 2:
+                    # Verifier anti-spam pour les alertes de preparation
+                    prep_key = f"{symbol}:st_context:prep"
+                    now = time.time()
+                    
+                    if prep_key not in LAST_SIGNALS:
+                        LAST_SIGNALS[prep_key] = {'type': None, 'timestamp': 0}
+                    
+                    # Envoyer alerte preparation si cooldown OK (30 min)
+                    time_elapsed = now - LAST_SIGNALS[prep_key]['timestamp']
+                    if time_elapsed >= CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']:
+                        send_telegram_alert_preparation(symbol, zone.lower(), float(long_term), price)
+                        LAST_SIGNALS[prep_key] = {'type': zone.lower(), 'timestamp': now}
                 
                 return jsonify({
                     'status': 'success',

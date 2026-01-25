@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trading Monitor Bot - Version Optimisee (24 janvier 2026)
+Unified Trading Monitor Bot - Multi-Strategies (24 janvier 2026)
 - Exchange : OKX spot
 - Watchlist : fixe dans le code (10 paires)
+
+STRATEGIE 1 (macd_bias):
 - 4H : MACD (12, 34, 9)
 - 1H : Biais EMA(13) vs SMA(34)
-- Webhook TradingView pour ST Context / SuperTrend AI
-- Alertes Telegram avec anti-spam intelligent
+
+STRATEGIE 2 (st_context):
+- 4H : ST Context zones (buy/sell) + Long Term Context (-2 a 2)
+- 1H : SuperTrend AI (buy/sell)
+
+Webhook TradingView avec champ "strategy" pour choisir
+Alertes Telegram avec anti-spam intelligent
 """
 
 import ccxt
@@ -49,7 +56,7 @@ CONFIG = {
         'CVX/USDT'
     ],
     
-    # Timeframes et indicateurs
+    # Timeframes et indicateurs - Strategie 1 (macd_bias)
     'TF_4H': '4h',
     'MACD_4H_FAST': 12,
     'MACD_4H_SLOW': 34,
@@ -69,23 +76,57 @@ CONFIG = {
     # Webhook Flask
     'WEBHOOK_PORT': 5000,
     'WEBHOOK_HOST': '0.0.0.0',
-    
-    # Securite
-    'WEBHOOK_SECRET': 'your_secret_key_here',   # Optionnel : cle secrete pour webhook
 }
 
 # ============================================================================
 # ETAT GLOBAL
 # ============================================================================
 
-# Etat anti-spam par symbole
-LAST_SIGNALS: Dict[str, Dict] = {}
+# Etat anti-spam par symbole et strategie
+LAST_SIGNALS: Dict[str, Dict] = {}  # {'BTC/USDT:macd_bias': {...}, 'BTC/USDT:st_context': {...}}
 
 # Exchange global
 exchange: Optional[ccxt.okx] = None
 
+# Etat ST Context par symbole (pour strategie 2)
+ST_CONTEXT_STATE: Dict[str, Dict] = {}  # {'ETH/USDT': {'zone_4h': 'buy', 'long_term': 1.5, 'timestamp': ...}}
+
 # Flag pour arret propre
 shutdown_flag = threading.Event()
+
+# ============================================================================
+# UTILITAIRES
+# ============================================================================
+
+def format_tradingview_symbol(tv_symbol: str) -> str:
+    """
+    Convertit un symbole TradingView en format attendu par le bot
+    Exemples:
+        OKX:ETHUSDT -> ETH/USDT
+        ETHUSDT -> ETH/USDT
+        ETH/USDT -> ETH/USDT (déjà au bon format)
+    """
+    # Enlever le prefix exchange si présent
+    if ':' in tv_symbol:
+        tv_symbol = tv_symbol.split(':')[-1]
+    
+    # Si déjà au bon format, retourner tel quel
+    if '/' in tv_symbol:
+        return tv_symbol
+    
+    # Convertir ETHUSDT en ETH/USDT
+    if 'USDT' in tv_symbol:
+        base = tv_symbol.replace('USDT', '')
+        return f"{base}/USDT"
+    elif 'USDC' in tv_symbol:
+        base = tv_symbol.replace('USDC', '')
+        return f"{base}/USDC"
+    elif 'BUSD' in tv_symbol:
+        base = tv_symbol.replace('BUSD', '')
+        return f"{base}/BUSD"
+    
+    # Si format inconnu, retourner tel quel
+    return tv_symbol
 
 # ============================================================================
 # INITIALISATION EXCHANGE
@@ -134,14 +175,14 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot trading OK - Monitoring actif"
+    return "Bot trading OK - Multi-strategies monitoring actif"
 
 # Desactiver les logs Flask par defaut (sauf erreurs)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 # ============================================================================
-# INDICATEURS TECHNIQUES
+# INDICATEURS TECHNIQUES (STRATEGIE 1)
 # ============================================================================
 
 def calculate_ema(series: pd.Series, period: int) -> pd.Series:
@@ -161,7 +202,7 @@ def calculate_macd(series: pd.Series, fast: int, slow: int, signal: int) -> Tupl
     return macd_line, signal_line
 
 # ============================================================================
-# ANALYSE TIMEFRAME
+# ANALYSE TIMEFRAME (STRATEGIE 1)
 # ============================================================================
 
 def analyze_4h(df: pd.DataFrame) -> Optional[Dict]:
@@ -280,12 +321,12 @@ def fetch_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
     return None
 
 # ============================================================================
-# DETECTION SIGNAL
+# DETECTION SIGNAL STRATEGIE 1 (MACD_BIAS)
 # ============================================================================
 
-def detect_signal(analysis_4h: Optional[Dict], analysis_1h: Optional[Dict]) -> Optional[str]:
+def detect_signal_macd_bias(analysis_4h: Optional[Dict], analysis_1h: Optional[Dict]) -> Optional[str]:
     """
-    Detecte si un signal LONG ou SHORT est present
+    Detecte si un signal LONG ou SHORT est present (strategie MACD + Biais)
     Retourne 'LONG', 'SHORT', ou None
     """
     if not analysis_4h or not analysis_1h:
@@ -302,16 +343,54 @@ def detect_signal(analysis_4h: Optional[Dict], analysis_1h: Optional[Dict]) -> O
     return None
 
 # ============================================================================
+# DETECTION SIGNAL STRATEGIE 2 (ST_CONTEXT)
+# ============================================================================
+
+def check_st_context_alignment(symbol: str, supertrend_1h: str) -> Optional[str]:
+    """
+    Verifie l'alignement entre ST Context 4H et SuperTrend AI 1H
+    Retourne 'LONG', 'SHORT', ou None
+    """
+    if symbol not in ST_CONTEXT_STATE:
+        logger.debug(f"Pas de zone ST Context 4H pour {symbol}")
+        return None
+
+    state = ST_CONTEXT_STATE[symbol]
+    zone_4h = state.get('zone_4h')
+    long_term = state.get('long_term')
+
+    # Verification long term context
+    if long_term is None:
+        logger.debug(f"Long term context manquant pour {symbol}")
+        return None
+    
+    if not (-2 <= long_term <= 2):
+        logger.info(f"Long term context hors range pour {symbol}: {long_term} (doit etre entre -2 et 2)")
+        return None
+
+    # Verification alignement
+    supertrend_lower = supertrend_1h.lower()
+    zone_lower = zone_4h.lower() if zone_4h else None
+    
+    if supertrend_lower == 'buy' and zone_lower == 'buy':
+        return 'LONG'
+    elif supertrend_lower == 'sell' and zone_lower == 'sell':
+        return 'SHORT'
+
+    logger.debug(f"Non aligne pour {symbol}: SuperTrend {supertrend_1h} vs zone {zone_4h}")
+    return None
+
+# ============================================================================
 # ENVOI TELEGRAM
 # ============================================================================
 
-def send_telegram_alert(symbol: str, signal_type: str, price: float, a4: Dict, a1: Dict, source: str = "Scanner"):
+def send_telegram_alert_macd_bias(symbol: str, signal_type: str, price: float, a4: Dict, a1: Dict, source: str = "Scanner"):
     """
-    Envoie une alerte formatee sur Telegram
+    Envoie une alerte formatee sur Telegram (strategie MACD + Biais)
     """
     try:
-        # Construction du message
-        msg = f"[SIGNAL {signal_type}] {symbol}\n\n"
+        msg = f"[SIGNAL {signal_type}] {symbol}\n"
+        msg += f"Strategie: MACD + Biais\n\n"
         msg += f"Prix : ${price:.4f}\n"
         msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
         msg += f"Source : {source}\n\n"
@@ -329,7 +408,6 @@ def send_telegram_alert(symbol: str, signal_type: str, price: float, a4: Dict, a
         msg += "ATTENTION: Verifiez SuperTrend AI 20min avant d'entrer\n"
         msg += "INFO: Ce bot ne trade pas automatiquement."
         
-        # Envoi
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {
             'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
@@ -340,7 +418,41 @@ def send_telegram_alert(symbol: str, signal_type: str, price: float, a4: Dict, a
         response = requests.post(url, json=payload, timeout=15)
         response.raise_for_status()
         
-        logger.info(f"Alerte {signal_type} envoyee pour {symbol} (source: {source})")
+        logger.info(f"Alerte {signal_type} envoyee pour {symbol} [MACD+Biais] (source: {source})")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Echec envoi Telegram pour {symbol}: {e}")
+        return False
+
+def send_telegram_alert_st_context(symbol: str, signal_type: str, price: float, long_term: float, zone_4h: str, supertrend_1h: str):
+    """
+    Envoie une alerte formatee sur Telegram (strategie ST Context)
+    """
+    try:
+        msg = f"[SIGNAL {signal_type}] {symbol}\n"
+        msg += f"Strategie: ST Context + SuperTrend AI\n\n"
+        msg += f"Prix : ${price:.2f}\n"
+        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+
+        msg += f"ST Context 4H : Zone {zone_4h.upper()}\n"
+        msg += f"Long Term Context : {long_term:.2f}\n"
+        msg += f"SuperTrend AI 1H : {supertrend_1h.upper()}\n\n"
+
+        msg += "ATTENTION: Verifie SuperTrend AI 20min avant d'entrer\n"
+        msg += "INFO: Ce bot ne trade pas automatiquement."
+
+        url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
+        payload = {
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': msg,
+            'disable_web_page_preview': True
+        }
+
+        response = requests.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        
+        logger.info(f"Alerte {signal_type} envoyee pour {symbol} [ST Context]")
         return True
         
     except Exception as e:
@@ -351,16 +463,21 @@ def send_telegram_alert(symbol: str, signal_type: str, price: float, a4: Dict, a
 # GESTION ANTI-SPAM
 # ============================================================================
 
-def should_send_alert(symbol: str, signal_type: str) -> bool:
+def get_signal_key(symbol: str, strategy: str) -> str:
+    """Genere une cle unique pour le tracking anti-spam"""
+    return f"{symbol}:{strategy}"
+
+def should_send_alert(symbol: str, signal_type: str, strategy: str) -> bool:
     """
     Determine si une alerte doit etre envoyee en fonction de l'anti-spam
     """
     now = time.time()
+    signal_key = get_signal_key(symbol, strategy)
     
-    if symbol not in LAST_SIGNALS:
-        LAST_SIGNALS[symbol] = {'type': None, 'timestamp': 0, 'price': None}
+    if signal_key not in LAST_SIGNALS:
+        LAST_SIGNALS[signal_key] = {'type': None, 'timestamp': 0, 'price': None}
     
-    prev = LAST_SIGNALS[symbol]
+    prev = LAST_SIGNALS[signal_key]
     
     # Nouveau type de signal : toujours envoyer
     if signal_type != prev['type']:
@@ -373,23 +490,25 @@ def should_send_alert(symbol: str, signal_type: str) -> bool:
     
     return False
 
-def update_last_signal(symbol: str, signal_type: str, price: float):
+def update_last_signal(symbol: str, signal_type: str, price: float, strategy: str):
     """
-    Met a jour l'etat du dernier signal pour un symbole
+    Met a jour l'etat du dernier signal pour un symbole et une strategie
     """
-    LAST_SIGNALS[symbol] = {
+    signal_key = get_signal_key(symbol, strategy)
+    LAST_SIGNALS[signal_key] = {
         'type': signal_type,
         'timestamp': time.time(),
         'price': price
     }
 
-def clear_signal(symbol: str):
+def clear_signal(symbol: str, strategy: str):
     """
     Reinitialise le signal pour un symbole (quand plus de signal actif)
     """
-    if symbol in LAST_SIGNALS and LAST_SIGNALS[symbol]['type'] is not None:
-        logger.info(f"Signal precedent termine pour {symbol}")
-        LAST_SIGNALS[symbol]['type'] = None
+    signal_key = get_signal_key(symbol, strategy)
+    if signal_key in LAST_SIGNALS and LAST_SIGNALS[signal_key]['type'] is not None:
+        logger.info(f"Signal precedent termine pour {symbol} [{strategy}]")
+        LAST_SIGNALS[signal_key]['type'] = None
 
 # ============================================================================
 # WEBHOOK TRADINGVIEW
@@ -399,10 +518,17 @@ def clear_signal(symbol: str):
 def webhook_handler():
     """
     Endpoint pour recevoir les webhooks TradingView
-    Format attendu: {"symbol": "BTC/USDT", "signal": "buy", "price": 43250.50}
+    
+    STRATEGIE 1 (macd_bias):
+    {"symbol": "BTC/USDT", "signal": "buy", "price": 43250, "strategy": "macd_bias"}
+    
+    STRATEGIE 2 (st_context) - ST Context 4H:
+    {"symbol": "BTC/USDT", "tf": "4h", "zone": "buy", "long_term": 1.5, "price": 43250, "strategy": "st_context"}
+    
+    STRATEGIE 2 (st_context) - SuperTrend AI 1H:
+    {"symbol": "BTC/USDT", "tf": "1h", "supertrend": "buy", "price": 43250, "strategy": "st_context"}
     """
     try:
-        # Recuperation des donnees
         data = request.get_json(silent=True)
         
         if not data:
@@ -411,83 +537,181 @@ def webhook_handler():
         
         logger.info(f"Webhook recu: {data}")
         
-        # Validation des champs requis
-        required_fields = ['symbol', 'signal']
-        missing_fields = [f for f in required_fields if f not in data]
+        # Validation champs requis
+        if 'symbol' not in data:
+            return jsonify({'status': 'error', 'message': 'Champ symbol manquant'}), 400
         
-        if missing_fields:
-            logger.warning(f"Champs manquants dans webhook: {missing_fields}")
-            return jsonify({'status': 'error', 'message': f'Champs manquants: {missing_fields}'}), 400
+        if 'strategy' not in data:
+            return jsonify({'status': 'error', 'message': 'Champ strategy manquant'}), 400
         
-        symbol = data['symbol']
-        st_signal = data['signal'].lower()
+        symbol_raw = data['symbol']
+        strategy = data['strategy'].lower()
         price = data.get('price', 0)
         
-        # Initialiser l'exchange si necessaire
-        try:
-            get_exchange()
-        except Exception as e:
-            logger.error(f"Impossible d'initialiser l'exchange: {e}")
-            return jsonify({'status': 'error', 'message': 'Erreur initialisation exchange'}), 500
+        # Conversion du symbole TradingView (ETHUSDT ou OKX:ETHUSDT) -> ETH/USDT
+        symbol = format_tradingview_symbol(symbol_raw)
         
-        # Verification du symbole dans la watchlist
+        # Verification symbole dans watchlist
         if symbol not in CONFIG['SYMBOLS']:
-            logger.warning(f"Symbole {symbol} non surveille (watchlist: {CONFIG['SYMBOLS']})")
+            logger.warning(f"Symbole {symbol} non surveille")
             return jsonify({'status': 'ignored', 'message': 'Symbole non surveille'}), 200
         
-        # Conversion du signal TradingView
-        if st_signal not in ['buy', 'sell']:
-            logger.warning(f"Signal invalide: {st_signal}")
-            return jsonify({'status': 'error', 'message': 'Signal doit etre buy ou sell'}), 400
+        # =====================================================================
+        # STRATEGIE 1 : MACD + BIAIS
+        # =====================================================================
+        if strategy == 'macd_bias':
+            if 'signal' not in data:
+                return jsonify({'status': 'error', 'message': 'Champ signal manquant pour macd_bias'}), 400
+            
+            st_signal = data['signal'].lower()
+            
+            # Initialiser l'exchange si necessaire
+            try:
+                get_exchange()
+            except Exception as e:
+                logger.error(f"Impossible d'initialiser l'exchange: {e}")
+                return jsonify({'status': 'error', 'message': 'Erreur initialisation exchange'}), 500
+            
+            # Conversion du signal TradingView
+            if st_signal not in ['buy', 'sell']:
+                logger.warning(f"Signal invalide: {st_signal}")
+                return jsonify({'status': 'error', 'message': 'Signal doit etre buy ou sell'}), 400
+            
+            signal_type = 'LONG' if st_signal == 'buy' else 'SHORT'
+            
+            # Recuperation et analyse des donnees
+            df_4h = fetch_ohlcv(symbol, CONFIG['TF_4H'])
+            df_1h = fetch_ohlcv(symbol, CONFIG['TF_1H'])
+            
+            a4 = analyze_4h(df_4h)
+            a1 = analyze_1h(df_1h)
+            
+            if not a4 or not a1:
+                logger.warning(f"Donnees incompletes pour {symbol}")
+                return jsonify({'status': 'error', 'message': 'Donnees incompletes'}), 200
+            
+            # Verification alignement
+            detected_signal = detect_signal_macd_bias(a4, a1)
+            
+            if detected_signal == signal_type:
+                if should_send_alert(symbol, signal_type, 'macd_bias'):
+                    actual_price = a1['price']
+                    send_telegram_alert_macd_bias(symbol, signal_type, actual_price, a4, a1, source="Webhook TradingView")
+                    update_last_signal(symbol, signal_type, actual_price, 'macd_bias')
+                    
+                    return jsonify({
+                        'status': 'success',
+                        'message': 'Alerte envoyee',
+                        'symbol': symbol,
+                        'signal': signal_type,
+                        'strategy': 'macd_bias'
+                    }), 200
+                else:
+                    return jsonify({
+                        'status': 'cooldown',
+                        'message': 'Alerte ignoree (cooldown)',
+                        'strategy': 'macd_bias'
+                    }), 200
+            else:
+                return jsonify({
+                    'status': 'not_aligned',
+                    'message': 'Signal non aligne avec strategie',
+                    'tv_signal': signal_type,
+                    'detected_signal': detected_signal,
+                    'strategy': 'macd_bias'
+                }), 200
         
-        signal_type = 'LONG' if st_signal == 'buy' else 'SHORT'
-        
-        # Recuperation et analyse des donnees
-        logger.debug(f"Recuperation donnees 4H pour {symbol}...")
-        df_4h = fetch_ohlcv(symbol, CONFIG['TF_4H'])
-        
-        logger.debug(f"Recuperation donnees 1H pour {symbol}...")
-        df_1h = fetch_ohlcv(symbol, CONFIG['TF_1H'])
-        
-        # Analyse
-        a4 = analyze_4h(df_4h)
-        a1 = analyze_1h(df_1h)
-        
-        if not a4 or not a1:
-            logger.warning(f"Donnees incompletes pour {symbol}")
-            return jsonify({'status': 'error', 'message': 'Donnees incompletes'}), 200
-        
-        # Verification alignement avec notre strategie
-        detected_signal = detect_signal(a4, a1)
-        
-        if detected_signal == signal_type:
-            # Signal aligne : envoyer l'alerte si anti-spam OK
-            if should_send_alert(symbol, signal_type):
-                actual_price = a1['price']
-                send_telegram_alert(symbol, signal_type, actual_price, a4, a1, source="Webhook TradingView")
-                update_last_signal(symbol, signal_type, actual_price)
+        # =====================================================================
+        # STRATEGIE 2 : ST CONTEXT + SUPERTREND AI
+        # =====================================================================
+        elif strategy == 'st_context':
+            if 'tf' not in data:
+                return jsonify({'status': 'error', 'message': 'Champ tf manquant pour st_context'}), 400
+            
+            tf = data['tf'].lower()
+            
+            # Traitement ST Context 4H
+            if tf == '4h':
+                zone = data.get('zone')
+                long_term = data.get('long_term')
+                
+                if not zone or long_term is None:
+                    return jsonify({'status': 'error', 'message': 'Champs zone et long_term requis pour 4h'}), 400
+                
+                # Mise a jour de l'etat
+                ST_CONTEXT_STATE[symbol] = {
+                    'zone_4h': zone.lower(),
+                    'long_term': float(long_term),
+                    'timestamp': time.time()
+                }
+                
+                logger.info(f"ST Context 4H mis a jour pour {symbol}: zone={zone}, long_term={long_term}")
                 
                 return jsonify({
                     'status': 'success',
-                    'message': 'Alerte envoyee',
+                    'message': 'ST Context 4H mis a jour',
                     'symbol': symbol,
-                    'signal': signal_type
+                    'zone': zone,
+                    'long_term': long_term,
+                    'strategy': 'st_context'
                 }), 200
+            
+            # Traitement SuperTrend AI 1H
+            elif tf == '1h':
+                supertrend = data.get('supertrend')
+                
+                if not supertrend:
+                    return jsonify({'status': 'error', 'message': 'Champ supertrend requis pour 1h'}), 400
+                
+                # Verification alignement
+                signal_type = check_st_context_alignment(symbol, supertrend)
+                
+                if signal_type:
+                    if should_send_alert(symbol, signal_type, 'st_context'):
+                        state = ST_CONTEXT_STATE[symbol]
+                        send_telegram_alert_st_context(
+                            symbol, 
+                            signal_type, 
+                            price, 
+                            state['long_term'], 
+                            state['zone_4h'], 
+                            supertrend
+                        )
+                        update_last_signal(symbol, signal_type, price, 'st_context')
+                        
+                        return jsonify({
+                            'status': 'success',
+                            'message': 'Alerte envoyee',
+                            'symbol': symbol,
+                            'signal': signal_type,
+                            'strategy': 'st_context'
+                        }), 200
+                    else:
+                        return jsonify({
+                            'status': 'cooldown',
+                            'message': 'Alerte ignoree (cooldown)',
+                            'strategy': 'st_context'
+                        }), 200
+                else:
+                    return jsonify({
+                        'status': 'not_aligned',
+                        'message': 'Signal non aligne avec ST Context 4H',
+                        'symbol': symbol,
+                        'supertrend_1h': supertrend,
+                        'zone_4h': ST_CONTEXT_STATE.get(symbol, {}).get('zone_4h', 'unknown'),
+                        'strategy': 'st_context'
+                    }), 200
+            
             else:
-                logger.info(f"Signal {signal_type} pour {symbol} - cooldown actif (pas d'alerte)")
-                return jsonify({
-                    'status': 'cooldown',
-                    'message': 'Alerte ignoree (cooldown)'
-                }), 200
-        else:
-            logger.info(f"Signal {st_signal} TradingView pour {symbol} non aligne avec strategie (detecte: {detected_signal})")
-            return jsonify({
-                'status': 'not_aligned',
-                'message': 'Signal non aligne avec strategie',
-                'tv_signal': signal_type,
-                'detected_signal': detected_signal
-            }), 200
+                return jsonify({'status': 'error', 'message': f'Timeframe invalide: {tf} (doit etre 4h ou 1h)'}), 400
         
+        else:
+            return jsonify({'status': 'error', 'message': f'Strategie invalide: {strategy} (doit etre macd_bias ou st_context)'}), 400
+        
+    except ValueError as e:
+        logger.error(f"Erreur de conversion dans webhook: {e}")
+        return jsonify({'status': 'error', 'message': f'Erreur de conversion: {e}'}), 400
+    
     except KeyError as e:
         logger.error(f"Cle manquante dans webhook: {e}")
         return jsonify({'status': 'error', 'message': f'Cle manquante: {e}'}), 400
@@ -503,35 +727,75 @@ def health_check():
         'status': 'running',
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'symbols_monitored': len(CONFIG['SYMBOLS']),
-        'active_signals': len([s for s in LAST_SIGNALS.values() if s['type'] is not None])
+        'active_signals': {
+            'macd_bias': len([k for k, v in LAST_SIGNALS.items() if 'macd_bias' in k and v['type'] is not None]),
+            'st_context': len([k for k, v in LAST_SIGNALS.items() if 'st_context' in k and v['type'] is not None])
+        },
+        'st_context_states': len(ST_CONTEXT_STATE)
     }), 200
 
+@app.route('/state', methods=['GET'])
+def get_state():
+    """Endpoint pour voir l'etat actuel de tous les symboles"""
+    return jsonify({
+        'last_signals': LAST_SIGNALS,
+        'st_context_state': {
+            symbol: {
+                'zone_4h': data.get('zone_4h'),
+                'long_term': data.get('long_term'),
+                'age_seconds': time.time() - data.get('timestamp', 0)
+            }
+            for symbol, data in ST_CONTEXT_STATE.items()
+        }
+    }), 200
+
+@app.route('/state/<symbol>', methods=['GET'])
+def get_symbol_state(symbol):
+    """Endpoint pour voir l'etat d'un symbole specifique"""
+    symbol_formatted = symbol.replace('-', '/')
+    
+    if symbol_formatted not in CONFIG['SYMBOLS']:
+        return jsonify({'error': 'Symbole non surveille'}), 404
+    
+    response = {
+        'symbol': symbol_formatted,
+        'strategies': {}
+    }
+    
+    # Info strategie MACD + Biais
+    macd_key = get_signal_key(symbol_formatted, 'macd_bias')
+    if macd_key in LAST_SIGNALS:
+        response['strategies']['macd_bias'] = LAST_SIGNALS[macd_key]
+    
+    # Info strategie ST Context
+    st_key = get_signal_key(symbol_formatted, 'st_context')
+    if st_key in LAST_SIGNALS:
+        response['strategies']['st_context'] = {
+            'last_signal': LAST_SIGNALS[st_key],
+            'st_context_4h': ST_CONTEXT_STATE.get(symbol_formatted, 'No data')
+        }
+    
+    return jsonify(response), 200
+
 # ============================================================================
-# BOUCLE PRINCIPALE DE MONITORING
+# BOUCLE PRINCIPALE DE MONITORING (DESACTIVEE - WEBHOOK ONLY)
 # ============================================================================
 
 def main_scanning_loop():
     """
-    Boucle principale qui scanne periodiquement tous les symboles
+    Boucle principale desactivee - Le bot fonctionne uniquement par webhooks
     """
-    symbols = CONFIG['SYMBOLS']
-    logger.info(f"Watchlist chargee: {len(symbols)} actifs")
-    logger.info(f"Symboles: {', '.join(symbols)}")
-    
-    # Initialiser l'exchange
-    try:
-        get_exchange()
-    except Exception as e:
-        logger.error(f"Impossible d'initialiser l'exchange dans le scanner: {e}")
-        return
+    logger.info("Mode webhook uniquement - Pas de scanning automatique")
     
     # Message de demarrage Telegram
     try:
         start_msg = f"[BOT DEMARRE]\n\n"
-        start_msg += f"Surveillance de {len(symbols)} actifs:\n"
-        start_msg += "\n".join([f"  - {s}" for s in symbols])
-        start_msg += f"\n\nIntervalle: {CONFIG['CHECK_INTERVAL']/60:.0f} min"
-        start_msg += f"\nAnti-spam: {CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']/60:.0f} min"
+        start_msg += f"Mode: Webhook uniquement\n"
+        start_msg += f"Surveillance de {len(CONFIG['SYMBOLS'])} actifs:\n"
+        start_msg += "\n".join([f"  - {s}" for s in CONFIG['SYMBOLS']])
+        start_msg += f"\n\nStrategies actives:\n"
+        start_msg += "  1. MACD + Biais (webhook)\n"
+        start_msg += "  2. ST Context + SuperTrend AI (webhook)\n"
         
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         requests.post(url, json={
@@ -541,69 +805,6 @@ def main_scanning_loop():
         logger.info("Message de demarrage envoye")
     except Exception as e:
         logger.warning(f"Impossible d'envoyer message de demarrage: {e}")
-    
-    # Boucle principale
-    iteration = 0
-    while not shutdown_flag.is_set():
-        try:
-            iteration += 1
-            logger.info(f"\n{'='*60}")
-            logger.info(f"Scan #{iteration} - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-            logger.info(f"{'='*60}")
-            
-            for symbol in symbols:
-                if shutdown_flag.is_set():
-                    break
-                
-                try:
-                    # Recuperation des donnees
-                    df_4h = fetch_ohlcv(symbol, CONFIG['TF_4H'])
-                    df_1h = fetch_ohlcv(symbol, CONFIG['TF_1H'])
-                    
-                    # Analyse
-                    a4 = analyze_4h(df_4h)
-                    a1 = analyze_1h(df_1h)
-                    
-                    if not a4 or not a1:
-                        logger.debug(f"Donnees incompletes pour {symbol}")
-                        continue
-                    
-                    # Detection du signal
-                    signal = detect_signal(a4, a1)
-                    price = a1['price']
-                    
-                    if signal:
-                        # Signal detecte
-                        if should_send_alert(symbol, signal):
-                            logger.info(f"Signal {signal} detecte sur {symbol} @ ${price:.4f}")
-                            send_telegram_alert(symbol, signal, price, a4, a1, source="Scanner periodique")
-                            update_last_signal(symbol, signal, price)
-                        else:
-                            logger.debug(f"Signal {signal} pour {symbol} - cooldown actif")
-                    else:
-                        # Plus de signal actif
-                        clear_signal(symbol)
-                    
-                    # Petit delai entre symboles pour eviter rate limit
-                    time.sleep(0.5)
-                    
-                except Exception as e:
-                    logger.error(f"Erreur lors du traitement de {symbol}: {e}")
-                    continue
-            
-            # Resume du scan
-            active_signals = sum(1 for s in LAST_SIGNALS.values() if s['type'] is not None)
-            logger.info(f"Scan termine - Signaux actifs: {active_signals}/{len(symbols)}")
-            
-            # Attente avant prochain scan
-            logger.info(f"Prochain scan dans {CONFIG['CHECK_INTERVAL']}s...")
-            shutdown_flag.wait(CONFIG['CHECK_INTERVAL'])
-            
-        except Exception as e:
-            logger.error(f"Erreur dans la boucle principale: {e}", exc_info=True)
-            if not shutdown_flag.is_set():
-                logger.info("Attente de 60s avant retry...")
-                shutdown_flag.wait(60)
 
 # ============================================================================
 # GESTION ARRET PROPRE
@@ -637,10 +838,13 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
     
     logger.info("="*60)
-    logger.info("Trading Monitor Bot - Demarrage")
+    logger.info("Unified Trading Monitor Bot - Demarrage")
     logger.info("="*60)
-    logger.info(f"Exchange: {CONFIG['EXCHANGE'].upper()}")
+    logger.info(f"Mode: Webhook uniquement")
     logger.info(f"Symboles surveilles: {len(CONFIG['SYMBOLS'])}")
+    logger.info("Strategies:")
+    logger.info("  1. MACD + Biais (webhook)")
+    logger.info("  2. ST Context + SuperTrend AI (webhook)")
     logger.info(f"Webhook port: {CONFIG['WEBHOOK_PORT']}")
     logger.info("="*60)
     
@@ -653,22 +857,18 @@ if __name__ == "__main__":
         logger.error("TELEGRAM_CHAT_ID non configure")
         sys.exit(1)
     
-    # Demarrage du thread de scanning
-    scanner_thread = threading.Thread(target=main_scanning_loop, daemon=True, name="Scanner")
-    scanner_thread.start()
-    logger.info("Thread de scanning demarre")
-    
-    # Petit delai pour laisser le temps au scanner de s'initialiser
-    time.sleep(2)
+    # Envoi message de demarrage
+    main_scanning_loop()
     
     # Demarrage du serveur Flask (bloquant)
     try:
         logger.info(f"Demarrage serveur webhook sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
+        logger.info("Pret a recevoir les webhooks TradingView...")
         app.run(
             host=CONFIG['WEBHOOK_HOST'],
             port=CONFIG['WEBHOOK_PORT'],
             debug=False,
-            use_reloader=False  # Important pour eviter double demarrage
+            use_reloader=False
         )
     except Exception as e:
         logger.error(f"Erreur serveur Flask: {e}")

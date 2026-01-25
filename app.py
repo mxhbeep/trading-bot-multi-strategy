@@ -88,6 +88,34 @@ exchange: Optional[ccxt.okx] = None
 shutdown_flag = threading.Event()
 
 # ============================================================================
+# INITIALISATION EXCHANGE
+# ============================================================================
+
+def init_exchange():
+    """Initialise et retourne l'instance exchange"""
+    global exchange
+    if exchange is None:
+        try:
+            exchange = ccxt.okx({
+                'apiKey': CONFIG['API_KEY'],
+                'secret': CONFIG['SECRET'],
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            })
+            logger.info("Exchange OKX initialise")
+        except Exception as e:
+            logger.error(f"Erreur initialisation exchange: {e}")
+            raise
+    return exchange
+
+def get_exchange():
+    """Retourne l'exchange, l'initialise si necessaire"""
+    global exchange
+    if exchange is None:
+        return init_exchange()
+    return exchange
+
+# ============================================================================
 # LOGGING
 # ============================================================================
 
@@ -214,13 +242,15 @@ def fetch_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
     """
     Recupere les donnees OHLCV avec retry automatique
     """
-    if exchange is None:
-        logger.error("Exchange non initialise")
+    try:
+        ex = get_exchange()
+    except Exception as e:
+        logger.error(f"Impossible d'obtenir l'exchange: {e}")
         return None
     
     for attempt in range(CONFIG['MAX_RETRIES']):
         try:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=CONFIG['DATA_LIMIT'])
+            ohlcv = ex.fetch_ohlcv(symbol, timeframe, limit=CONFIG['DATA_LIMIT'])
             
             if not ohlcv or len(ohlcv) < 50:
                 raise ValueError(f"Donnees insuffisantes: {len(ohlcv) if ohlcv else 0} bougies")
@@ -367,8 +397,6 @@ def webhook_handler():
     Endpoint pour recevoir les webhooks TradingView
     Format attendu: {"symbol": "BTC/USDT", "signal": "buy", "price": 43250.50}
     """
-    global exchange
-    
     try:
         # Recuperation des donnees
         data = request.get_json(silent=True)
@@ -391,10 +419,12 @@ def webhook_handler():
         st_signal = data['signal'].lower()
         price = data.get('price', 0)
         
-        # Verification que l'exchange est initialise
-        if exchange is None:
-            logger.error("Exchange non initialise - webhook recu trop tot")
-            return jsonify({'status': 'error', 'message': 'Bot pas encore pret, reessayez dans 30s'}), 503
+        # Initialiser l'exchange si necessaire
+        try:
+            get_exchange()
+        except Exception as e:
+            logger.error(f"Impossible d'initialiser l'exchange: {e}")
+            return jsonify({'status': 'error', 'message': 'Erreur initialisation exchange'}), 500
         
         # Verification du symbole dans la watchlist
         if symbol not in CONFIG['SYMBOLS']:
@@ -480,11 +510,16 @@ def main_scanning_loop():
     """
     Boucle principale qui scanne periodiquement tous les symboles
     """
-    global exchange
-    
     symbols = CONFIG['SYMBOLS']
     logger.info(f"Watchlist chargee: {len(symbols)} actifs")
     logger.info(f"Symboles: {', '.join(symbols)}")
+    
+    # Initialiser l'exchange
+    try:
+        get_exchange()
+    except Exception as e:
+        logger.error(f"Impossible d'initialiser l'exchange dans le scanner: {e}")
+        return
     
     # Message de demarrage Telegram
     try:
@@ -614,24 +649,13 @@ if __name__ == "__main__":
         logger.error("TELEGRAM_CHAT_ID non configure")
         sys.exit(1)
     
-    # INITIALISATION DE L'EXCHANGE EN PREMIER
-    logger.info("Initialisation de l'exchange OKX...")
-    try:
-        exchange = ccxt.okx({
-            'apiKey': CONFIG['API_KEY'],
-            'secret': CONFIG['SECRET'],
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
-        logger.info("Exchange OKX initialise avec succes")
-    except Exception as e:
-        logger.error(f"ERREUR CRITIQUE: Impossible d'initialiser l'exchange: {e}")
-        sys.exit(1)
-    
     # Demarrage du thread de scanning
     scanner_thread = threading.Thread(target=main_scanning_loop, daemon=True, name="Scanner")
     scanner_thread.start()
     logger.info("Thread de scanning demarre")
+    
+    # Petit delai pour laisser le temps au scanner de s'initialiser
+    time.sleep(2)
     
     # Demarrage du serveur Flask (bloquant)
     try:

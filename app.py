@@ -108,7 +108,8 @@ def format_tradingview_symbol(tv_symbol: str) -> str:
     """
     # Enlever le prefix exchange si présent
     if ':' in tv_symbol:
-        tv_symbol = tv_symbol.split(':')[-1]
+        parts = tv_symbol.split(':')
+        tv_symbol = parts[-1] if len(parts) > 1 else tv_symbol
     
     # Si déjà au bon format, retourner tel quel
     if '/' in tv_symbol:
@@ -389,26 +390,24 @@ def send_telegram_alert_macd_bias(symbol: str, signal_type: str, price: float, a
     Envoie une alerte formatee sur Telegram (strategie MACD + Biais)
     """
     try:
-        emoji = "🟢" if signal_type == 'LONG' else "🔴"
+        msg = f"[SIGNAL {signal_type}] {symbol}\n"
+        msg += f"Strategie: MACD + Biais\n\n"
+        msg += f"Prix : ${price:.4f}\n"
+        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        msg += f"Source : {source}\n\n"
         
-        msg = f"{emoji} [SIGNAL {signal_type}] {symbol}\n"
-        msg += f"📊 Strategie: MACD + Biais\n\n"
-        msg += f"💰 Prix : ${price:.4f}\n"
-        msg += f"🕐 Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
-        msg += f"📡 Source : {source}\n\n"
+        msg += "Timeframe 4H (MACD):\n"
+        msg += f"  Signal : {'Bull' if a4['macd_bull'] else 'Bear'}\n"
+        msg += f"  MACD Line : {a4['macd_line']:.6f}\n"
+        msg += f"  Signal Line : {a4['signal_line']:.6f}\n\n"
         
-        msg += "📈 Timeframe 4H (MACD):\n"
-        msg += f"  {'✅' if a4['macd_bull'] else '❌'} Signal : {'Bull' if a4['macd_bull'] else 'Bear'}\n"
-        msg += f"  📊 MACD Line : {a4['macd_line']:.6f}\n"
-        msg += f"  📊 Signal Line : {a4['signal_line']:.6f}\n\n"
+        msg += "Timeframe 1H (Biais):\n"
+        msg += f"  Signal : {'Bull' if a1['bias_bull'] else 'Bear'}\n"
+        msg += f"  EMA({CONFIG['EMA_1H']}) : {a1['ema']:.6f}\n"
+        msg += f"  SMA({CONFIG['SMA_1H']}) : {a1['sma']:.6f}\n\n"
         
-        msg += "📈 Timeframe 1H (Biais):\n"
-        msg += f"  {'✅' if a1['bias_bull'] else '❌'} Signal : {'Bull' if a1['bias_bull'] else 'Bear'}\n"
-        msg += f"  📊 EMA({CONFIG['EMA_1H']}) : {a1['ema']:.6f}\n"
-        msg += f"  📊 SMA({CONFIG['SMA_1H']}) : {a1['sma']:.6f}\n\n"
-        
-        msg += "⚠️ ATTENTION: Verifiez SuperTrend AI 20min avant d'entrer\n"
-        msg += "ℹ️ Ce bot ne trade pas automatiquement."
+        msg += "ATTENTION: Verifiez SuperTrend AI 20min avant d'entrer\n"
+        msg += "INFO: Ce bot ne trade pas automatiquement."
         
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {
@@ -440,17 +439,17 @@ def send_telegram_alert_preparation(symbol: str, zone_4h: str, long_term: float,
             emoji_direction = "🔴"
         
         msg = f"{emoji_direction} [PREPARATION {direction}] {symbol}\n"
-        msg += f"📊 Strategie: ST Context + SuperTrend AI\n\n"
-        msg += f"💰 Prix : ${price:.2f}\n"
-        msg += f"🕐 Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        msg += f"Strategie: ST Context + SuperTrend AI\n\n"
+        msg += f"Prix : ${price:.2f}\n"
+        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
 
-        msg += f"✅ ST Context 4H : Zone {zone_4h.upper()} ACTIVE\n"
-        msg += f"✅ Long Term Context : {long_term:.2f} (VALIDE)\n"
-        msg += f"⏳ SuperTrend AI 1H : En attente...\n\n"
+        msg += f"ST Context 4H : Zone {zone_4h.upper()} ACTIVE\n"
+        msg += f"Long Term Context : {long_term:.2f} (VALIDE)\n"
+        msg += f"SuperTrend AI 1H : En attente...\n\n"
 
-        msg += f"⚠️ PREPARATION: Tiens-toi pret pour un signal {direction}\n"
-        msg += f"👀 Surveille le SuperTrend AI sur 1H pour confirmation\n"
-        msg += f"ℹ️ Ce bot ne trade pas automatiquement."
+        msg += f"PREPARATION: Tiens-toi pret pour un signal {direction}\n"
+        msg += "Surveille le SuperTrend AI sur 1H pour confirmation\n"
+        msg += "INFO: Ce bot ne trade pas automatiquement."
 
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {
@@ -477,16 +476,16 @@ def send_telegram_alert_st_context(symbol: str, signal_type: str, price: float, 
         emoji = "🟢" if signal_type == 'LONG' else "🔴"
         
         msg = f"{emoji} [SIGNAL {signal_type}] {symbol}\n"
-        msg += f"📊 Strategie: ST Context + SuperTrend AI\n\n"
-        msg += f"💰 Prix : ${price:.2f}\n"
-        msg += f"🕐 Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        msg += f"Strategie: ST Context + SuperTrend AI\n\n"
+        msg += f"Prix : ${price:.2f}\n"
+        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
 
-        msg += f"✅ ST Context 4H : Zone {zone_4h.upper()}\n"
-        msg += f"✅ Long Term Context : {long_term:.2f}\n"
-        msg += f"✅ SuperTrend AI 1H : {supertrend_1h.upper()}\n\n"
+        msg += f"ST Context 4H : Zone {zone_4h.upper()}\n"
+        msg += f"Long Term Context : {long_term:.2f}\n"
+        msg += f"SuperTrend AI 1H : {supertrend_1h.upper()}\n\n"
 
-        msg += "⚠️ ATTENTION: Verifie SuperTrend AI 20min avant d'entrer\n"
-        msg += "ℹ️ Ce bot ne trade pas automatiquement."
+        msg += "ATTENTION: Verifie SuperTrend AI 20min avant d'entrer\n"
+        msg += "INFO: Ce bot ne trade pas automatiquement."
 
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {

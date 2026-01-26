@@ -690,20 +690,27 @@ def webhook_handler():
                 if not zone:
                     zone = 'neutral'
                 
-                # VALIDATION: Si zone buy/sell mais long_term hors range, forcer en neutral
+                # VALIDATION STRICTE: Zones buy/sell acceptees UNIQUEMENT si long_term dans [-2, 2]
                 if zone.lower() in ['buy', 'sell']:
                     if not (-2 <= long_term_float <= 2):
-                        logger.warning(f"Zone {zone} invalide pour {symbol}: long_term={long_term} hors range [-2, 2]. Force en neutral.")
-                        zone = 'neutral'
+                        logger.warning(f"Zone {zone} REFUSEE pour {symbol}: long_term={long_term_float} hors range [-2, 2]")
+                        return jsonify({
+                            'status': 'rejected',
+                            'message': f'Zone {zone} refusee: long_term {long_term_float} hors range [-2, 2]',
+                            'symbol': symbol,
+                            'zone_received': zone,
+                            'long_term': long_term_float,
+                            'strategy': 'st_context'
+                        }), 200
                 
-                # Mise a jour de l'etat
+                # Mise a jour de l'etat (zone validee ou neutral)
                 ST_CONTEXT_STATE[symbol] = {
                     'zone_4h': zone.lower(),
                     'long_term': long_term_float,
                     'timestamp': time.time()
                 }
                 
-                logger.info(f"ST Context 4H mis a jour pour {symbol}: zone={zone}, long_term={long_term}")
+                logger.info(f"ST Context 4H mis a jour pour {symbol}: zone={zone}, long_term={long_term_float}")
                 
                 # Alerte de preparation si zone valide + long_term dans range
                 if zone.lower() in ['buy', 'sell'] and -2 <= long_term_float <= 2:
@@ -725,7 +732,7 @@ def webhook_handler():
                     'message': 'ST Context 4H mis a jour',
                     'symbol': symbol,
                     'zone': zone,
-                    'long_term': long_term,
+                    'long_term': long_term_float,
                     'strategy': 'st_context'
                 }), 200
             

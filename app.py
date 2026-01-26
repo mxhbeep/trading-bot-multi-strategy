@@ -389,24 +389,26 @@ def send_telegram_alert_macd_bias(symbol: str, signal_type: str, price: float, a
     Envoie une alerte formatee sur Telegram (strategie MACD + Biais)
     """
     try:
-        msg = f"[SIGNAL {signal_type}] {symbol}\n"
-        msg += f"Strategie: MACD + Biais\n\n"
-        msg += f"Prix : ${price:.4f}\n"
-        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
-        msg += f"Source : {source}\n\n"
+        emoji = "🟢" if signal_type == 'LONG' else "🔴"
         
-        msg += "Timeframe 4H (MACD):\n"
-        msg += f"  Signal : {'Bull' if a4['macd_bull'] else 'Bear'}\n"
-        msg += f"  MACD Line : {a4['macd_line']:.6f}\n"
-        msg += f"  Signal Line : {a4['signal_line']:.6f}\n\n"
+        msg = f"{emoji} [SIGNAL {signal_type}] {symbol}\n"
+        msg += f"📊 Strategie: MACD + Biais\n\n"
+        msg += f"💰 Prix : ${price:.4f}\n"
+        msg += f"🕐 Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        msg += f"📡 Source : {source}\n\n"
         
-        msg += "Timeframe 1H (Biais):\n"
-        msg += f"  Signal : {'Bull' if a1['bias_bull'] else 'Bear'}\n"
-        msg += f"  EMA({CONFIG['EMA_1H']}) : {a1['ema']:.6f}\n"
-        msg += f"  SMA({CONFIG['SMA_1H']}) : {a1['sma']:.6f}\n\n"
+        msg += "📈 Timeframe 4H (MACD):\n"
+        msg += f"  {'✅' if a4['macd_bull'] else '❌'} Signal : {'Bull' if a4['macd_bull'] else 'Bear'}\n"
+        msg += f"  📊 MACD Line : {a4['macd_line']:.6f}\n"
+        msg += f"  📊 Signal Line : {a4['signal_line']:.6f}\n\n"
         
-        msg += "ATTENTION: Verifiez SuperTrend AI 20min avant d'entrer\n"
-        msg += "INFO: Ce bot ne trade pas automatiquement."
+        msg += "📈 Timeframe 1H (Biais):\n"
+        msg += f"  {'✅' if a1['bias_bull'] else '❌'} Signal : {'Bull' if a1['bias_bull'] else 'Bear'}\n"
+        msg += f"  📊 EMA({CONFIG['EMA_1H']}) : {a1['ema']:.6f}\n"
+        msg += f"  📊 SMA({CONFIG['SMA_1H']}) : {a1['sma']:.6f}\n\n"
+        
+        msg += "⚠️ ATTENTION: Verifiez SuperTrend AI 20min avant d'entrer\n"
+        msg += "ℹ️ Ce bot ne trade pas automatiquement."
         
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {
@@ -430,20 +432,25 @@ def send_telegram_alert_preparation(symbol: str, zone_4h: str, long_term: float,
     Envoie une alerte de preparation sur Telegram
     """
     try:
-        direction = "LONG" if zone_4h == "buy" else "SHORT"
+        if zone_4h == "buy":
+            direction = "LONG"
+            emoji_direction = "🟢"
+        else:
+            direction = "SHORT"
+            emoji_direction = "🔴"
         
-        msg = f"[PREPARATION {direction}] {symbol}\n"
-        msg += f"Strategie: ST Context + SuperTrend AI\n\n"
-        msg += f"Prix : ${price:.2f}\n"
-        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        msg = f"{emoji_direction} [PREPARATION {direction}] {symbol}\n"
+        msg += f"📊 Strategie: ST Context + SuperTrend AI\n\n"
+        msg += f"💰 Prix : ${price:.2f}\n"
+        msg += f"🕐 Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
 
-        msg += f"ST Context 4H : Zone {zone_4h.upper()} ACTIVE\n"
-        msg += f"Long Term Context : {long_term:.2f} (VALIDE)\n"
-        msg += f"SuperTrend AI 1H : En attente...\n\n"
+        msg += f"✅ ST Context 4H : Zone {zone_4h.upper()} ACTIVE\n"
+        msg += f"✅ Long Term Context : {long_term:.2f} (VALIDE)\n"
+        msg += f"⏳ SuperTrend AI 1H : En attente...\n\n"
 
-        msg += f"PREPARATION: Tiens-toi pret pour un signal {direction}\n"
-        msg += "Surveille le SuperTrend AI sur 1H pour confirmation\n"
-        msg += "INFO: Ce bot ne trade pas automatiquement."
+        msg += f"⚠️ PREPARATION: Tiens-toi pret pour un signal {direction}\n"
+        msg += f"👀 Surveille le SuperTrend AI sur 1H pour confirmation\n"
+        msg += f"ℹ️ Ce bot ne trade pas automatiquement."
 
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {
@@ -467,17 +474,19 @@ def send_telegram_alert_st_context(symbol: str, signal_type: str, price: float, 
     Envoie une alerte formatee sur Telegram (strategie ST Context)
     """
     try:
-        msg = f"[SIGNAL {signal_type}] {symbol}\n"
-        msg += f"Strategie: ST Context + SuperTrend AI\n\n"
-        msg += f"Prix : ${price:.2f}\n"
-        msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        emoji = "🟢" if signal_type == 'LONG' else "🔴"
+        
+        msg = f"{emoji} [SIGNAL {signal_type}] {symbol}\n"
+        msg += f"📊 Strategie: ST Context + SuperTrend AI\n\n"
+        msg += f"💰 Prix : ${price:.2f}\n"
+        msg += f"🕐 Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
 
-        msg += f"ST Context 4H : Zone {zone_4h.upper()}\n"
-        msg += f"Long Term Context : {long_term:.2f}\n"
-        msg += f"SuperTrend AI 1H : {supertrend_1h.upper()}\n\n"
+        msg += f"✅ ST Context 4H : Zone {zone_4h.upper()}\n"
+        msg += f"✅ Long Term Context : {long_term:.2f}\n"
+        msg += f"✅ SuperTrend AI 1H : {supertrend_1h.upper()}\n\n"
 
-        msg += "ATTENTION: Verifie SuperTrend AI 20min avant d'entrer\n"
-        msg += "INFO: Ce bot ne trade pas automatiquement."
+        msg += "⚠️ ATTENTION: Verifie SuperTrend AI 20min avant d'entrer\n"
+        msg += "ℹ️ Ce bot ne trade pas automatiquement."
 
         url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
         payload = {
@@ -675,21 +684,29 @@ def webhook_handler():
                 if long_term is None:
                     return jsonify({'status': 'error', 'message': 'Champ long_term requis pour 4h'}), 400
                 
+                long_term_float = float(long_term)
+                
                 # Si pas de zone specifique, c'est un event d'invalidation (neutral)
                 if not zone:
                     zone = 'neutral'
                 
+                # VALIDATION: Si zone buy/sell mais long_term hors range, forcer en neutral
+                if zone.lower() in ['buy', 'sell']:
+                    if not (-2 <= long_term_float <= 2):
+                        logger.warning(f"Zone {zone} invalide pour {symbol}: long_term={long_term} hors range [-2, 2]. Force en neutral.")
+                        zone = 'neutral'
+                
                 # Mise a jour de l'etat
                 ST_CONTEXT_STATE[symbol] = {
                     'zone_4h': zone.lower(),
-                    'long_term': float(long_term),
+                    'long_term': long_term_float,
                     'timestamp': time.time()
                 }
                 
                 logger.info(f"ST Context 4H mis a jour pour {symbol}: zone={zone}, long_term={long_term}")
                 
                 # Alerte de preparation si zone valide + long_term dans range
-                if zone.lower() in ['buy', 'sell'] and -2 <= float(long_term) <= 2:
+                if zone.lower() in ['buy', 'sell'] and -2 <= long_term_float <= 2:
                     # Verifier anti-spam pour les alertes de preparation
                     prep_key = f"{symbol}:st_context:prep"
                     now = time.time()
@@ -700,7 +717,7 @@ def webhook_handler():
                     # Envoyer alerte preparation si cooldown OK (30 min)
                     time_elapsed = now - LAST_SIGNALS[prep_key]['timestamp']
                     if time_elapsed >= CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']:
-                        send_telegram_alert_preparation(symbol, zone.lower(), float(long_term), price)
+                        send_telegram_alert_preparation(symbol, zone.lower(), long_term_float, price)
                         LAST_SIGNALS[prep_key] = {'type': zone.lower(), 'timestamp': now}
                 
                 return jsonify({

@@ -478,10 +478,6 @@ def update_last_signal(symbol: str, signal_identifier: str, strategy: str):
     signal_key = get_signal_key(symbol, strategy, signal_identifier)
     LAST_SIGNALS[signal_key] = {'timestamp': time.time()}
 
-# ============================================================================
-# WEBHOOK TRADINGVIEW
-# ============================================================================
-
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
     """
@@ -546,260 +542,260 @@ def webhook_handler():
             # STRATEGIE SAFE
             # =================================================================
             if current_strategy == 'safe':
-            # Initialiser l'état si nécessaire
-            if symbol not in SAFE_STATE:
-                SAFE_STATE[symbol] = {
-                    'bias_3d': None,
-                    'macd_4h': None,
-                    'bias_4h_9_26': None,
-                    'bias_1h': None,
-                    'st_1h': None,
-                    'st_context_1h': None
-                }
-            
-            state = SAFE_STATE[symbol]
-            
-            # Traitement des différents types d'alertes
-            if alert_type == 'bias' and tf == '3d':
-                value = data.get('value', '').lower()
-                state['bias_3d'] = value
-                logger.info(f"Biais 3D mis à jour pour {symbol}: {value}")
+                # Initialiser l'état si nécessaire
+                if symbol not in SAFE_STATE:
+                    SAFE_STATE[symbol] = {
+                        'bias_3d': None,
+                        'macd_4h': None,
+                        'bias_4h_9_26': None,
+                        'bias_1h': None,
+                        'st_1h': None,
+                        'st_context_1h': None
+                    }
                 
-            elif alert_type == 'macd' and tf == '4h':
-                value = data.get('value', '').lower()
-                state['macd_4h'] = value
-                logger.info(f"MACD 4H mis à jour pour {symbol}: {value}")
+                state = SAFE_STATE[symbol]
                 
-            elif alert_type == 'bias_9_26' and tf == '4h':
-                value = data.get('value', '').lower()
-                state['bias_4h_9_26'] = value
-                logger.info(f"Biais 4H (9/26) mis à jour pour {symbol}: {value}")
-                
-            elif alert_type == 'bias' and tf == '1h':
-                value = data.get('value', '').lower()
-                state['bias_1h'] = value
-                logger.info(f"Biais 1H mis à jour pour {symbol}: {value}")
-                
-            elif alert_type == 'supertrend' and tf == '1h':
-                value = data.get('value', '').lower()
-                state['st_1h'] = value
-                logger.info(f"SuperTrend AI 1H mis à jour pour {symbol}: {value}")
-                
-            elif alert_type == 'st_context' and tf == '1h':
-                value = data.get('value', '').lower()
-                state['st_context_1h'] = value
-                logger.info(f"ST Context 1H mis à jour pour {symbol}: {value}")
-                
-            elif alert_type == 'macd_exit' and tf == '3d':
-                value = data.get('value', '').lower()
-                exit_type = 'LONG' if value == 'bear' else 'SHORT'
-                send_telegram_safe_exit(symbol, exit_type, price)
-                return jsonify({'status': 'success', 'message': 'Alerte sortie envoyée'}), 200
-            
-            # Vérification des setups et envoi d'alertes
-            bias_3d = state.get('bias_3d')
-            macd_4h = state.get('macd_4h')
-            bias_4h = state.get('bias_4h_9_26')
-            bias_1h = state.get('bias_1h')
-            st_1h = state.get('st_1h')
-            st_context_1h = state.get('st_context_1h')
-            
-            # Déterminer la direction
-            direction = None
-            if bias_3d == 'bull' and macd_4h == 'bull':
-                direction = 'LONG'
-            elif bias_3d == 'bear' and macd_4h == 'bear':
-                direction = 'SHORT'
-            
-            if direction:
-                # Setup 2 étoiles : Biais 3D + MACD 4H
-                if should_send_alert(symbol, f"2stars_{direction}", 'safe'):
-                    details = {'bias_3d': bias_3d, 'macd_4h': macd_4h}
-                    send_telegram_safe(symbol, direction, 2, price, details, "Webhook TradingView")
-                    update_last_signal(symbol, f"2stars_{direction}", 'safe')
-                
-                # Setup 3 étoiles : + Biais 1H
-                if bias_1h == bias_3d:
-                    if should_send_alert(symbol, f"3stars_{direction}", 'safe'):
-                        details = {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_1h': bias_1h}
-                        send_telegram_safe(symbol, direction, 3, price, details, "Webhook TradingView")
-                        update_last_signal(symbol, f"3stars_{direction}", 'safe')
+                # Traitement des différents types d'alertes
+                if alert_type == 'bias' and tf == '3d':
+                    value = data.get('value', '').lower()
+                    state['bias_3d'] = value
+                    logger.info(f"Biais 3D mis à jour pour {symbol}: {value}")
                     
-                    # Setup 4 étoiles : + SuperTrend AI 1H
-                    st_match = (st_1h == 'buy' and direction == 'LONG') or (st_1h == 'sell' and direction == 'SHORT')
-                    if st_match:
-                        if should_send_alert(symbol, f"4stars_{direction}", 'safe'):
-                            details = {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_1h': bias_1h, 'st_1h': st_1h}
-                            send_telegram_safe(symbol, direction, 4, price, details, "Webhook TradingView")
-                            update_last_signal(symbol, f"4stars_{direction}", 'safe')
-                        
-                        # Setup 5 étoiles : + Biais 4H (9/26)
-                        if bias_4h == bias_3d:
-                            if should_send_alert(symbol, f"5stars_{direction}", 'safe'):
-                                details = {
-                                    'bias_3d': bias_3d, 
-                                    'macd_4h': macd_4h, 
-                                    'bias_4h': bias_4h,
-                                    'bias_1h': bias_1h, 
-                                    'st_1h': st_1h
-                                }
-                                send_telegram_safe(symbol, direction, 5, price, details, "Webhook TradingView")
-                                update_last_signal(symbol, f"5stars_{direction}", 'safe')
+                elif alert_type == 'macd' and tf == '4h':
+                    value = data.get('value', '').lower()
+                    state['macd_4h'] = value
+                    logger.info(f"MACD 4H mis à jour pour {symbol}: {value}")
+                    
+                elif alert_type == 'bias_9_26' and tf == '4h':
+                    value = data.get('value', '').lower()
+                    state['bias_4h_9_26'] = value
+                    logger.info(f"Biais 4H (9/26) mis à jour pour {symbol}: {value}")
+                    
+                elif alert_type == 'bias' and tf == '1h':
+                    value = data.get('value', '').lower()
+                    state['bias_1h'] = value
+                    logger.info(f"Biais 1H mis à jour pour {symbol}: {value}")
+                    
+                elif alert_type == 'supertrend' and tf == '1h':
+                    value = data.get('value', '').lower()
+                    state['st_1h'] = value
+                    logger.info(f"SuperTrend AI 1H mis à jour pour {symbol}: {value}")
+                    
+                elif alert_type == 'st_context' and tf == '1h':
+                    value = data.get('value', '').lower()
+                    state['st_context_1h'] = value
+                    logger.info(f"ST Context 1H mis à jour pour {symbol}: {value}")
+                    
+                elif alert_type == 'macd_exit' and tf == '3d':
+                    value = data.get('value', '').lower()
+                    exit_type = 'LONG' if value == 'bear' else 'SHORT'
+                    send_telegram_safe_exit(symbol, exit_type, price)
+                    return jsonify({'status': 'success', 'message': 'Alerte sortie envoyée'}), 200
                 
-                # Alertes supplémentaires avec ST Context 1H
-                if st_context_1h:
-                    # Biais 3D + ST Context 1H
-                    context_match = (st_context_1h == 'buy' and direction == 'LONG') or (st_context_1h == 'sell' and direction == 'SHORT')
-                    if context_match:
-                        if should_send_alert(symbol, f"2stars_context_{direction}", 'safe'):
-                            details = {'bias_3d': bias_3d, 'st_context_1h': st_context_1h}
-                            send_telegram_safe(symbol, direction, 2, price, details, "Webhook TradingView")
-                            update_last_signal(symbol, f"2stars_context_{direction}", 'safe')
+                # Vérification des setups et envoi d'alertes
+                bias_3d = state.get('bias_3d')
+                macd_4h = state.get('macd_4h')
+                bias_4h = state.get('bias_4h_9_26')
+                bias_1h = state.get('bias_1h')
+                st_1h = state.get('st_1h')
+                st_context_1h = state.get('st_context_1h')
+                
+                # Déterminer la direction
+                direction = None
+                if bias_3d == 'bull' and macd_4h == 'bull':
+                    direction = 'LONG'
+                elif bias_3d == 'bear' and macd_4h == 'bear':
+                    direction = 'SHORT'
+                
+                if direction:
+                    # Setup 2 étoiles : Biais 3D + MACD 4H
+                    if should_send_alert(symbol, f"2stars_{direction}", 'safe'):
+                        details = {'bias_3d': bias_3d, 'macd_4h': macd_4h}
+                        send_telegram_safe(symbol, direction, 2, price, details, "Webhook TradingView")
+                        update_last_signal(symbol, f"2stars_{direction}", 'safe')
+                    
+                    # Setup 3 étoiles : + Biais 1H
+                    if bias_1h == bias_3d:
+                        if should_send_alert(symbol, f"3stars_{direction}", 'safe'):
+                            details = {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_1h': bias_1h}
+                            send_telegram_safe(symbol, direction, 3, price, details, "Webhook TradingView")
+                            update_last_signal(symbol, f"3stars_{direction}", 'safe')
                         
-                        # Biais 3D + ST Context 1H + SuperTrend AI 1H
+                        # Setup 4 étoiles : + SuperTrend AI 1H
+                        st_match = (st_1h == 'buy' and direction == 'LONG') or (st_1h == 'sell' and direction == 'SHORT')
                         if st_match:
-                            if should_send_alert(symbol, f"3stars_context_{direction}", 'safe'):
-                                details = {'bias_3d': bias_3d, 'st_context_1h': st_context_1h, 'st_1h': st_1h}
-                                send_telegram_safe(symbol, direction, 3, price, details, "Webhook TradingView")
-                                update_last_signal(symbol, f"3stars_context_{direction}", 'safe')
-                        
-                        # Biais 3D + MACD 4H + Biais 1H + ST Context 1H
-                        if bias_1h == bias_3d:
-                            if should_send_alert(symbol, f"4stars_full_{direction}", 'safe'):
-                                details = {
-                                    'bias_3d': bias_3d,
-                                    'macd_4h': macd_4h,
-                                    'bias_1h': bias_1h,
-                                    'st_context_1h': st_context_1h
-                                }
+                            if should_send_alert(symbol, f"4stars_{direction}", 'safe'):
+                                details = {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_1h': bias_1h, 'st_1h': st_1h}
                                 send_telegram_safe(symbol, direction, 4, price, details, "Webhook TradingView")
-                                update_last_signal(symbol, f"4stars_full_{direction}", 'safe')
+                                update_last_signal(symbol, f"4stars_{direction}", 'safe')
+                            
+                            # Setup 5 étoiles : + Biais 4H (9/26)
+                            if bias_4h == bias_3d:
+                                if should_send_alert(symbol, f"5stars_{direction}", 'safe'):
+                                    details = {
+                                        'bias_3d': bias_3d, 
+                                        'macd_4h': macd_4h, 
+                                        'bias_4h': bias_4h,
+                                        'bias_1h': bias_1h, 
+                                        'st_1h': st_1h
+                                    }
+                                    send_telegram_safe(symbol, direction, 5, price, details, "Webhook TradingView")
+                                    update_last_signal(symbol, f"5stars_{direction}", 'safe')
+                    
+                    # Alertes supplémentaires avec ST Context 1H
+                    if st_context_1h:
+                        # Biais 3D + ST Context 1H
+                        context_match = (st_context_1h == 'buy' and direction == 'LONG') or (st_context_1h == 'sell' and direction == 'SHORT')
+                        if context_match:
+                            if should_send_alert(symbol, f"2stars_context_{direction}", 'safe'):
+                                details = {'bias_3d': bias_3d, 'st_context_1h': st_context_1h}
+                                send_telegram_safe(symbol, direction, 2, price, details, "Webhook TradingView")
+                                update_last_signal(symbol, f"2stars_context_{direction}", 'safe')
+                            
+                            # Biais 3D + ST Context 1H + SuperTrend AI 1H
+                            if st_match:
+                                if should_send_alert(symbol, f"3stars_context_{direction}", 'safe'):
+                                    details = {'bias_3d': bias_3d, 'st_context_1h': st_context_1h, 'st_1h': st_1h}
+                                    send_telegram_safe(symbol, direction, 3, price, details, "Webhook TradingView")
+                                    update_last_signal(symbol, f"3stars_context_{direction}", 'safe')
+                            
+                            # Biais 3D + MACD 4H + Biais 1H + ST Context 1H
+                            if bias_1h == bias_3d:
+                                if should_send_alert(symbol, f"4stars_full_{direction}", 'safe'):
+                                    details = {
+                                        'bias_3d': bias_3d,
+                                        'macd_4h': macd_4h,
+                                        'bias_1h': bias_1h,
+                                        'st_context_1h': st_context_1h
+                                    }
+                                    send_telegram_safe(symbol, direction, 4, price, details, "Webhook TradingView")
+                                    update_last_signal(symbol, f"4stars_full_{direction}", 'safe')
             
             # =================================================================
             # STRATEGIE AGGRESSIVE
             # =================================================================
             elif current_strategy == 'aggressive':
-            # Initialiser l'état si nécessaire
-            if symbol not in AGGRESSIVE_STATE:
-                AGGRESSIVE_STATE[symbol] = {
-                    'zone_4h': None,
-                    'short_term_4h': None,
-                    'long_term_4h': None,
-                    'zone_1h': None,
-                    'short_term_1h': None,
-                    'st_1h': None,
-                    'timestamp_4h': 0,
-                    'timestamp_1h': 0
-                }
-            
-            state = AGGRESSIVE_STATE[symbol]
-            
-            # Traitement ST Context 4H
-            if alert_type == 'st_context' and tf == '4h':
-                short_term = float(data.get('short_term', 0))
-                long_term = float(data.get('long_term', 0))
+                # Initialiser l'état si nécessaire
+                if symbol not in AGGRESSIVE_STATE:
+                    AGGRESSIVE_STATE[symbol] = {
+                        'zone_4h': None,
+                        'short_term_4h': None,
+                        'long_term_4h': None,
+                        'zone_1h': None,
+                        'short_term_1h': None,
+                        'st_1h': None,
+                        'timestamp_4h': 0,
+                        'timestamp_1h': 0
+                    }
                 
-                state['short_term_4h'] = short_term
-                state['long_term_4h'] = long_term
-                state['timestamp_4h'] = time.time()
+                state = AGGRESSIVE_STATE[symbol]
                 
-                # Déterminer la zone
-                zone = None
-                if short_term < -2 and long_term >= -2:
-                    zone = 'buy'
-                elif short_term > 2 and long_term <= 2:
-                    zone = 'sell'
+                # Traitement ST Context 4H
+                if alert_type == 'st_context' and tf == '4h':
+                    short_term = float(data.get('short_term', 0))
+                    long_term = float(data.get('long_term', 0))
+                    
+                    state['short_term_4h'] = short_term
+                    state['long_term_4h'] = long_term
+                    state['timestamp_4h'] = time.time()
+                    
+                    # Déterminer la zone
+                    zone = None
+                    if short_term < -2 and long_term >= -2:
+                        zone = 'buy'
+                    elif short_term > 2 and long_term <= 2:
+                        zone = 'sell'
+                    
+                    # Vérifier invalidation
+                    if state['zone_4h'] == 'buy' and long_term < -2:
+                        logger.info(f"Zone BUY 4H invalidée pour {symbol} (long_term={long_term} < -2)")
+                        state['zone_4h'] = None
+                    elif state['zone_4h'] == 'sell' and long_term > 2:
+                        logger.info(f"Zone SELL 4H invalidée pour {symbol} (long_term={long_term} > 2)")
+                        state['zone_4h'] = None
+                    else:
+                        state['zone_4h'] = zone
+                    
+                    logger.info(f"ST Context 4H mis à jour pour {symbol}: zone={zone}, short_term={short_term}, long_term={long_term}")
+                    
+                    # Envoyer alerte de préparation si zone valide
+                    if zone and state['zone_4h'] == zone:
+                        if should_send_alert(symbol, f"prep_4h_{zone}", 'aggressive'):
+                            details = {'long_term_4h': long_term, 'zone_1h': state.get('zone_1h')}
+                            send_telegram_aggressive_preparation(symbol, zone, price, details)
+                            update_last_signal(symbol, f"prep_4h_{zone}", 'aggressive')
+                    
+                    return jsonify({'status': 'success', 'message': 'ST Context 4H mis à jour', 'zone': zone}), 200
                 
-                # Vérifier invalidation
-                if state['zone_4h'] == 'buy' and long_term < -2:
-                    logger.info(f"Zone BUY 4H invalidée pour {symbol} (long_term={long_term} < -2)")
-                    state['zone_4h'] = None
-                elif state['zone_4h'] == 'sell' and long_term > 2:
-                    logger.info(f"Zone SELL 4H invalidée pour {symbol} (long_term={long_term} > 2)")
-                    state['zone_4h'] = None
-                else:
-                    state['zone_4h'] = zone
+                # Traitement ST Context 1H
+                elif alert_type == 'st_context' and tf == '1h':
+                    short_term = float(data.get('short_term', 0))
+                    
+                    state['short_term_1h'] = short_term
+                    state['timestamp_1h'] = time.time()
+                    
+                    # Déterminer la zone (pas de condition long_term en 1H)
+                    zone = None
+                    if short_term < -2:
+                        zone = 'buy'
+                    elif short_term > 2:
+                        zone = 'sell'
+                    
+                    state['zone_1h'] = zone
+                    
+                    logger.info(f"ST Context 1H mis à jour pour {symbol}: zone={zone}, short_term={short_term}")
+                    
+                    return jsonify({'status': 'success', 'message': 'ST Context 1H mis à jour', 'zone': zone}), 200
                 
-                logger.info(f"ST Context 4H mis à jour pour {symbol}: zone={zone}, short_term={short_term}, long_term={long_term}")
+                # Traitement SuperTrend AI 1H
+                elif alert_type == 'supertrend' and tf == '1h':
+                    value = data.get('value', '').lower()
+                    state['st_1h'] = value
+                    
+                    logger.info(f"SuperTrend AI 1H mis à jour pour {symbol}: {value}")
+                    
+                    # Vérifier alignement pour signal d'entrée
+                    zone_4h = state.get('zone_4h')
+                    zone_1h = state.get('zone_1h')
+                    
+                    if not zone_4h or not zone_1h:
+                        return jsonify({'status': 'not_aligned', 'message': 'Zones 4H ou 1H manquantes'}), 200
+                    
+                    # Les deux zones doivent être alignées
+                    if zone_4h != zone_1h:
+                        logger.info(f"Zones non alignées pour {symbol}: 4H={zone_4h}, 1H={zone_1h}")
+                        return jsonify({'status': 'not_aligned', 'message': 'Zones 4H et 1H non alignées'}), 200
+                    
+                    # Vérifier si SuperTrend AI correspond
+                    signal_type = None
+                    if value == 'buy' and zone_4h == 'buy' and zone_1h == 'buy':
+                        signal_type = 'LONG'
+                    elif value == 'sell' and zone_4h == 'sell' and zone_1h == 'sell':
+                        signal_type = 'SHORT'
+                    
+                    if signal_type:
+                        if should_send_alert(symbol, f"entry_{signal_type}", 'aggressive'):
+                            details = {
+                                'zone_4h': zone_4h,
+                                'long_term_4h': state.get('long_term_4h'),
+                                'zone_1h': zone_1h,
+                                'st_1h': value
+                            }
+                            send_telegram_aggressive_entry(symbol, signal_type, price, details)
+                            update_last_signal(symbol, f"entry_{signal_type}", 'aggressive')
+                            
+                            return jsonify({'status': 'success', 'message': 'Signal entrée envoyé', 'signal': signal_type}), 200
+                    
+                    return jsonify({'status': 'not_aligned', 'message': 'SuperTrend AI non aligné avec zones'}), 200
                 
-                # Envoyer alerte de préparation si zone valide
-                if zone and state['zone_4h'] == zone:
-                    if should_send_alert(symbol, f"prep_4h_{zone}", 'aggressive'):
-                        details = {'long_term_4h': long_term, 'zone_1h': state.get('zone_1h')}
-                        send_telegram_aggressive_preparation(symbol, zone, price, details)
-                        update_last_signal(symbol, f"prep_4h_{zone}", 'aggressive')
+                # Traitement sortie 4H
+                elif alert_type == 'bias_exit' and tf == '4h':
+                    value = data.get('value', '').lower()
+                    exit_type = 'LONG' if value == 'bull' else 'SHORT'
+                    send_telegram_aggressive_exit(symbol, exit_type, price)
+                    return jsonify({'status': 'success', 'message': 'Alerte sortie envoyée'}), 200
                 
-                return jsonify({'status': 'success', 'message': 'ST Context 4H mis à jour', 'zone': zone}), 200
-            
-            # Traitement ST Context 1H
-            elif alert_type == 'st_context' and tf == '1h':
-                short_term = float(data.get('short_term', 0))
-                
-                state['short_term_1h'] = short_term
-                state['timestamp_1h'] = time.time()
-                
-                # Déterminer la zone (pas de condition long_term en 1H)
-                zone = None
-                if short_term < -2:
-                    zone = 'buy'
-                elif short_term > 2:
-                    zone = 'sell'
-                
-                state['zone_1h'] = zone
-                
-                logger.info(f"ST Context 1H mis à jour pour {symbol}: zone={zone}, short_term={short_term}")
-                
-                return jsonify({'status': 'success', 'message': 'ST Context 1H mis à jour', 'zone': zone}), 200
-            
-            # Traitement SuperTrend AI 1H
-            elif alert_type == 'supertrend' and tf == '1h':
-                value = data.get('value', '').lower()
-                state['st_1h'] = value
-                
-                logger.info(f"SuperTrend AI 1H mis à jour pour {symbol}: {value}")
-                
-                # Vérifier alignement pour signal d'entrée
-                zone_4h = state.get('zone_4h')
-                zone_1h = state.get('zone_1h')
-                
-                if not zone_4h or not zone_1h:
-                    return jsonify({'status': 'not_aligned', 'message': 'Zones 4H ou 1H manquantes'}), 200
-                
-                # Les deux zones doivent être alignées
-                if zone_4h != zone_1h:
-                    logger.info(f"Zones non alignées pour {symbol}: 4H={zone_4h}, 1H={zone_1h}")
-                    return jsonify({'status': 'not_aligned', 'message': 'Zones 4H et 1H non alignées'}), 200
-                
-                # Vérifier si SuperTrend AI correspond
-                signal_type = None
-                if value == 'buy' and zone_4h == 'buy' and zone_1h == 'buy':
-                    signal_type = 'LONG'
-                elif value == 'sell' and zone_4h == 'sell' and zone_1h == 'sell':
-                    signal_type = 'SHORT'
-                
-                if signal_type:
-                    if should_send_alert(symbol, f"entry_{signal_type}", 'aggressive'):
-                        details = {
-                            'zone_4h': zone_4h,
-                            'long_term_4h': state.get('long_term_4h'),
-                            'zone_1h': zone_1h,
-                            'st_1h': value
-                        }
-                        send_telegram_aggressive_entry(symbol, signal_type, price, details)
-                        update_last_signal(symbol, f"entry_{signal_type}", 'aggressive')
-                        
-                        return jsonify({'status': 'success', 'message': 'Signal entrée envoyé', 'signal': signal_type}), 200
-                
-                return jsonify({'status': 'not_aligned', 'message': 'SuperTrend AI non aligné avec zones'}), 200
-            
-            # Traitement sortie 4H
-            elif alert_type == 'bias_exit' and tf == '4h':
-                value = data.get('value', '').lower()
-                exit_type = 'LONG' if value == 'bull' else 'SHORT'
-                send_telegram_aggressive_exit(symbol, exit_type, price)
-                return jsonify({'status': 'success', 'message': 'Alerte sortie envoyée'}), 200
-            
-            return jsonify({'status': 'success', 'message': 'État aggressive mis à jour', 'symbol': symbol}), 200
+                return jsonify({'status': 'success', 'message': 'État aggressive mis à jour', 'symbol': symbol}), 200
         
         else:
             return jsonify({'status': 'error', 'message': f'Strategie invalide: {strategy}'}), 400
@@ -815,53 +811,6 @@ def webhook_handler():
     except Exception as e:
         logger.error(f"Erreur webhook: {type(e).__name__} - {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Erreur serveur'}), 500
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Endpoint de sante pour verifier que le bot fonctionne"""
-    return jsonify({
-        'status': 'running',
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'symbols_monitored': len(CONFIG['SYMBOLS']),
-        'safe_active_signals': len([k for k in LAST_SIGNALS.keys() if 'safe' in k]),
-        'aggressive_active_signals': len([k for k in LAST_SIGNALS.keys() if 'aggressive' in k]),
-        'safe_states': len(SAFE_STATE),
-        'aggressive_states': len(AGGRESSIVE_STATE)
-    }), 200
-
-@app.route('/state', methods=['GET'])
-def get_state():
-    """Endpoint pour voir l'etat actuel de tous les symboles"""
-    return jsonify({
-        'safe_state': SAFE_STATE,
-        'aggressive_state': {
-            symbol: {
-                'zone_4h': data.get('zone_4h'),
-                'long_term_4h': data.get('long_term_4h'),
-                'zone_1h': data.get('zone_1h'),
-                'st_1h': data.get('st_1h'),
-                'age_4h_seconds': time.time() - data.get('timestamp_4h', 0),
-                'age_1h_seconds': time.time() - data.get('timestamp_1h', 0)
-            }
-            for symbol, data in AGGRESSIVE_STATE.items()
-        }
-    }), 200
-
-@app.route('/state/<symbol>', methods=['GET'])
-def get_symbol_state(symbol):
-    """Endpoint pour voir l'etat d'un symbole specifique"""
-    symbol_formatted = symbol.replace('-', '/')
-    
-    if symbol_formatted not in CONFIG['SYMBOLS']:
-        return jsonify({'error': 'Symbole non surveille'}), 404
-    
-    response = {
-        'symbol': symbol_formatted,
-        'safe': SAFE_STATE.get(symbol_formatted, 'No data'),
-        'aggressive': AGGRESSIVE_STATE.get(symbol_formatted, 'No data')
-    }
-    
-    return jsonify(response), 200
 
 # ============================================================================
 # GESTION ARRET PROPRE

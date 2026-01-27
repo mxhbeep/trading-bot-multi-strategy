@@ -151,26 +151,78 @@ def get_exchange():
     return exchange or init_exchange()
 
 # ============================================================================ #
-# TELEGRAM
+# TELEGRAM - ALERTES AMÉLIORÉES
 # ============================================================================ #
 
 def send_telegram(url, payload):
     r = requests.post(url, json=payload, timeout=15)
     r.raise_for_status()
 
-def send_telegram_safe(symbol: str, signal_type: str, stars: int, price: float, details: Dict, source="Webhook"):
+def send_telegram_safe(symbol: str, signal_type: str, stars: int, price: float, state: Dict, source="Webhook"):
+    """
+    Alerte SAFE avec affichage complet des conditions
+    """
     emoji = "🟢" if signal_type == 'LONG' else "🔴"
     stars_emoji = "⭐" * stars
+    
     msg = f"{emoji} [{signal_type} {stars_emoji}] {symbol}\n"
-    msg += f"Strategie: Safe ({stars} étoiles)\n\n"
-    msg += f"Prix : ${price:.4f}\n"
-    msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
-    msg += f"Source : {source}\n\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 STRATÉGIE: SAFE\n"
+    msg += f"💰 Prix: ${price:.4f}\n"
+    msg += f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    for k, v in details.items():
-        msg += f"{k.replace('_',' ').title()}: {v}\n"
+    msg += f"📋 CONDITIONS ({stars}★):\n\n"
     
-    msg += "\n⚠️ Vérifie SuperTrend AI avant d'entrer"
+    # Récupérer l'état complet
+    bias_3d = state.get('bias_3d')
+    macd_4h = state.get('macd_4h')
+    bias_4h = state.get('bias_4h_9_26')
+    bias_1h = state.get('bias_1h')
+    st_1h = state.get('st_1h')
+    st_context_1h = state.get('st_context_1h')
+    
+    # Déterminer la direction attendue
+    expected = 'bull' if signal_type == 'LONG' else 'bear'
+    expected_st = 'buy' if signal_type == 'LONG' else 'sell'
+    
+    # Afficher les conditions selon les étoiles
+    # Toujours afficher Biais 3D et MACD 4H
+    check_3d = "✅" if bias_3d == expected else "❌"
+    check_macd = "✅" if macd_4h == expected else "❌"
+    
+    msg += f"{check_3d} Biais 3D: {bias_3d or 'N/A'}\n"
+    msg += f"{check_macd} MACD 4H: {macd_4h or 'N/A'}\n"
+    
+    # Si 3★ ou plus, afficher Biais 1H
+    if stars >= 3:
+        check_1h = "✅" if bias_1h == expected else "❌"
+        msg += f"{check_1h} Biais 1H: {bias_1h or 'N/A'}\n"
+    
+    # Si 4★ ou plus, afficher SuperTrend AI 1H
+    if stars >= 4:
+        check_st = "✅" if st_1h == expected_st else "❌"
+        msg += f"{check_st} SuperTrend AI 1H: {st_1h or 'N/A'}\n"
+    
+    # Si 5★, afficher Biais 4H (9/26)
+    if stars == 5:
+        check_4h = "✅" if bias_4h == expected else "❌"
+        msg += f"{check_4h} Biais 4H (9/26): {bias_4h or 'N/A'}\n"
+    
+    # Afficher ST Context 1H si présent dans l'alerte
+    if st_context_1h and stars <= 4:
+        check_context = "✅" if st_context_1h == expected_st else "❌"
+        msg += f"{check_context} ST Context 1H: {st_context_1h or 'N/A'}\n"
+    
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    
+    if stars == 4 or stars == 5:
+        msg += "✅ SIGNAL D'ENTRÉE VALIDÉ\n"
+        msg += "⚠️ Vérifie SuperTrend AI 20min avant d'entrer\n"
+    elif stars == 3:
+        msg += "🔔 Attente SuperTrend AI 1H pour 4★\n"
+    elif stars == 2:
+        msg += "🔔 Préparation - Attente alignement 1H\n"
     
     send_telegram(
         f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage",
@@ -179,10 +231,14 @@ def send_telegram_safe(symbol: str, signal_type: str, stars: int, price: float, 
     logger.info(f"Alerte Safe {signal_type} {stars}★ envoyée pour {symbol}")
 
 def send_telegram_safe_exit(symbol: str, exit_type: str, price: float):
-    msg = f"🚪 [SORTIE {exit_type}] {symbol}\n\n"
-    msg += f"Prix : ${price:.4f}\n"
-    msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-    msg += "Raison: Croisement MACD opposé en 3D"
+    msg = f"🚪 [SORTIE {exit_type}] {symbol}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 STRATÉGIE: SAFE\n"
+    msg += f"💰 Prix: ${price:.4f}\n"
+    msg += f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"❌ RAISON: Croisement MACD opposé en 3D\n\n"
+    msg += "⚠️ SORTEZ LA POSITION SI EN TRADE"
     
     send_telegram(
         f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage",
@@ -190,18 +246,66 @@ def send_telegram_safe_exit(symbol: str, exit_type: str, price: float):
     )
     logger.info(f"Alerte sortie Safe envoyée pour {symbol}")
 
-def send_telegram_aggressive_preparation(symbol: str, zone_type: str, price: float, details: Dict):
+def send_telegram_aggressive_preparation(symbol: str, zone_type: str, price: float, state: Dict):
+    """
+    Alerte AGGRESSIVE - Préparation avec affichage complet des conditions
+    """
     emoji = "🟢" if zone_type == 'buy' else "🔴"
     direction = "LONG" if zone_type == 'buy' else "SHORT"
     
-    msg = f"{emoji} [PREPARATION {direction}] {symbol}\n\n"
-    msg += f"Prix : ${price:.2f}\n"
-    msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+    msg = f"{emoji} [PREPARATION {direction}] {symbol}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 STRATÉGIE: AGGRESSIVE\n"
+    msg += f"💰 Prix: ${price:.2f}\n"
+    msg += f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    for k, v in details.items():
-        msg += f"{k.replace('_',' ').title()}: {v}\n"
+    msg += f"📋 CONDITIONS:\n\n"
     
-    msg += "\nEn attente du SuperTrend AI 1H..."
+    # Récupérer l'état complet
+    zone_4h = state.get('zone_4h')
+    long_term_4h = state.get('long_term_4h')
+    zone_1h = state.get('zone_1h')
+    st_1h = state.get('st_1h')
+    
+    # Zone 4H
+    check_zone_4h = "✅" if zone_4h == zone_type else "❌"
+    msg += f"{check_zone_4h} Zone ST Context 4H: {zone_4h or 'N/A'}\n"
+    
+    # Long Term 4H
+    if long_term_4h is not None:
+        in_range = -2 <= long_term_4h <= 2
+        check_lt = "✅" if in_range else "❌"
+        msg += f"{check_lt} Long Term 4H: {long_term_4h:.2f} {'(OK)' if in_range else '(Hors range)'}\n"
+    else:
+        msg += f"❌ Long Term 4H: N/A\n"
+    
+    # Zone 1H
+    check_zone_1h = "✅" if zone_1h == zone_type else "❌"
+    msg += f"{check_zone_1h} Zone ST Context 1H: {zone_1h or 'En attente'}\n"
+    
+    # SuperTrend AI 1H
+    expected_st = zone_type  # 'buy' ou 'sell'
+    check_st = "✅" if st_1h == expected_st else "❌"
+    msg += f"{check_st} SuperTrend AI 1H: {st_1h or 'En attente'}\n"
+    
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # Compter les conditions validées
+    validated = sum([
+        zone_4h == zone_type,
+        long_term_4h is not None and -2 <= long_term_4h <= 2,
+        zone_1h == zone_type,
+        st_1h == expected_st
+    ])
+    
+    if validated == 4:
+        msg += "✅ TOUTES CONDITIONS VALIDÉES - SIGNAL IMMINENT\n"
+    elif validated >= 2:
+        msg += f"🔔 {validated}/4 conditions validées\n"
+        msg += "⏳ Attente des conditions restantes...\n"
+    else:
+        msg += "🔔 Préparation en cours...\n"
     
     send_telegram(
         f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage",
@@ -209,17 +313,35 @@ def send_telegram_aggressive_preparation(symbol: str, zone_type: str, price: flo
     )
     logger.info(f"Alerte préparation Aggressive envoyée pour {symbol}")
 
-def send_telegram_aggressive_entry(symbol: str, signal_type: str, price: float, details: Dict):
+def send_telegram_aggressive_entry(symbol: str, signal_type: str, price: float, state: Dict):
+    """
+    Alerte AGGRESSIVE - Entrée avec affichage complet des conditions
+    """
     emoji = "🟢" if signal_type == 'LONG' else "🔴"
     
-    msg = f"{emoji} [SIGNAL {signal_type}] {symbol}\n\n"
-    msg += f"Prix : ${price:.2f}\n"
-    msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+    msg = f"{emoji} [SIGNAL {signal_type}] {symbol}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 STRATÉGIE: AGGRESSIVE\n"
+    msg += f"💰 Prix: ${price:.2f}\n"
+    msg += f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    for k, v in details.items():
-        msg += f"{k.replace('_',' ').title()}: {v}\n"
+    msg += f"📋 CONDITIONS (TOUTES VALIDÉES):\n\n"
     
-    msg += "\n✅ Tous les critères alignés\n⚠️ Vérifie avant d'entrer"
+    # Récupérer l'état complet
+    zone_4h = state.get('zone_4h')
+    long_term_4h = state.get('long_term_4h')
+    zone_1h = state.get('zone_1h')
+    st_1h = state.get('st_1h')
+    
+    msg += f"✅ Zone ST Context 4H: {zone_4h}\n"
+    msg += f"✅ Long Term 4H: {long_term_4h:.2f}\n"
+    msg += f"✅ Zone ST Context 1H: {zone_1h}\n"
+    msg += f"✅ SuperTrend AI 1H: {st_1h}\n"
+    
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "✅ SIGNAL D'ENTRÉE VALIDÉ\n"
+    msg += "⚠️ Vérifie SuperTrend AI 20min avant d'entrer\n"
     
     send_telegram(
         f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage",
@@ -228,10 +350,14 @@ def send_telegram_aggressive_entry(symbol: str, signal_type: str, price: float, 
     logger.info(f"Alerte entrée Aggressive envoyée pour {symbol}")
 
 def send_telegram_aggressive_exit(symbol: str, exit_type: str, price: float):
-    msg = f"🚪 [SORTIE {exit_type}] {symbol}\n\n"
-    msg += f"Prix : ${price:.2f}\n"
-    msg += f"Heure : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-    msg += "Raison: Biais 4H opposé"
+    msg = f"🚪 [SORTIE {exit_type}] {symbol}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 STRATÉGIE: AGGRESSIVE\n"
+    msg += f"💰 Prix: ${price:.2f}\n"
+    msg += f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"❌ RAISON: Biais 4H croisé direction opposée\n\n"
+    msg += "⚠️ SORTEZ LA POSITION SI EN TRADE"
     
     send_telegram(
         f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage",
@@ -321,57 +447,41 @@ def webhook_handler():
                 
                 if direction:
                     if should_send_alert(symbol, f"2stars_{direction}", 'safe'):
-                        send_telegram_safe(symbol, direction, 2, price,
-                                           {'bias_3d': bias_3d, 'macd_4h': macd_4h},
-                                           "Webhook TradingView")
+                        send_telegram_safe(symbol, direction, 2, price, state, "Webhook TradingView")
                         update_last_signal(symbol, f"2stars_{direction}", 'safe')
                     
                     if bias_1h == bias_3d:
                         if should_send_alert(symbol, f"3stars_{direction}", 'safe'):
-                            send_telegram_safe(symbol, direction, 3, price,
-                                               {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_1h': bias_1h},
-                                               "Webhook TradingView")
+                            send_telegram_safe(symbol, direction, 3, price, state, "Webhook TradingView")
                             update_last_signal(symbol, f"3stars_{direction}", 'safe')
                         
                         st_match = (st_1h == 'buy' and direction == 'LONG') or (st_1h == 'sell' and direction == 'SHORT')
                         if st_match:
                             if should_send_alert(symbol, f"4stars_{direction}", 'safe'):
-                                send_telegram_safe(symbol, direction, 4, price,
-                                                   {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_1h': bias_1h, 'st_1h': st_1h},
-                                                   "Webhook TradingView")
+                                send_telegram_safe(symbol, direction, 4, price, state, "Webhook TradingView")
                                 update_last_signal(symbol, f"4stars_{direction}", 'safe')
                             
                             if bias_4h == bias_3d:
                                 if should_send_alert(symbol, f"5stars_{direction}", 'safe'):
-                                    send_telegram_safe(symbol, direction, 5, price,
-                                                       {'bias_3d': bias_3d, 'macd_4h': macd_4h, 'bias_4h': bias_4h,
-                                                        'bias_1h': bias_1h, 'st_1h': st_1h},
-                                                       "Webhook TradingView")
+                                    send_telegram_safe(symbol, direction, 5, price, state, "Webhook TradingView")
                                     update_last_signal(symbol, f"5stars_{direction}", 'safe')
                     
                     if st_context_1h:
                         context_match = (st_context_1h == 'buy' and direction == 'LONG') or (st_context_1h == 'sell' and direction == 'SHORT')
                         if context_match:
                             if should_send_alert(symbol, f"2stars_context_{direction}", 'safe'):
-                                send_telegram_safe(symbol, direction, 2, price,
-                                                   {'bias_3d': bias_3d, 'st_context_1h': st_context_1h},
-                                                   "Webhook TradingView")
+                                send_telegram_safe(symbol, direction, 2, price, state, "Webhook TradingView")
                                 update_last_signal(symbol, f"2stars_context_{direction}", 'safe')
                             
                             st_match = (st_1h == 'buy' and direction == 'LONG') or (st_1h == 'sell' and direction == 'SHORT')
                             if st_match:
                                 if should_send_alert(symbol, f"3stars_context_{direction}", 'safe'):
-                                    send_telegram_safe(symbol, direction, 3, price,
-                                                       {'bias_3d': bias_3d, 'st_context_1h': st_context_1h, 'st_1h': st_1h},
-                                                       "Webhook TradingView")
+                                    send_telegram_safe(symbol, direction, 3, price, state, "Webhook TradingView")
                                     update_last_signal(symbol, f"3stars_context_{direction}", 'safe')
                             
                             if bias_1h == bias_3d:
                                 if should_send_alert(symbol, f"4stars_full_{direction}", 'safe'):
-                                    send_telegram_safe(symbol, direction, 4, price,
-                                                       {'bias_3d': bias_3d, 'macd_4h': macd_4h,
-                                                        'bias_1h': bias_1h, 'st_context_1h': st_context_1h},
-                                                       "Webhook TradingView")
+                                    send_telegram_safe(symbol, direction, 4, price, state, "Webhook TradingView")
                                     update_last_signal(symbol, f"4stars_full_{direction}", 'safe')
             
             # ================================================================
@@ -393,47 +503,94 @@ def webhook_handler():
                 state = AGGRESSIVE_STATE[symbol]
                 
                 if alert_type == 'st_context' and tf == '4h':
+                    value = data.get('value', '').lower()
                     short_term = float(data.get('short_term', 0))
                     long_term = float(data.get('long_term', 0))
                     
+                    # Récupérer l'état précédent
+                    prev_short_term = state.get('short_term_4h')
+                    prev_zone = state.get('zone_4h')
+                    
+                    # Mise à jour de l'état
                     state['short_term_4h'] = short_term
                     state['long_term_4h'] = long_term
                     state['timestamp_4h'] = time.time()
                     
+                    # DÉTECTION DES SORTIES (avant de traiter les zones)
+                    # Sortie LONG : on était en zone BUY et short_term repasse > -2
+                    if prev_zone == 'buy' and prev_short_term is not None and prev_short_term < -2 and short_term > -2:
+                        logger.info(f"[AGGRESSIVE] 🚪 SORTIE LONG détectée pour {symbol} (short_term {prev_short_term:.2f} -> {short_term:.2f})")
+                        send_telegram_aggressive_exit(symbol, 'LONG', price)
+                        state['zone_4h'] = None
+                        state['zone_1h'] = None
+                        continue
+                    
+                    # Sortie SHORT : on était en zone SELL et short_term repasse < 2
+                    if prev_zone == 'sell' and prev_short_term is not None and prev_short_term > 2 and short_term < 2:
+                        logger.info(f"[AGGRESSIVE] 🚪 SORTIE SHORT détectée pour {symbol} (short_term {prev_short_term:.2f} -> {short_term:.2f})")
+                        send_telegram_aggressive_exit(symbol, 'SHORT', price)
+                        state['zone_4h'] = None
+                        state['zone_1h'] = None
+                        continue
+                    
+                    # DÉTECTION DES ZONES (entrées/activations)
                     zone = None
-                    if short_term < -2 and long_term >= -2:
+                    if value == 'buy' and short_term < -2 and long_term >= -2:
                         zone = 'buy'
-                    elif short_term > 2 and long_term <= 2:
+                    elif value == 'sell' and short_term > 2 and long_term <= 2:
                         zone = 'sell'
                     
+                    # VÉRIFICATION INVALIDATION AUTOMATIQUE
                     if state['zone_4h'] == 'buy' and long_term < -2:
+                        logger.info(f"[AGGRESSIVE] ❌ Zone BUY 4H invalidée pour {symbol} (long_term={long_term:.2f} < -2)")
                         state['zone_4h'] = None
                     elif state['zone_4h'] == 'sell' and long_term > 2:
+                        logger.info(f"[AGGRESSIVE] ❌ Zone SELL 4H invalidée pour {symbol} (long_term={long_term:.2f} > 2)")
                         state['zone_4h'] = None
                     else:
                         state['zone_4h'] = zone
                     
-                    if zone and state['zone_4h'] == zone:
+                    logger.info(f"[AGGRESSIVE] ST Context 4H mis à jour pour {symbol}: zone={zone}, short_term={short_term:.2f}, long_term={long_term:.2f}")
+                    
+                    # Envoyer alerte de préparation si zone valide et nouvelle
+                    if zone and state['zone_4h'] == zone and prev_zone != zone:
                         if should_send_alert(symbol, f"prep_4h_{zone}", 'aggressive'):
-                            send_telegram_aggressive_preparation(
-                                symbol, zone, price,
-                                {'long_term_4h': long_term, 'zone_1h': state.get('zone_1h')}
-                            )
+                            send_telegram_aggressive_preparation(symbol, zone, price, state)
                             update_last_signal(symbol, f"prep_4h_{zone}", 'aggressive')
                     
                     continue
                 
+                elif alert_type == 'st_context_invalid' and tf == '4h':
+                    value = data.get('value', '').lower()
+                    long_term = float(data.get('long_term', 0))
+                    
+                    if value == 'buy' and long_term < -2:
+                        logger.info(f"[AGGRESSIVE] ❌ Zone BUY 4H invalidée pour {symbol} (long_term={long_term:.2f} < -2)")
+                        state['zone_4h'] = None
+                        state['long_term_4h'] = long_term
+                    elif value == 'sell' and long_term > 2:
+                        logger.info(f"[AGGRESSIVE] ❌ Zone SELL 4H invalidée pour {symbol} (long_term={long_term:.2f} > 2)")
+                        state['zone_4h'] = None
+                        state['long_term_4h'] = long_term
+                    
+                    continue
+                
                 elif alert_type == 'st_context' and tf == '1h':
+                    value = data.get('value', '').lower()
                     short_term = float(data.get('short_term', 0))
+                    
                     state['short_term_1h'] = short_term
                     state['timestamp_1h'] = time.time()
                     
-                    if short_term < -2:
-                        state['zone_1h'] = 'buy'
-                    elif short_term > 2:
-                        state['zone_1h'] = 'sell'
-                    else:
-                        state['zone_1h'] = None
+                    zone = None
+                    if value == 'buy' and short_term < -2:
+                        zone = 'buy'
+                    elif value == 'sell' and short_term > 2:
+                        zone = 'sell'
+                    
+                    state['zone_1h'] = zone
+                    
+                    logger.info(f"[AGGRESSIVE] ST Context 1H mis à jour pour {symbol}: zone={zone}, short_term={short_term:.2f}")
                     
                     continue
                 
@@ -441,36 +598,36 @@ def webhook_handler():
                     value = data.get('value', '').lower()
                     state['st_1h'] = value
                     
+                    logger.info(f"[AGGRESSIVE] SuperTrend AI 1H mis à jour pour {symbol}: {value}")
+                    
+                    # Vérifier alignement pour signal d'entrée
                     zone_4h = state.get('zone_4h')
                     zone_1h = state.get('zone_1h')
                     
-                    if not zone_4h or not zone_1h or zone_4h != zone_1h:
+                    if not zone_4h or not zone_1h:
+                        logger.debug(f"[AGGRESSIVE] Zones manquantes pour {symbol}: 4H={zone_4h}, 1H={zone_1h}")
                         continue
                     
+                    # Les deux zones doivent être alignées
+                    if zone_4h != zone_1h:
+                        logger.info(f"[AGGRESSIVE] Zones non alignées pour {symbol}: 4H={zone_4h}, 1H={zone_1h}")
+                        continue
+                    
+                    # Vérifier si SuperTrend AI correspond
                     signal_type = None
-                    if value == 'buy' and zone_4h == 'buy':
+                    if value == 'buy' and zone_4h == 'buy' and zone_1h == 'buy':
                         signal_type = 'LONG'
-                    elif value == 'sell' and zone_4h == 'sell':
+                    elif value == 'sell' and zone_4h == 'sell' and zone_1h == 'sell':
                         signal_type = 'SHORT'
                     
                     if signal_type:
                         if should_send_alert(symbol, f"entry_{signal_type}", 'aggressive'):
-                            send_telegram_aggressive_entry(
-                                symbol, signal_type, price,
-                                {'zone_4h': zone_4h, 'long_term_4h': state.get('long_term_4h'),
-                                 'zone_1h': zone_1h, 'st_1h': value}
-                            )
+                            send_telegram_aggressive_entry(symbol, signal_type, price, state)
                             update_last_signal(symbol, f"entry_{signal_type}", 'aggressive')
                     
                     continue
-                
-                elif alert_type == 'bias_exit' and tf == '4h':
-                    value = data.get('value', '').lower()
-                    exit_type = 'LONG' if value == 'bull' else 'SHORT'
-                    send_telegram_aggressive_exit(symbol, exit_type, price)
-                    continue
         
-        return jsonify({'status': 'success'}), 200
+        return jsonify({'status': 'success', 'strategies_processed': strategies_to_process}), 200
     
     except Exception as e:
         logger.error(f"Erreur webhook: {type(e).__name__} - {e}", exc_info=True)
@@ -560,18 +717,20 @@ if __name__ == "__main__":
     
     try:
         start_msg = (
-            "🤖 [BOT DEMARRE]\n\n"
-            "Mode: Webhook uniquement\n"
-            f"Surveillance de {len(CONFIG['SYMBOLS'])} actifs\n\n"
-            "Stratégies actives:\n"
-            "1️⃣ Safe (conservatrice)\n"
+            "🤖 [BOT DEMARRE]\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "📊 Mode: Webhook uniquement\n"
+            f"🎯 Surveillance: {len(CONFIG['SYMBOLS'])} actifs\n\n"
+            "📋 STRATÉGIES ACTIVES:\n\n"
+            "1️⃣ SAFE (Conservatrice)\n"
             "   • Système 2★ à 5★\n"
             "   • Sortie: MACD 3D opposé\n\n"
-            "2️⃣ Aggressive (rapide)\n"
+            "2️⃣ AGGRESSIVE (Rapide)\n"
             "   • ST Context 4H + 1H\n"
             "   • SuperTrend AI 1H\n"
             "   • Sortie: Biais 4H opposé\n\n"
-            "Prêt à recevoir les webhooks TradingView ✅"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Prêt à recevoir les webhooks TradingView"
         )
         
         send_telegram(

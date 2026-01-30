@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+@app.route('/')
+def home():
+    return "Bot trading OK - Monitoring actif"
+
 # ============================================================================ #
 # FONCTIONS TELEGRAM & NOTIFICATIONS
 # ============================================================================ #

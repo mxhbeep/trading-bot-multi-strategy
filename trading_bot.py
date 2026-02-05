@@ -490,14 +490,34 @@ def state():
     }), 200
 
 
+# ============================================================================ #
+# INITIALISATION AU CHARGEMENT DU MODULE
+# ============================================================================ #
+# Ce code s'exécute quand le module est importé par Gunicorn
+
+logger.info("🚀 Démarrage du bot multi-exchange...")
+
+# Initialiser les exchanges
+init_exchanges()
+
+# Initialiser les états pour chaque symbole
+for symbol in CONFIG['SYMBOLS'].keys():
+    SAFE_STATE[symbol] = {
+        'bias_3d': None, 'bias_4h': None, 'bias_1h': None,
+        'macd_4h': None, 'macd_1d': None, 'st_1h': None
+    }
+    AGGRESSIVE_STATE[symbol] = {
+        'st_context_4h': None, 'st_context_1h': None,
+        'macd_4h': None, 'bias_1h': None, 'bias_4h': None,
+        'bias_1d': None, 'macd_1d': None, 'ema200_4h': None
+    }
+
+# Envoyer notification de démarrage
+send_start_notification()
+
+logger.info(f"✅ Bot initialisé et prêt à recevoir des webhooks")
+
+# Ce bloc ne sert que pour les tests en local (non utilisé avec Gunicorn)
 if __name__ == '__main__':
-    logger.info("🚀 Démarrage du bot multi-exchange...")
-    
-    # Initialiser les exchanges
-    init_exchanges()
-    
-    # Envoyer notification de démarrage
-    send_start_notification()
-    
-    logger.info(f"✅ Bot démarré sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
+    logger.info(f"Mode développement - démarrage sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
     app.run(host=CONFIG['WEBHOOK_HOST'], port=CONFIG['WEBHOOK_PORT'], debug=False)

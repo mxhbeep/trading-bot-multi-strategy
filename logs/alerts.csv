@@ -1,0 +1,6 @@
+timestamp,request_id,alert_type,strategy,symbol,direction,price,stars,conditions
+2026-01-28T17:05:25.278098+00:00,0962cf0f-dc07-483d-9279-bd7fae1e1cd3,SIGNAL,SAFE,BTC/USDT,LONG,43050.0,2,"{""bias_3d"": ""bull"", ""macd_4h"": ""bull"", ""bias_1h"": null, ""st_1h"": null, ""bias_4h"": null, ""st_context_1h"": null}"
+2026-01-28T17:05:35.403660+00:00,c1ecea49-b88f-4020-b0ea-b2ef474255d9,SIGNAL,SAFE,BTC/USDT,LONG,43100.0,3,"{""bias_3d"": ""bull"", ""macd_4h"": ""bull"", ""bias_1h"": ""bull"", ""st_1h"": null, ""bias_4h"": null, ""st_context_1h"": null}"
+2026-01-28T17:06:19.838357+00:00,5daedbfe-0484-4e23-95fb-27501b3ac890,SIGNAL,SAFE,BTC/USDT,LONG,43150.0,4,"{""bias_3d"": ""bull"", ""macd_4h"": ""bull"", ""bias_1h"": ""bull"", ""st_1h"": ""buy"", ""bias_4h"": null, ""st_context_1h"": null}"
+2026-01-28T17:08:59.516858+00:00,0c5cea2a-f98d-4e25-8b93-f62bbb2fb12e,PREPARATION,AGGRESSIVE,ETH/USDT,LONG,2450.0,,"{""zone_4h"": ""buy"", ""long_term_4h"": ""0.50"", ""zone_1h"": null, ""st_1h"": null, ""validated"": ""2/4""}"
+2026-01-28T17:09:11.722146+00:00,508e1f4b-d542-4ffa-9d4e-4ff417c0a9ec,ENTRY,AGGRESSIVE,ETH/USDT,LONG,2460.0,,"{""zone_4h"": ""buy"", ""long_term_4h"": ""0.50"", ""zone_1h"": ""buy"", ""st_1h"": ""buy""}"

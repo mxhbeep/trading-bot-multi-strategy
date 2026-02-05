@@ -1,246 +1,503 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Multi-Asset Trading Monitor Bot - Avec webhook TradingView pour ST Context
-4H : MACD (12, 34, 9)
-1H : Biais EMA(13) vs SMA(34)
-Alerte quand alignement + signal ST Context via webhook → vérif manuelle SuperTrend AI 20min
-
-Dépendances : pip install ccxt pandas numpy requests flask
-"""
 
 import ccxt
 import pandas as pd
 import numpy as np
 import time
 import requests
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
+from flask import Flask, request, jsonify
 import os
-import json
-from flask import Flask, request
-import threading
 
-print("trading_bot.py chargé avec succès")
-
-# ============================================================================
+# ============================================================================ #
 # CONFIGURATION
-# ============================================================================
+# ============================================================================ #
 
 CONFIG = {
-    'EXCHANGE': 'okx',
-    'API_KEY': '',
-    'SECRET': '',
-    
     'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
     'TELEGRAM_CHAT_ID': '6473214015',
     
-    'WATCHLIST_FILE': 'watchlist.txt',
+    # Watchlist avec mapping des exchanges
+    'SYMBOLS': {
+        # 🛡️ Majors & Infrastructure - OKX
+        'BTC/USDT': 'okx',
+        'ETH/USDT': 'okx',
+        'SOL/USDT': 'okx',
+        'XRP/USDT': 'okx',
+        'LINK/USDT': 'okx',
+        'TIA/USDT': 'okx',
+        'STX/USDT': 'okx',
+        
+        # 🛡️ Majors & Infrastructure - Binance (non disponibles sur OKX)
+        'VET/USDT': 'binance',
+        'PYTH/USDT': 'binance',
+        'QNT/USDT': 'binance',
+        'FRM/USDT': 'binance',
+        
+        # 🧠 IA, DePIN & Tech - OKX
+        'TAO/USDT': 'okx',
+        'FET/USDT': 'okx',
+        'RENDER/USDT': 'okx',
+        'ZK/USDT': 'okx',
+        
+        # 💸 Finance & RWA - OKX
+        'ONDO/USDT': 'okx',
+        'CVX/USDT': 'okx',
+        'CRV/USDT': 'okx',
+        'PENDLE/USDT': 'okx',
+        
+        # 🕶️ Privacy
+        'ZEC/USDT': 'okx',
+        'XMR/USDT': 'binance',  # Monero souvent indisponible, on teste
+        
+        # 🎭 Culture & Mèmes - OKX
+        'PEPE/USDT': 'okx',
+        'BONK/USDT': 'okx',
+        'DOGE/USDT': 'okx',
+        'WIF/USDT': 'okx',
+        'PENGU/USDT': 'okx',
+    },
     
-    # Timeframes et indicateurs
-    'TF_4H': '4h',
-    'MACD_4H_FAST': 12,
-    'MACD_4H_SLOW': 34,
-    'MACD_4H_SIGNAL': 9,
-    
-    'TF_1H': '1h',
-    'EMA_1H': 13,
-    'SMA_1H': 34,
-    
-    # Paramètres bot
-    'CHECK_INTERVAL': 300,          # 5 minutes
-    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,  # 30 min mini entre 2 alertes identiques par symbole
-    'DATA_LIMIT': 300,
-    'RETRY_DELAY': 12,
-    'MAX_RETRIES': 4,
-    
-    # Webhook (pour alertes TradingView)
-    'WEBHOOK_PORT': 5000,
-    'WEBHOOK_HOST': '0.0.0.0',  # Pour écoute locale ; change pour production
+    'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
+    'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
+    'WEBHOOK_HOST': '0.0.0.0',
 }
 
-# État anti-spam par symbole
-LAST_SIGNALS = {}
+# ============================================================================ #
+# ETAT GLOBAL
+# ============================================================================ #
 
-# Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s  %(levelname)-7s  %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+LAST_SIGNALS = {}
+SAFE_STATE = {}
+AGGRESSIVE_STATE = {}
+
+# Exchanges initialisés
+exchanges = {}
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
-# Flask app pour webhook
 app = Flask(__name__)
 
-# ============================================================================
-# INDICATEURS
-# ============================================================================
+@app.route('/')
+def home():
+    total_symbols = len(CONFIG['SYMBOLS'])
+    okx_count = sum(1 for ex in CONFIG['SYMBOLS'].values() if ex == 'okx')
+    binance_count = sum(1 for ex in CONFIG['SYMBOLS'].values() if ex == 'binance')
+    
+    return f"""
+    <h1>🤖 Trading Bot Multi-Exchange</h1>
+    <p>Status: ✅ Running</p>
+    <p>Total assets: {total_symbols}</p>
+    <p>OKX: {okx_count} | Binance: {binance_count}</p>
+    <p>Strategies: SAFE + AGGRESSIVE</p>
+    """
 
-def ema(series: pd.Series, period: int) -> pd.Series:
-    return series.ewm(span=period, adjust=False).mean()
+# ============================================================================ #
+# INITIALISATION EXCHANGES
+# ============================================================================ #
 
-def sma(series: pd.Series, period: int) -> pd.Series:
-    return series.rolling(window=period).mean()
+def init_exchanges():
+    """Initialise les connexions aux exchanges."""
+    global exchanges
+    
+    try:
+        # OKX
+        exchanges['okx'] = ccxt.okx({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        logger.info("✅ OKX initialisé")
+        
+        # Binance
+        exchanges['binance'] = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        logger.info("✅ Binance initialisé")
+        
+        # Vérifier la connectivité
+        for name, exchange in exchanges.items():
+            try:
+                exchange.load_markets()
+                logger.info(f"✅ {name.upper()} - Markets chargés avec succès")
+            except Exception as e:
+                logger.error(f"❌ {name.upper()} - Erreur chargement markets: {e}")
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur initialisation exchanges: {e}")
 
-def macd(series: pd.Series, fast: int, slow: int, sig: int):
-    ema_fast = ema(series, fast)
-    ema_slow = ema(series, slow)
-    macd_line = ema_fast - ema_slow
-    signal_line = ema(macd_line, sig)
-    return macd_line, signal_line
+# ============================================================================ #
+# FONCTIONS TELEGRAM
+# ============================================================================ #
 
-# ============================================================================
-# ANALYSE TIMEFRAME
-# ============================================================================
-
-def analyze_tf(df: pd.DataFrame, tf: str) -> dict | None:
-    if df is None or len(df) < 100:
-        return None
-
-    close = df['close']
-
-    if tf == '4h':
-        macd_line, sig_line = macd(close, CONFIG['MACD_4H_FAST'], CONFIG['MACD_4H_SLOW'], CONFIG['MACD_4H_SIGNAL'])
-        idx = -1
-        while idx > -len(close) and pd.isna(macd_line.iloc[idx]):
-            idx -= 1
-        if idx == -len(close):
-            return None
-        macd_val = macd_line.iloc[idx]
-        sig_val = sig_line.iloc[idx]
-        return {
-            'macd_bull': macd_val > sig_val,
-            'macd_bear': macd_val < sig_val,
-            'macd_line': round(macd_val, 4),
-            'signal_line': round(sig_val, 4),
-            'price': round(close.iloc[-1], 2)
-        }
-
-    else:  # 1h
-        em = ema(close, CONFIG['EMA_1H'])
-        sm = sma(close, CONFIG['SMA_1H'])
-        idx = -1
-        while idx > -len(close) and pd.isna(sm.iloc[idx]):
-            idx -= 1
-        if idx == -len(close):
-            return None
-        em_val = em.iloc[idx]
-        sm_val = sm.iloc[idx]
-        return {
-            'bias_bull': em_val > sm_val,
-            'bias_bear': em_val < sm_val,
-            'ema': round(em_val, 2),
-            'sma': round(sm_val, 2),
-            'price': round(close.iloc[-1], 2)
-        }
-
-# ============================================================================
-# RÉCUPÉRATION OHLCV
-# ============================================================================
-
-def fetch_ohlcv(exchange, symbol: str, timeframe: str) -> pd.DataFrame | None:
-    for attempt in range(CONFIG['MAX_RETRIES']):
-        try:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=CONFIG['DATA_LIMIT'])
-            if not ohlcv:
-                raise ValueError("Réponse vide")
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
-        except Exception as e:
-            logger.warning(f"{symbol} {timeframe} erreur (essai {attempt+1}): {e}")
-            time.sleep(CONFIG['RETRY_DELAY'])
-    return None
-
-# ============================================================================
-# ENVOI TELEGRAM
-# ============================================================================
-
-def send_alert(symbol: str, signal_type: str, price: float, a4: dict, a1: dict, st_context_signal: str = None):
-    msg = f"{signal_type} - {symbol}\n\n"
-    msg += f"Prix : ${price:.2f}\n"
-    msg += f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-
-    msg += "4H  •  MACD : " + ("Bull" if a4['macd_bull'] else "Bear") + "\n"
-    msg += f"     •  MACD line : {a4['macd_line']}\n"
-    msg += f"     •  Signal line : {a4['signal_line']}\n\n"
-
-    msg += "1H  •  Biais : " + ("Bull" if a1['bias_bull'] else "Bear") + "\n"
-    msg += f"     •  EMA({CONFIG['EMA_1H']}) : {a1['ema']}\n"
-    msg += f"     •  SMA({CONFIG['SMA_1H']}) : {a1['sma']}\n\n"
-
-    if st_context_signal:
-        msg += f"ST Context : {st_context_signal}\n\n"
-
-    msg += "Vérifie SuperTrend AI 20min avant d'entrer\n"
-    msg += "Ce bot ne trade pas automatiquement."
-
+def send_telegram(msg):
     url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
     payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'], 'text': msg, 'parse_mode': 'HTML'}
-
     try:
-        r = requests.post(url, json=payload, timeout=12)
-        r.raise_for_status()
-        logger.info(f"Alerte {signal_type} envoyée pour {symbol}")
+        requests.post(url, json=payload, timeout=10)
+        logger.info(f"✅ Message Telegram envoyé")
     except Exception as e:
-        logger.error(f"Échec envoi Telegram pour {symbol}: {e}")
+        logger.error(f"❌ Erreur Telegram: {e}")
 
-# ============================================================================
-# DÉTECTION SIGNAL
-# ============================================================================
+def send_start_notification():
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    okx_symbols = [s for s, ex in CONFIG['SYMBOLS'].items() if ex == 'okx']
+    binance_symbols = [s for s, ex in CONFIG['SYMBOLS'].items() if ex == 'binance']
+    
+    msg = (
+        "🤖 <b>[BOT STARTED - MULTI-EXCHANGE]</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📊 <b>Configuration:</b>\n"
+        f"   • Total Assets: {len(CONFIG['SYMBOLS'])}\n"
+        f"   • OKX: {len(okx_symbols)} assets\n"
+        f"   • Binance: {len(binance_symbols)} assets\n\n"
+        "📋 <b>STRATEGIES:</b>\n\n"
+        "1️⃣ <b>SAFE</b>\n"
+        "   • Entry: 2★ to 5★\n"
+        "   • TP Partiel: MACD 1D\n"
+        "   • Exit: MACD 3D\n\n"
+        "2️⃣ <b>AGGRESSIVE</b>\n"
+        "   • Filter: EMA 200 4H\n"
+        "   • Entry: 3★ to 5★\n"
+        "   • TP Partiel: MACD 1D\n"
+        "   • Exit: Bias 1D\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Binance Assets:</b>\n{', '.join([s.split('/')[0] for s in binance_symbols])}\n\n"
+        "✅ <b>Ready for TradingView</b>\n"
+        f"⏰ {now}"
+    )
+    send_telegram(msg)
 
-def get_signal(a4: dict, a1: dict) -> str | None:
-    if not a4 or not a1:
+# ============================================================================ #
+# UTILITAIRES
+# ============================================================================ #
+
+def format_tv_symbol(s):
+    """Convertit le symbole TradingView en format unifié."""
+    if ':' in s: 
+        s = s.split(':')[-1]
+    
+    # Gérer les formats sans /
+    for q in ['USDT', 'USDC', 'BUSD']:
+        if s.endswith(q) and '/' not in s:
+            return f"{s.replace(q, '')}/{q}"
+    
+    return s
+
+def get_exchange_for_symbol(symbol):
+    """Retourne l'exchange configuré pour un symbole."""
+    exchange_name = CONFIG['SYMBOLS'].get(symbol)
+    
+    if not exchange_name:
+        logger.warning(f"⚠️ Symbole {symbol} non configuré")
         return None
-    if a4['macd_bull'] and a1['bias_bull']:
-        return 'LONG'
-    if a4['macd_bear'] and a1['bias_bear']:
-        return 'SHORT'
-    return None
-
-# ============================================================================
-# LECTURE WATCHLIST
-# ============================================================================
-
-def load_watchlist() -> list[str]:
-    path = CONFIG['WATCHLIST_FILE']
-    if not os.path.exists(path):
-        logger.error(f"Fichier watchlist introuvable : {path}")
-        return []
     
-    with open(path, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
+    exchange = exchanges.get(exchange_name)
     
-    symbols = [line.strip() for line in lines if line.strip() and not line.strip().startswith('#')]
-    logger.info(f"Watchlist chargée : {len(symbols)} actifs")
-    return symbols
+    if not exchange:
+        logger.error(f"❌ Exchange {exchange_name} non initialisé")
+        return None
+    
+    return exchange
 
-# ============================================================================
-# WEBHOOK TRADINGVIEW (pour ST Context)
-# ============================================================================
+def should_send(symbol, key):
+    now = time.time()
+    k = f"{symbol}:{key}"
+    if k not in LAST_SIGNALS or (now - LAST_SIGNALS[k] > CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']):
+        LAST_SIGNALS[k] = now
+        return True
+    return False
+
+# ============================================================================ #
+# WEBHOOK HANDLER
+# ============================================================================ #
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.get_json()
-    if not data:
-        return "Données invalides", 400
+    data = request.get_json(silent=True)
+    if not data: 
+        logger.warning("⚠️ Webhook sans données")
+        return jsonify({'status': 'no_data'}), 400
+    
+    symbol = format_tv_symbol(data.get('symbol', ''))
+    strat = data.get('strategy', '').lower()
+    tf = data.get('tf', '').lower()
+    alert_type = data.get('type', '').lower()
+    val = str(data.get('value', '')).lower()
+    price = float(data.get('price', 0))
 
-    logger.info(f"Webhook reçu : {data}")
+    logger.info(f"📥 Webhook: {symbol} | {strat} | {tf} | {alert_type} | {val}")
 
-    try:
-        symbol = data['symbol']
-        st_signal = data['signal']  # ex: 'buy' ou 'sell'
-        price = data.get('price', 0)  # optionnel
+    # Vérifier si le symbole est dans la watchlist
+    if symbol not in CONFIG['SYMBOLS']:
+        logger.info(f"⏭️ Symbole {symbol} non surveillé")
+        return jsonify({'status': 'ignored', 'reason': 'not_in_watchlist'}), 200
+    
+    # Obtenir l'exchange pour ce symbole
+    exchange_name = CONFIG['SYMBOLS'][symbol]
+    logger.info(f"📊 {symbol} → Exchange: {exchange_name.upper()}")
 
-        # Vérifie si symbole est surveillé
-        if symbol not in symbols:
-            logger.warning(f"Symbole {symbol} non dans watchlist")
-            return "Symbole non surveillé", 200
+    # Init états
+    if symbol not in SAFE_STATE:
+        SAFE_STATE[symbol] = {
+            'bias_3d': None, 
+            'macd_4h': None, 
+            'bias_1h': None, 
+            'st_1h': None, 
+            'bias_4h': None, 
+            'macd_1d': None
+        }
+    if symbol not in AGGRESSIVE_STATE:
+        AGGRESSIVE_STATE[symbol] = {
+            'st_context_4h': None, 
+            'st_context_1h': None, 
+            'macd_4h': None, 
+            'bias_1h': None, 
+            'bias_4h': None, 
+            'bias_1d': None,
+            'macd_1d': None, 
+            'ema200_4h': None
+        }
 
-        # Fetch données pour vérifier alignement
-        df4 = fetch_ohlcv(exchange, symbol, CONFIG['TF_4H'])
-        df1 = fetch_ohlcv(exchange, symbol, CONFIG['TF_1H'])
+    # ========================================================================
+    # LOGIQUE SAFE
+    # ========================================================================
+    if strat in ['safe', 'both']:
+        s = SAFE_STATE[symbol]
+        
+        # Mise à jour états
+        if alert_type == 'bias' and tf == '3d': 
+            s['bias_3d'] = val
+            logger.info(f"[SAFE] {symbol} - Bias 3D: {val}")
+        if alert_type == 'macd' and tf == '4h': 
+            s['macd_4h'] = val
+            logger.info(f"[SAFE] {symbol} - MACD 4H: {val}")
+        if alert_type == 'bias' and tf == '1h': 
+            s['bias_1h'] = val
+            logger.info(f"[SAFE] {symbol} - Bias 1H: {val}")
+        if alert_type == 'supertrend' and tf == '1h': 
+            s['st_1h'] = val
+            logger.info(f"[SAFE] {symbol} - SuperTrend 1H: {val}")
+        if alert_type == 'bias_9_26' and tf == '4h': 
+            s['bias_4h'] = val
+            logger.info(f"[SAFE] {symbol} - Bias 4H: {val}")
+        if alert_type == 'macd' and tf == '1d': 
+            s['macd_1d'] = val
+            logger.info(f"[SAFE] {symbol} - MACD 1D: {val}")
 
-        a4 = analyze_tf(df4, '4h')
-        a1 = analyze_tf(df...
+        # SORTIES SAFE
+        if alert_type == 'macd' and tf == '1d':
+            direction_macd = "BULLISH" if val == 'bull' else "BEARISH"
+            emoji = "🟢" if val == 'bull' else "🔴"
+            
+            msg = (
+                f"{emoji} <b>[SAFE - TP PARTIEL]</b> {symbol}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Trigger: MACD 1D Inversion\n"
+                f"📈 New Direction: {direction_macd}\n"
+                f"💰 Price: ${price:.4f}\n"
+                f"🏦 Exchange: {exchange_name.upper()}\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"💡 Action: Take partial profits (30-50%)"
+            )
+            send_telegram(msg)
+        
+        if alert_type == 'macd_exit' and tf == '3d':
+            direction_macd = "BULLISH" if val == 'bull' else "BEARISH"
+            emoji = "🟢" if val == 'bull' else "🔴"
+            
+            msg = (
+                f"🚪 <b>[SAFE - EXIT COMPLET]</b> {symbol}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Trigger: MACD 3D Opposite Cross\n"
+                f"📈 New Direction: {direction_macd}\n"
+                f"💰 Price: ${price:.4f}\n"
+                f"🏦 Exchange: {exchange_name.upper()}\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"❌ Action: EXIT ALL POSITIONS NOW"
+            )
+            send_telegram(msg)
+
+        # ENTRÉES SAFE
+        direction = None
+        if s['bias_3d'] == 'bull' and s['macd_4h'] == 'bull':
+            direction = "LONG"
+        elif s['bias_3d'] == 'bear' and s['macd_4h'] == 'bear':
+            direction = "SHORT"
+        
+        if direction:
+            stars = 2
+            expected = 'bull' if direction == "LONG" else 'bear'
+            st_expected = 'buy' if direction == "LONG" else 'sell'
+            
+            if s['bias_1h'] == expected: stars = 3
+            if s['st_1h'] == st_expected: stars = 4
+            if s['bias_4h'] == expected: stars = 5
+            
+            if stars >= 2 and alert_type == 'supertrend' and tf == '1h' and should_send(symbol, f"safe_{stars}*"):
+                emoji = "🟢" if direction == "LONG" else "🔴"
+                msg = (
+                    f"{emoji} <b>[SAFE {stars}⭐]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 3D: {s['bias_3d']}\n"
+                    f"✅ MACD 4H: {s['macd_4h']}\n"
+                    f"{'✅' if stars >= 3 else '❌'} Bias 1H: {s['bias_1h']}\n"
+                    f"{'✅' if stars >= 4 else '❌'} SuperTrend 1H: {s['st_1h']}\n"
+                    f"{'✅' if stars == 5 else '❌'} Bias 4H: {s['bias_4h']}"
+                )
+                send_telegram(msg)
+
+    # ========================================================================
+    # LOGIQUE AGGRESSIVE
+    # ========================================================================
+    if strat in ['aggressive', 'both']:
+        a = AGGRESSIVE_STATE[symbol]
+        
+        # Mise à jour états
+        if alert_type == 'st_context' and tf == '4h': 
+            a['st_context_4h'] = val
+        if alert_type == 'st_context' and tf == '1h': 
+            a['st_context_1h'] = val
+        if alert_type == 'macd' and tf == '4h': 
+            a['macd_4h'] = val
+        if alert_type == 'bias' and tf == '1h': 
+            a['bias_1h'] = val
+        if alert_type == 'bias' and tf == '4h': 
+            a['bias_4h'] = val
+        if alert_type == 'bias' and tf == '1d': 
+            a['bias_1d'] = val
+        if alert_type == 'macd' and tf == '1d': 
+            a['macd_1d'] = val
+        if alert_type == 'ema200' and tf == '4h': 
+            a['ema200_4h'] = float(val)
+
+        # SORTIES AGGRESSIVE
+        if alert_type == 'macd' and tf == '1d':
+            direction_macd = "BULLISH" if val == 'bull' else "BEARISH"
+            emoji = "🟢" if val == 'bull' else "🔴"
+            
+            msg = (
+                f"{emoji} <b>[AGGRESSIVE - TP PARTIEL]</b> {symbol}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Trigger: MACD 1D Inversion\n"
+                f"📈 New Direction: {direction_macd}\n"
+                f"💰 Price: ${price:.4f}\n"
+                f"🏦 Exchange: {exchange_name.upper()}\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"💡 Action: Take partial profits (50-70%)"
+            )
+            send_telegram(msg)
+        
+        if alert_type == 'bias' and tf == '1d':
+            new_bias_direction = "BULLISH" if val == 'bull' else "BEARISH"
+            emoji = "🟢" if val == 'bull' else "🔴"
+            
+            msg = (
+                f"🚪 <b>[AGGRESSIVE - EXIT COMPLET]</b> {symbol}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Trigger: Bias 1D Inversion\n"
+                f"📈 New Bias: {new_bias_direction}\n"
+                f"💰 Price: ${price:.4f}\n"
+                f"🏦 Exchange: {exchange_name.upper()}\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"❌ Action: EXIT ALL POSITIONS\n\n"
+                f"📋 Context:\n"
+                f"   • Old Bias 1D: {a.get('bias_1d', 'N/A')} → New: {val}\n"
+                f"   • Bias 4H: {a.get('bias_4h', 'N/A')}\n"
+                f"   • MACD 1D: {a.get('macd_1d', 'N/A')}"
+            )
+            send_telegram(msg)
+
+        # ENTRÉES AGGRESSIVE
+        if alert_type == 'supertrend' and tf == '1h':
+            direction = "LONG" if val == 'buy' else "SHORT"
+            expected = 'bull' if direction == "LONG" else 'bear'
+            
+            # Filtre EMA 200
+            ema_ok = False
+            ema_status = "N/A"
+            if a['ema200_4h']:
+                if direction == "LONG" and price < a['ema200_4h']:
+                    ema_ok = True
+                    ema_status = f"✅ ${price:.2f} < EMA200 ${a['ema200_4h']:.2f}"
+                elif direction == "SHORT" and price > a['ema200_4h']:
+                    ema_ok = True
+                    ema_status = f"✅ ${price:.2f} > EMA200 ${a['ema200_4h']:.2f}"
+
+            if ema_ok:
+                stars = 0
+                if a['st_context_4h'] == val and a['st_context_1h'] == val and a['macd_4h'] == expected:
+                    stars = 3
+                    if a['bias_1h'] == expected: stars = 4
+                    if a['bias_4h'] == expected: stars = 5
+                
+                if stars < 4 and a['bias_1d'] == expected and a['st_context_1h'] == val and a['macd_4h'] == expected:
+                    stars = 4
+
+                if stars >= 3 and should_send(symbol, f"agg_{stars}*"):
+                    emoji = "🟢" if direction == "LONG" else "🔴"
+                    msg = (
+                        f"{emoji} <b>[AGGRESSIVE {stars}⭐]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 Direction: {direction}\n"
+                        f"💰 Price: ${price:.4f}\n"
+                        f"🏦 Exchange: {exchange_name.upper()}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"📊 EMA Filter: {ema_status}\n\n"
+                        f"✅ ST Context 4H: {a['st_context_4h']}\n"
+                        f"✅ ST Context 1H: {a['st_context_1h']}\n"
+                        f"✅ MACD 4H: {a['macd_4h']}\n"
+                        f"{'✅' if stars >= 4 else '❌'} Bias 1H: {a['bias_1h']}\n"
+                        f"{'✅' if stars == 5 else '❌'} Bias 4H: {a['bias_4h']}"
+                    )
+                    send_telegram(msg)
+
+    return jsonify({'status': 'success', 'symbol': symbol, 'exchange': exchange_name}), 200
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    okx_ok = 'okx' in exchanges
+    binance_ok = 'binance' in exchanges
+    
+    return jsonify({
+        'status': 'running',
+        'timestamp': datetime.now().isoformat(),
+        'symbols_total': len(CONFIG['SYMBOLS']),
+        'okx_symbols': sum(1 for ex in CONFIG['SYMBOLS'].values() if ex == 'okx'),
+        'binance_symbols': sum(1 for ex in CONFIG['SYMBOLS'].values() if ex == 'binance'),
+        'exchanges': {
+            'okx': '✅' if okx_ok else '❌',
+            'binance': '✅' if binance_ok else '❌'
+        }
+    }), 200
+
+
+@app.route('/state', methods=['GET'])
+def state():
+    return jsonify({
+        'safe_state': SAFE_STATE,
+        'aggressive_state': AGGRESSIVE_STATE,
+        'watchlist': CONFIG['SYMBOLS']
+    }), 200
+
+
+if __name__ == '__main__':
+    logger.info("🚀 Démarrage du bot multi-exchange...")
+    
+    # Initialiser les exchanges
+    init_exchanges()
+    
+    # Envoyer notification de démarrage
+    send_start_notification()
+    
+    logger.info(f"✅ Bot démarré sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
+    app.run(host=CONFIG['WEBHOOK_HOST'], port=CONFIG['WEBHOOK_PORT'], debug=False)

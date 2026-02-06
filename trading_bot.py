@@ -75,6 +75,7 @@ CONFIG = {
 LAST_SIGNALS = {}
 SAFE_STATE = {}
 AGGRESSIVE_STATE = {}
+MOMENTUM_STATE = {}
 
 # Exchanges initialisés
 exchanges = {}
@@ -166,6 +167,11 @@ def send_start_notification():
         "2️⃣ <b>AGGRESSIVE</b>\n"
         "   • Filter: EMA 200 4H\n"
         "   • Entry: 3★ to 5★\n"
+        "   • TP Partiel: MACD 1D\n"
+        "   • Exit: Bias 1D\n\n"
+        "3️⃣ <b>MOMENTUM</b> 🆕\n"
+        "   • Filter: EMA 200 1H\n"
+        "   • Entry: Bias 1D + MACD 4H\n"
         "   • TP Partiel: MACD 1D\n"
         "   • Exit: Bias 1D\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -264,6 +270,14 @@ def webhook():
             'bias_1d': None,
             'macd_1d': None, 
             'ema200_4h': None
+        }
+    if symbol not in MOMENTUM_STATE:
+        MOMENTUM_STATE[symbol] = {
+            'bias_1d': None,
+            'macd_4h': None,
+            'ema200_1h': None,
+            'st_1h': None,
+            'macd_1d': None
         }
 
     # ========================================================================
@@ -486,6 +500,131 @@ def webhook():
                     )
                     send_telegram(msg)
 
+    # ========================================================================
+    # LOGIQUE MOMENTUM
+    # ========================================================================
+    if strat in ['momentum', 'both']:
+        m = MOMENTUM_STATE[symbol]
+        
+        # Mise à jour états
+        if alert_type == 'bias' and tf == '1d':
+            m['bias_1d'] = val
+            logger.info(f"[MOMENTUM] {symbol} - Bias 1D: {val}")
+        if alert_type == 'macd' and tf == '4h':
+            m['macd_4h'] = val
+            logger.info(f"[MOMENTUM] {symbol} - MACD 4H: {val}")
+        if alert_type == 'ema200' and tf == '1h':
+            m['ema200_1h'] = float(val)
+            logger.info(f"[MOMENTUM] {symbol} - EMA200 1H: {val}")
+        if alert_type == 'supertrend' and tf == '1h':
+            m['st_1h'] = val
+            logger.info(f"[MOMENTUM] {symbol} - SuperTrend 1H: {val}")
+        if alert_type == 'macd' and tf == '1d':
+            m['macd_1d'] = val
+            logger.info(f"[MOMENTUM] {symbol} - MACD 1D: {val}")
+        
+        # SORTIES MOMENTUM
+        # TP Partiel - MACD 1D croise opposé
+        if alert_type == 'macd' and tf == '1d':
+            direction_macd = "BULLISH" if val == 'bull' else "BEARISH"
+            emoji = "🟢" if val == 'bull' else "🔴"
+            
+            msg = (
+                f"{emoji} <b>[MOMENTUM - TP PARTIEL]</b> {symbol}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Trigger: MACD 1D Inversion\n"
+                f"📈 New Direction: {direction_macd}\n"
+                f"💰 Price: ${price:.4f}\n"
+                f"🏦 Exchange: {exchange_name.upper()}\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"💡 Action: Take partial profits (40-60%)"
+            )
+            send_telegram(msg)
+        
+        # Exit Complet - Bias 1D inverse
+        if alert_type == 'bias' and tf == '1d':
+            old_bias = m.get('bias_1d')
+            if old_bias and old_bias != val:  # Changement de direction
+                new_bias_direction = "BULLISH" if val == 'bull' else "BEARISH"
+                emoji = "🟢" if val == 'bull' else "🔴"
+                
+                msg = (
+                    f"🚪 <b>[MOMENTUM - EXIT COMPLET]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 Trigger: Bias 1D Inversion\n"
+                    f"📈 New Bias: {new_bias_direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"❌ Action: EXIT ALL POSITIONS NOW\n\n"
+                    f"📋 Context:\n"
+                    f"   • Old Bias 1D: {old_bias} → New: {val}\n"
+                    f"   • MACD 4H: {m.get('macd_4h', 'N/A')}\n"
+                    f"   • MACD 1D: {m.get('macd_1d', 'N/A')}"
+                )
+                send_telegram(msg)
+        
+        # ENTRÉES MOMENTUM
+        direction = None
+        if m['bias_1d'] == 'bull' and m['macd_4h'] == 'bull':
+            direction = "LONG"
+        elif m['bias_1d'] == 'bear' and m['macd_4h'] == 'bear':
+            direction = "SHORT"
+        
+        if direction:
+            # Filtre EMA 200 1H
+            ema_ok = False
+            ema_status = "N/A"
+            if m['ema200_1h']:
+                if direction == "LONG" and price < m['ema200_1h']:
+                    ema_ok = True
+                    ema_status = f"✅ ${price:.2f} < EMA200 ${m['ema200_1h']:.2f}"
+                elif direction == "SHORT" and price > m['ema200_1h']:
+                    ema_ok = True
+                    ema_status = f"✅ ${price:.2f} > EMA200 ${m['ema200_1h']:.2f}"
+                else:
+                    ema_status = f"❌ Filtre EMA non validé (price: ${price:.2f}, EMA200: ${m['ema200_1h']:.2f})"
+            
+            # ALERTE DE PRÉPARATION (quand filtre EMA validé mais pas encore de SuperTrend)
+            if ema_ok and alert_type == 'ema200' and tf == '1h' and should_send(symbol, f"momentum_prep"):
+                emoji = "🟡" if direction == "LONG" else "🟠"
+                msg = (
+                    f"{emoji} <b>[MOMENTUM - PRÉPARATION]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚠️ <b>ATTENTION : Setup en formation</b>\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 1D: {m['bias_1d']}\n"
+                    f"✅ MACD 4H: {m['macd_4h']}\n"
+                    f"✅ Prix vs EMA200 1H: {ema_status}\n"
+                    f"⏳ SuperTrend 1H: En attente...\n\n"
+                    f"💡 <b>Préparez-vous à entrer si SuperTrend 1H confirme</b>"
+                )
+                send_telegram(msg)
+            
+            # ALERTE D'ENTRÉE (quand SuperTrend 1H confirme)
+            if ema_ok and alert_type == 'supertrend' and tf == '1h':
+                st_expected = 'buy' if direction == "LONG" else 'sell'
+                if val == st_expected and should_send(symbol, f"momentum_entry"):
+                    emoji = "🟢" if direction == "LONG" else "🔴"
+                    msg = (
+                        f"{emoji} <b>[MOMENTUM - ENTRÉE MAINTENANT]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 Direction: {direction}\n"
+                        f"💰 Price: ${price:.4f}\n"
+                        f"🏦 Exchange: {exchange_name.upper()}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"✅ Bias 1D: {m['bias_1d']}\n"
+                        f"✅ MACD 4H: {m['macd_4h']}\n"
+                        f"✅ Prix vs EMA200 1H: {ema_status}\n"
+                        f"✅ SuperTrend 1H: {val} (CONFIRMÉ)\n\n"
+                        f"🎯 <b>Position Size: 50-70% de l'allocation</b>\n"
+                        f"🛑 Stop-Loss: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
+                    )
+                    send_telegram(msg)
+
     return jsonify({'status': 'success', 'symbol': symbol, 'exchange': exchange_name}), 200
 
 
@@ -512,6 +651,7 @@ def state():
     return jsonify({
         'safe_state': SAFE_STATE,
         'aggressive_state': AGGRESSIVE_STATE,
+        'momentum_state': MOMENTUM_STATE,
         'watchlist': CONFIG['SYMBOLS']
     }), 200
 

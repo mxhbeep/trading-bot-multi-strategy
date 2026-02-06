@@ -19,46 +19,35 @@ CONFIG = {
     'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
     'TELEGRAM_CHAT_ID': '6473214015',
     
-    # Watchlist avec mapping des exchanges
+    # Watchlist avec mapping des exchanges (20 assets optimisés)
     'SYMBOLS': {
-        # 🛡️ Majors & Infrastructure - OKX
+        # 🛡️ Tier 1 - Majors (6 assets)
         'BTC/USDT': 'okx',
         'ETH/USDT': 'okx',
         'SOL/USDT': 'okx',
         'XRP/USDT': 'okx',
         'LINK/USDT': 'okx',
         'TIA/USDT': 'okx',
-        'STX/USDT': 'okx',
         
-        # 🛡️ Majors & Infrastructure - Binance (non disponibles sur OKX)
-        'VET/USDT': 'binance',
-        'PYTH/USDT': 'binance',
-        'QNT/USDT': 'binance',
-        'FRM/USDT': 'binance',
-        
-        # 🧠 IA, DePIN & Tech - OKX
+        # 🧠 Tier 2 - IA & Tech (4 assets)
         'TAO/USDT': 'okx',
         'FET/USDT': 'okx',
         'RENDER/USDT': 'okx',
         'ZK/USDT': 'okx',
         
-        # 💸 Finance & RWA - OKX
+        # 💸 Tier 3 - DeFi & RWA (4 assets)
         'ONDO/USDT': 'okx',
-        'CVX/USDT': 'okx',
-        'CRV/USDT': 'okx',
         'PENDLE/USDT': 'okx',
+        'CRV/USDT': 'okx',
+        'CVX/USDT': 'okx',
         
-        # 🕶️ Privacy
-        'ZEC/USDT': 'okx',
-        'XMR/USDT': 'binance',  # Monero souvent indisponible, on teste
-        
-        # 🎭 Culture & Mèmes - OKX
+        # 🎭 Tier 4 - Memes (4 assets)
         'PEPE/USDT': 'okx',
-        'BONK/USDT': 'okx',
-        'DOGE/USDT': 'okx',
         'WIF/USDT': 'okx',
-        'PENGU/USDT': 'okx',
         'PUMP/USDT': 'okx',
+        'DOGE/USDT': 'okx',
+        
+        # 🔮 Tier 5 - Wildcard (2 assets)
         'VIRTUAL/USDT': 'okx',
         'HYPE/USDT': 'okx',
     },

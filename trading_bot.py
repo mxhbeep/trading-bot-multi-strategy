@@ -58,6 +58,9 @@ CONFIG = {
         'DOGE/USDT': 'okx',
         'WIF/USDT': 'okx',
         'PENGU/USDT': 'okx',
+        'PUMP/USDT': 'okx',
+        'VIRTUAL/USDT': 'okx',
+        'HYPE/USDT': 'okx',
     },
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,

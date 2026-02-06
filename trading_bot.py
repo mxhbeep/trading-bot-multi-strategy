@@ -338,10 +338,33 @@ def webhook():
             if s['st_1h'] == st_expected: stars = 4
             if s['bias_4h'] == expected: stars = 5
             
+            # ALERTE DE PRÉPARATION 3★ (sans SuperTrend 1H)
+            # Trigger : quand Bias 1H s'aligne (3★ atteint)
+            if stars >= 3 and alert_type == 'bias' and tf == '1h' and val == expected and should_send(symbol, f"safe_prep_{stars}*"):
+                emoji = "🟡" if direction == "LONG" else "🟠"
+                msg = (
+                    f"{emoji} <b>[SAFE {stars}⭐ - PRÉPARATION]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚠️ <b>ATTENTION : Setup en formation</b>\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 3D: {s['bias_3d']}\n"
+                    f"✅ MACD 4H: {s['macd_4h']}\n"
+                    f"✅ Bias 1H: {s['bias_1h']} (vient de s'aligner)\n"
+                    f"⏳ SuperTrend 1H: En attente...\n"
+                    f"{'✅' if stars >= 5 else '❌'} Bias 4H: {s['bias_4h']}\n\n"
+                    f"💡 <b>Préparez-vous à entrer si SuperTrend 1H confirme</b>"
+                )
+                send_telegram(msg)
+            
+            # ALERTE D'ENTRÉE (avec SuperTrend 1H)
             if stars >= 2 and alert_type == 'supertrend' and tf == '1h' and should_send(symbol, f"safe_{stars}*"):
                 emoji = "🟢" if direction == "LONG" else "🔴"
+                action = "ENTRÉE MAINTENANT" if stars >= 4 else "POSITION POSSIBLE"
                 msg = (
-                    f"{emoji} <b>[SAFE {stars}⭐]</b> {symbol}\n"
+                    f"{emoji} <b>[SAFE {stars}⭐ - {action}]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction}\n"
                     f"💰 Price: ${price:.4f}\n"
@@ -350,7 +373,7 @@ def webhook():
                     f"✅ Bias 3D: {s['bias_3d']}\n"
                     f"✅ MACD 4H: {s['macd_4h']}\n"
                     f"{'✅' if stars >= 3 else '❌'} Bias 1H: {s['bias_1h']}\n"
-                    f"{'✅' if stars >= 4 else '❌'} SuperTrend 1H: {s['st_1h']}\n"
+                    f"✅ SuperTrend 1H: {s['st_1h']} (CONFIRMÉ)\n"
                     f"{'✅' if stars == 5 else '❌'} Bias 4H: {s['bias_4h']}"
                 )
                 send_telegram(msg)
@@ -490,34 +513,14 @@ def state():
     }), 200
 
 
-# ============================================================================ #
-# INITIALISATION AU CHARGEMENT DU MODULE
-# ============================================================================ #
-# Ce code s'exécute quand le module est importé par Gunicorn
-
-logger.info("🚀 Démarrage du bot multi-exchange...")
-
-# Initialiser les exchanges
-init_exchanges()
-
-# Initialiser les états pour chaque symbole
-for symbol in CONFIG['SYMBOLS'].keys():
-    SAFE_STATE[symbol] = {
-        'bias_3d': None, 'bias_4h': None, 'bias_1h': None,
-        'macd_4h': None, 'macd_1d': None, 'st_1h': None
-    }
-    AGGRESSIVE_STATE[symbol] = {
-        'st_context_4h': None, 'st_context_1h': None,
-        'macd_4h': None, 'bias_1h': None, 'bias_4h': None,
-        'bias_1d': None, 'macd_1d': None, 'ema200_4h': None
-    }
-
-# Envoyer notification de démarrage
-send_start_notification()
-
-logger.info(f"✅ Bot initialisé et prêt à recevoir des webhooks")
-
-# Ce bloc ne sert que pour les tests en local (non utilisé avec Gunicorn)
 if __name__ == '__main__':
-    logger.info(f"Mode développement - démarrage sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
+    logger.info("🚀 Démarrage du bot multi-exchange...")
+    
+    # Initialiser les exchanges
+    init_exchanges()
+    
+    # Envoyer notification de démarrage
+    send_start_notification()
+    
+    logger.info(f"✅ Bot démarré sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
     app.run(host=CONFIG['WEBHOOK_HOST'], port=CONFIG['WEBHOOK_PORT'], debug=False)

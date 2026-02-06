@@ -283,7 +283,7 @@ def webhook():
     # ========================================================================
     # LOGIQUE SAFE
     # ========================================================================
-    if strat in ['safe', 'both']:
+    if strat in ['safe', 'both', 'all']:
         s = SAFE_STATE[symbol]
         
         # Mise à jour états
@@ -398,7 +398,7 @@ def webhook():
     # ========================================================================
     # LOGIQUE AGGRESSIVE
     # ========================================================================
-    if strat in ['aggressive', 'both']:
+    if strat in ['aggressive', 'both', 'all']:
         a = AGGRESSIVE_STATE[symbol]
         
         # Mise à jour états
@@ -503,7 +503,7 @@ def webhook():
     # ========================================================================
     # LOGIQUE MOMENTUM
     # ========================================================================
-    if strat in ['momentum', 'both']:
+    if strat in ['momentum', 'both', 'all']:
         m = MOMENTUM_STATE[symbol]
         
         # Mise à jour états

@@ -310,14 +310,15 @@ def webhook():
             )
             send_telegram(msg)
         
-        if alert_type == 'macd_exit' and tf == '3d':
+        # Exit complet SAFE - MACD 3D change de direction
+        if alert_type == 'macd' and tf == '3d':
             direction_macd = "BULLISH" if val == 'bull' else "BEARISH"
             emoji = "🟢" if val == 'bull' else "🔴"
             
             msg = (
                 f"🚪 <b>[SAFE - EXIT COMPLET]</b> {symbol}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: MACD 3D Opposite Cross\n"
+                f"📊 Trigger: MACD 3D Change\n"
                 f"📈 New Direction: {direction_macd}\n"
                 f"💰 Price: ${price:.4f}\n"
                 f"🏦 Exchange: {exchange_name.upper()}\n"

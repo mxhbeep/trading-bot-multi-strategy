@@ -74,7 +74,6 @@ CONFIG = {
 
 LAST_SIGNALS = {}
 SAFE_STATE = {}
-AGGRESSIVE_STATE = {}
 MOMENTUM_STATE = {}
 
 # Exchanges initialisés
@@ -164,14 +163,10 @@ def send_start_notification():
         "   • Entry: 2★ to 5★\n"
         "   • TP Partiel: MACD 1D\n"
         "   • Exit: MACD 3D\n\n"
-        "2️⃣ <b>AGGRESSIVE</b>\n"
-        "   • Filter: EMA 200 4H\n"
-        "   • Entry: 3★ to 5★\n"
-        "   • TP Partiel: MACD 1D\n"
-        "   • Exit: Bias 1D\n\n"
-        "3️⃣ <b>MOMENTUM</b> 🆕\n"
+        "2️⃣ <b>MOMENTUM</b> ⚡\n"
         "   • Filter: EMA 200 1H\n"
-        "   • Entry: Bias 1D + MACD 4H\n"
+        "   • Entry: 3★ to 5★\n"
+        "   • Bonus: ST Context aligné\n"
         "   • TP Partiel: MACD 1D\n"
         "   • Exit: Bias 1D\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -260,24 +255,16 @@ def webhook():
             'bias_4h': None, 
             'macd_1d': None
         }
-    if symbol not in AGGRESSIVE_STATE:
-        AGGRESSIVE_STATE[symbol] = {
-            'st_context_4h': None, 
-            'st_context_1h': None, 
-            'macd_4h': None, 
-            'bias_1h': None, 
-            'bias_4h': None, 
-            'bias_1d': None,
-            'macd_1d': None, 
-            'ema200_4h': None
-        }
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
             'bias_1d': None,
             'macd_4h': None,
             'ema200_1h': None,
             'st_1h': None,
-            'macd_1d': None
+            'macd_1d': None,
+            'st_context_4h': None,
+            'st_context_1h': None,
+            'bias_4h': None
         }
 
     # ========================================================================
@@ -396,111 +383,6 @@ def webhook():
                 send_telegram(msg)
 
     # ========================================================================
-    # LOGIQUE AGGRESSIVE
-    # ========================================================================
-    if strat in ['aggressive', 'both', 'all']:
-        a = AGGRESSIVE_STATE[symbol]
-        
-        # Mise à jour états
-        if alert_type == 'st_context' and tf == '4h': 
-            a['st_context_4h'] = val
-        if alert_type == 'st_context' and tf == '1h': 
-            a['st_context_1h'] = val
-        if alert_type == 'macd' and tf == '4h': 
-            a['macd_4h'] = val
-        if alert_type == 'bias' and tf == '1h': 
-            a['bias_1h'] = val
-        if alert_type == 'bias' and tf == '4h': 
-            a['bias_4h'] = val
-        if alert_type == 'bias' and tf == '1d': 
-            a['bias_1d'] = val
-        if alert_type == 'macd' and tf == '1d': 
-            a['macd_1d'] = val
-        if alert_type == 'ema200' and tf == '4h': 
-            a['ema200_4h'] = float(val)
-
-        # SORTIES AGGRESSIVE
-        if alert_type == 'macd' and tf == '1d':
-            direction_macd = "BULLISH" if val == 'bull' else "BEARISH"
-            emoji = "🟢" if val == 'bull' else "🔴"
-            
-            msg = (
-                f"{emoji} <b>[AGGRESSIVE - TP PARTIEL]</b> {symbol}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: MACD 1D Inversion\n"
-                f"📈 New Direction: {direction_macd}\n"
-                f"💰 Price: ${price:.4f}\n"
-                f"🏦 Exchange: {exchange_name.upper()}\n"
-                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"💡 Action: Take partial profits (50-70%)"
-            )
-            send_telegram(msg)
-        
-        if alert_type == 'bias' and tf == '1d':
-            new_bias_direction = "BULLISH" if val == 'bull' else "BEARISH"
-            emoji = "🟢" if val == 'bull' else "🔴"
-            
-            msg = (
-                f"🚪 <b>[AGGRESSIVE - EXIT COMPLET]</b> {symbol}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: Bias 1D Inversion\n"
-                f"📈 New Bias: {new_bias_direction}\n"
-                f"💰 Price: ${price:.4f}\n"
-                f"🏦 Exchange: {exchange_name.upper()}\n"
-                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"❌ Action: EXIT ALL POSITIONS\n\n"
-                f"📋 Context:\n"
-                f"   • Old Bias 1D: {a.get('bias_1d', 'N/A')} → New: {val}\n"
-                f"   • Bias 4H: {a.get('bias_4h', 'N/A')}\n"
-                f"   • MACD 1D: {a.get('macd_1d', 'N/A')}"
-            )
-            send_telegram(msg)
-
-        # ENTRÉES AGGRESSIVE
-        if alert_type == 'supertrend' and tf == '1h':
-            direction = "LONG" if val == 'buy' else "SHORT"
-            expected = 'bull' if direction == "LONG" else 'bear'
-            
-            # Filtre EMA 200
-            ema_ok = False
-            ema_status = "N/A"
-            if a['ema200_4h']:
-                if direction == "LONG" and price < a['ema200_4h']:
-                    ema_ok = True
-                    ema_status = f"✅ ${price:.2f} < EMA200 ${a['ema200_4h']:.2f}"
-                elif direction == "SHORT" and price > a['ema200_4h']:
-                    ema_ok = True
-                    ema_status = f"✅ ${price:.2f} > EMA200 ${a['ema200_4h']:.2f}"
-
-            if ema_ok:
-                stars = 0
-                if a['st_context_4h'] == val and a['st_context_1h'] == val and a['macd_4h'] == expected:
-                    stars = 3
-                    if a['bias_1h'] == expected: stars = 4
-                    if a['bias_4h'] == expected: stars = 5
-                
-                if stars < 4 and a['bias_1d'] == expected and a['st_context_1h'] == val and a['macd_4h'] == expected:
-                    stars = 4
-
-                if stars >= 3 and should_send(symbol, f"agg_{stars}*"):
-                    emoji = "🟢" if direction == "LONG" else "🔴"
-                    msg = (
-                        f"{emoji} <b>[AGGRESSIVE {stars}⭐]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📈 Direction: {direction}\n"
-                        f"💰 Price: ${price:.4f}\n"
-                        f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"📊 EMA Filter: {ema_status}\n\n"
-                        f"✅ ST Context 4H: {a['st_context_4h']}\n"
-                        f"✅ ST Context 1H: {a['st_context_1h']}\n"
-                        f"✅ MACD 4H: {a['macd_4h']}\n"
-                        f"{'✅' if stars >= 4 else '❌'} Bias 1H: {a['bias_1h']}\n"
-                        f"{'✅' if stars == 5 else '❌'} Bias 4H: {a['bias_4h']}"
-                    )
-                    send_telegram(msg)
-
-    # ========================================================================
     # LOGIQUE MOMENTUM
     # ========================================================================
     if strat in ['momentum', 'both', 'all']:
@@ -522,6 +404,15 @@ def webhook():
         if alert_type == 'macd' and tf == '1d':
             m['macd_1d'] = val
             logger.info(f"[MOMENTUM] {symbol} - MACD 1D: {val}")
+        if alert_type == 'st_context' and tf == '4h':
+            m['st_context_4h'] = val
+            logger.info(f"[MOMENTUM] {symbol} - ST Context 4H: {val}")
+        if alert_type == 'st_context' and tf == '1h':
+            m['st_context_1h'] = val
+            logger.info(f"[MOMENTUM] {symbol} - ST Context 1H: {val}")
+        if alert_type == 'bias' and tf == '4h':
+            m['bias_4h'] = val
+            logger.info(f"[MOMENTUM] {symbol} - Bias 4H: {val}")
         
         # SORTIES MOMENTUM
         # TP Partiel - MACD 1D croise opposé
@@ -608,9 +499,30 @@ def webhook():
             if ema_ok and alert_type == 'supertrend' and tf == '1h':
                 st_expected = 'buy' if direction == "LONG" else 'sell'
                 if val == st_expected and should_send(symbol, f"momentum_entry"):
+                    # Calcul des étoiles avec bonus ST Context
+                    stars = 3  # Base : Bias 1D + MACD 4H + EMA filter + ST 1H
+                    
+                    # Bonus : ST Context aligné
+                    if m['st_context_4h'] == st_expected and m['st_context_1h'] == st_expected:
+                        stars = 4
+                        
+                    # Bonus : Bias 4H aligné
+                    expected_bias = 'bull' if direction == "LONG" else 'bear'
+                    if m['bias_4h'] == expected_bias:
+                        stars = 5
+                    
                     emoji = "🟢" if direction == "LONG" else "🔴"
+                    
+                    # Construire le message avec les étoiles
+                    st_context_status = ""
+                    if m['st_context_4h'] and m['st_context_1h']:
+                        if m['st_context_4h'] == st_expected and m['st_context_1h'] == st_expected:
+                            st_context_status = f"✅ ST Context: 4H={m['st_context_4h']}, 1H={m['st_context_1h']} (BONUS)"
+                        else:
+                            st_context_status = f"⚪ ST Context: 4H={m['st_context_4h']}, 1H={m['st_context_1h']}"
+                    
                     msg = (
-                        f"{emoji} <b>[MOMENTUM - ENTRÉE MAINTENANT]</b> {symbol}\n"
+                        f"{emoji} <b>[MOMENTUM {stars}⭐ - ENTRÉE MAINTENANT]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction}\n"
                         f"💰 Price: ${price:.4f}\n"
@@ -619,10 +531,26 @@ def webhook():
                         f"✅ Bias 1D: {m['bias_1d']}\n"
                         f"✅ MACD 4H: {m['macd_4h']}\n"
                         f"✅ Prix vs EMA200 1H: {ema_status}\n"
-                        f"✅ SuperTrend 1H: {val} (CONFIRMÉ)\n\n"
-                        f"🎯 <b>Position Size: 50-70% de l'allocation</b>\n"
-                        f"🛑 Stop-Loss: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
+                        f"✅ SuperTrend 1H: {val} (CONFIRMÉ)\n"
                     )
+                    
+                    if st_context_status:
+                        msg += f"{st_context_status}\n"
+                    
+                    if m['bias_4h']:
+                        bias_icon = "✅" if m['bias_4h'] == expected_bias else "❌"
+                        msg += f"{bias_icon} Bias 4H: {m['bias_4h']}\n"
+                    
+                    msg += f"\n🎯 <b>Position Size: "
+                    if stars == 5:
+                        msg += "70-80% de l'allocation (SETUP PARFAIT)"
+                    elif stars == 4:
+                        msg += "60-70% de l'allocation (BONUS ST CONTEXT)"
+                    else:
+                        msg += "50-60% de l'allocation"
+                    msg += "</b>\n"
+                    msg += f"🛑 Stop-Loss: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
+                    
                     send_telegram(msg)
 
     return jsonify({'status': 'success', 'symbol': symbol, 'exchange': exchange_name}), 200
@@ -650,7 +578,6 @@ def health():
 def state():
     return jsonify({
         'safe_state': SAFE_STATE,
-        'aggressive_state': AGGRESSIVE_STATE,
         'momentum_state': MOMENTUM_STATE,
         'watchlist': CONFIG['SYMBOLS']
     }), 200

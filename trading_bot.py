@@ -396,46 +396,10 @@ def webhook():
         if alert_type == 'st_context' and tf == '4h':
             m['st_context_4h'] = val
             logger.info(f"[MOMENTUM] {symbol} - ST Context 4H: {val}")
-            
-            # ALERTE CONTEXT - Si ST Context 4H + 1H alignés (route alternative)
-            if m['st_context_1h'] == val and should_send(symbol, f"momentum_context_{val}"):
-                direction = "LONG" if val == 'buy' else "SHORT"
-                emoji = "⚡" if val == 'buy' else "🔥"
-                msg = (
-                    f"{emoji} <b>[MOMENTUM - CONTEXT ALIGNÉ]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 ST Context 4H + 1H confirmés\n"
-                    f"📈 Direction potentielle: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {val}\n"
-                    f"✅ ST Context 1H: {m['st_context_1h']}\n\n"
-                    f"💡 <b>Surveillez pour une entrée potentielle</b>"
-                )
-                send_telegram(msg)
                 
         if alert_type == 'st_context' and tf == '1h':
             m['st_context_1h'] = val
             logger.info(f"[MOMENTUM] {symbol} - ST Context 1H: {val}")
-            
-            # ALERTE CONTEXT - Si ST Context 1H + 4H alignés (route alternative)
-            if m['st_context_4h'] == val and should_send(symbol, f"momentum_context_{val}"):
-                direction = "LONG" if val == 'buy' else "SHORT"
-                emoji = "⚡" if val == 'buy' else "🔥"
-                msg = (
-                    f"{emoji} <b>[MOMENTUM - CONTEXT ALIGNÉ]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 ST Context 4H + 1H confirmés\n"
-                    f"📈 Direction potentielle: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {m['st_context_4h']}\n"
-                    f"✅ ST Context 1H: {val}\n\n"
-                    f"💡 <b>Surveillez pour une entrée potentielle</b>"
-                )
-                send_telegram(msg)
         
         # SORTIES MOMENTUM
         # TP Partiel - MACD 1D croise opposé

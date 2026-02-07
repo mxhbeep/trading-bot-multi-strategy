@@ -252,8 +252,7 @@ def webhook():
             'st_1h': None,
             'macd_1d': None,
             'st_context_4h': None,
-            'st_context_1h': None,
-            'bias_4h': None
+            'st_context_1h': None
         }
 
     # ========================================================================
@@ -397,12 +396,46 @@ def webhook():
         if alert_type == 'st_context' and tf == '4h':
             m['st_context_4h'] = val
             logger.info(f"[MOMENTUM] {symbol} - ST Context 4H: {val}")
+            
+            # ALERTE CONTEXT - Si ST Context 4H + 1H alignés (route alternative)
+            if m['st_context_1h'] == val and should_send(symbol, f"momentum_context_{val}"):
+                direction = "LONG" if val == 'buy' else "SHORT"
+                emoji = "⚡" if val == 'buy' else "🔥"
+                msg = (
+                    f"{emoji} <b>[MOMENTUM - CONTEXT ALIGNÉ]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 ST Context 4H + 1H confirmés\n"
+                    f"📈 Direction potentielle: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ ST Context 4H: {val}\n"
+                    f"✅ ST Context 1H: {m['st_context_1h']}\n\n"
+                    f"💡 <b>Surveillez pour une entrée potentielle</b>"
+                )
+                send_telegram(msg)
+                
         if alert_type == 'st_context' and tf == '1h':
             m['st_context_1h'] = val
             logger.info(f"[MOMENTUM] {symbol} - ST Context 1H: {val}")
-        if alert_type == 'bias' and tf == '4h':
-            m['bias_4h'] = val
-            logger.info(f"[MOMENTUM] {symbol} - Bias 4H: {val}")
+            
+            # ALERTE CONTEXT - Si ST Context 1H + 4H alignés (route alternative)
+            if m['st_context_4h'] == val and should_send(symbol, f"momentum_context_{val}"):
+                direction = "LONG" if val == 'buy' else "SHORT"
+                emoji = "⚡" if val == 'buy' else "🔥"
+                msg = (
+                    f"{emoji} <b>[MOMENTUM - CONTEXT ALIGNÉ]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 ST Context 4H + 1H confirmés\n"
+                    f"📈 Direction potentielle: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ ST Context 4H: {m['st_context_4h']}\n"
+                    f"✅ ST Context 1H: {val}\n\n"
+                    f"💡 <b>Surveillez pour une entrée potentielle</b>"
+                )
+                send_telegram(msg)
         
         # SORTIES MOMENTUM
         # TP Partiel - MACD 1D croise opposé
@@ -488,28 +521,20 @@ def webhook():
             if ema_ok and alert_type == 'supertrend' and tf == '1h':
                 st_expected = 'buy' if direction == "LONG" else 'sell'
                 if val == st_expected and should_send(symbol, f"momentum_entry"):
-                    # Calcul des étoiles avec bonus ST Context
+                    # Calcul des étoiles progressif
                     stars = 3  # Base : Bias 1D + EMA filter + ST 1H
                     
-                    # Bonus : ST Context aligné
-                    if m['st_context_4h'] == st_expected and m['st_context_1h'] == st_expected:
+                    # 4★ : ST Context 1H aligné
+                    if m['st_context_1h'] == st_expected:
                         stars = 4
                         
-                    # Bonus : Bias 4H aligné
-                    expected_bias = 'bull' if direction == "LONG" else 'bear'
-                    if m['bias_4h'] == expected_bias:
-                        stars = 5
+                        # 5★ : + ST Context 4H aligné (progression)
+                        if m['st_context_4h'] == st_expected:
+                            stars = 5
                     
                     emoji = "🟢" if direction == "LONG" else "🔴"
                     
-                    # Construire le message avec les étoiles
-                    st_context_status = ""
-                    if m['st_context_4h'] and m['st_context_1h']:
-                        if m['st_context_4h'] == st_expected and m['st_context_1h'] == st_expected:
-                            st_context_status = f"✅ ST Context: 4H={m['st_context_4h']}, 1H={m['st_context_1h']} (BONUS)"
-                        else:
-                            st_context_status = f"⚪ ST Context: 4H={m['st_context_4h']}, 1H={m['st_context_1h']}"
-                    
+                    # Construire le message
                     msg = (
                         f"{emoji} <b>[MOMENTUM {stars}⭐ - ENTRÉE MAINTENANT]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -522,18 +547,20 @@ def webhook():
                         f"✅ SuperTrend 1H: {val} (CONFIRMÉ)\n"
                     )
                     
-                    if st_context_status:
-                        msg += f"{st_context_status}\n"
+                    # Afficher ST Context si présent
+                    if m['st_context_1h']:
+                        st_icon = "✅" if m['st_context_1h'] == st_expected else "❌"
+                        msg += f"{st_icon} ST Context 1H: {m['st_context_1h']}\n"
                     
-                    if m['bias_4h']:
-                        bias_icon = "✅" if m['bias_4h'] == expected_bias else "❌"
-                        msg += f"{bias_icon} Bias 4H: {m['bias_4h']}\n"
+                    if m['st_context_4h']:
+                        st_icon = "✅" if m['st_context_4h'] == st_expected else "❌"
+                        msg += f"{st_icon} ST Context 4H: {m['st_context_4h']}\n"
                     
                     msg += f"\n🎯 <b>Position Size: "
                     if stars == 5:
                         msg += "70-80% de l'allocation (SETUP PARFAIT)"
                     elif stars == 4:
-                        msg += "60-70% de l'allocation (BONUS ST CONTEXT)"
+                        msg += "60-70% de l'allocation (BONUS ST CONTEXT 1H)"
                     else:
                         msg += "50-60% de l'allocation"
                     msg += "</b>\n"

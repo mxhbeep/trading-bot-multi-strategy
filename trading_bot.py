@@ -447,9 +447,9 @@ def webhook():
         
         # ENTRÉES MOMENTUM
         direction = None
-        if m['bias_1d'] == 'bull' and m['macd_4h'] == 'bull':
+        if m['bias_1d'] == 'bull':
             direction = "LONG"
-        elif m['bias_1d'] == 'bear' and m['macd_4h'] == 'bear':
+        elif m['bias_1d'] == 'bear':
             direction = "SHORT"
         
         if direction:
@@ -478,7 +478,6 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 1D: {m['bias_1d']}\n"
-                    f"✅ MACD 4H: {m['macd_4h']}\n"
                     f"✅ Prix vs EMA200 1H: {ema_status}\n"
                     f"⏳ SuperTrend 1H: En attente...\n\n"
                     f"💡 <b>Préparez-vous à entrer si SuperTrend 1H confirme</b>"
@@ -490,7 +489,7 @@ def webhook():
                 st_expected = 'buy' if direction == "LONG" else 'sell'
                 if val == st_expected and should_send(symbol, f"momentum_entry"):
                     # Calcul des étoiles avec bonus ST Context
-                    stars = 3  # Base : Bias 1D + MACD 4H + EMA filter + ST 1H
+                    stars = 3  # Base : Bias 1D + EMA filter + ST 1H
                     
                     # Bonus : ST Context aligné
                     if m['st_context_4h'] == st_expected and m['st_context_1h'] == st_expected:
@@ -519,7 +518,6 @@ def webhook():
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                         f"✅ Bias 1D: {m['bias_1d']}\n"
-                        f"✅ MACD 4H: {m['macd_4h']}\n"
                         f"✅ Prix vs EMA200 1H: {ema_status}\n"
                         f"✅ SuperTrend 1H: {val} (CONFIRMÉ)\n"
                     )

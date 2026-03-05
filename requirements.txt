@@ -1,6 +1,7 @@
-ccxt
+ccxt==4.4.45
 pandas
 numpy
 requests
 flask
-gunicorn  # Pour servir l'app sur Heroku
+gunicorn
+redis>=5.0.0

@@ -387,6 +387,33 @@ def parse_ema200_value(val):
     except (ValueError, TypeError):
         return None
 
+def normalize_tf(tf_raw):
+    tf = str(tf_raw or '').strip().lower()
+    tf_aliases = {
+        '60': '1h', '1hr': '1h', '1hour': '1h',
+        '240': '4h', '4hr': '4h', '4hour': '4h',
+        'd': '1d', '1day': '1d',
+        '2day': '2d', '3day': '3d',
+    }
+    return tf_aliases.get(tf, tf)
+
+def normalize_alert_type(alert_type_raw):
+    normalized = str(alert_type_raw or '').strip().lower().replace(' ', '').replace('-', '_')
+    type_aliases = {
+        'ema_200': 'ema200', 'ema': 'ema200',
+        'super_trend': 'supertrend', 'st': 'supertrend',
+        'stcontext': 'st_context',
+    }
+    return type_aliases.get(normalized, normalized)
+
+def get_ema200_raw_value(data, val_raw):
+    if val_raw not in (None, ''):
+        return val_raw
+    for key in ('ema200', 'ema_200', 'ema'):
+        if key in data and data.get(key) not in (None, ''):
+            return data.get(key)
+    return val_raw
+
 def parse_bias_value(val, val2=None):
     normalized = str(val).strip().lower()
     if normalized in {'bull', 'bear'}:
@@ -438,6 +465,7 @@ def init_symbol_states(symbol):
             'ema200_1h': None,
             'st_context_1h': None,
             'macd_2d': None,
+            'bias_1d': None,
         }
 
 # ============================================================================ #
@@ -453,8 +481,8 @@ def webhook():
 
     symbol      = format_tv_symbol(data.get('symbol', ''))
     strat       = data.get('strategy', '').lower()
-    tf          = data.get('tf', '').lower()
-    alert_type  = data.get('type', '').lower()
+    tf          = normalize_tf(data.get('tf', ''))
+    alert_type  = normalize_alert_type(data.get('type', ''))
     val_raw     = data.get('value', '')
     val2_raw    = data.get('value2')
     val         = str(val_raw).strip().lower()
@@ -480,14 +508,15 @@ def webhook():
 
     ema200_value = None
     if alert_type == 'ema200' and tf == '1h':
-        ema200_value = parse_ema200_value(val_raw)
+        ema200_raw = get_ema200_raw_value(data, val_raw)
+        ema200_value = parse_ema200_value(ema200_raw)
         if ema200_value is None:
-            normalized_ema_raw = str(val_raw).strip().lower()
+            normalized_ema_raw = str(ema200_raw).strip().lower()
             if normalized_ema_raw in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
                 if should_send(symbol, "ema200_missing"):
                     logger.info(f"[INFO] EMA200 absente pour {symbol}: '{normalized_ema_raw}'")
             else:
-                logger.warning(f"[WARN] EMA200 valeur invalide pour {symbol}: '{val_raw}'")
+                logger.warning(f"[WARN] EMA200 valeur invalide pour {symbol}: '{ema200_raw}'")
 
     # ========================================================================
     # MACD 2D — sortie partielle sur toutes les stratégies
@@ -751,6 +780,10 @@ def webhook():
             c['st_context_4h'] = parse_st_context_value(val)
             logger.info(f"[CONTEXT] {symbol} - ST Context 4H: {old_val} → {c['st_context_4h']} (CT={val})")
 
+        if alert_type == 'bias' and tf == '1d':
+            c['bias_1d'] = val
+            logger.info(f"[CONTEXT] {symbol} - Bias 1D: {val}")
+
         if alert_type == 'ema200' and tf == '1h':
             if ema200_value is not None:
                 c['ema200_1h'] = ema200_value
@@ -765,8 +798,9 @@ def webhook():
             direction = "LONG" if val == 'buy' else "SHORT"
             emoji = "🟢" if val == 'buy' else "🔴"
             macd_2d_expected = 'bull' if val == 'buy' else 'bear'
+            bias_1d_expected = 'bull' if val == 'buy' else 'bear'
 
-            # ALERTE A — pas de filtre MACD 2D obligatoire
+            # ALERTE A — ST Context 4H + Flip ST AI 1H (pas de filtre MACD 2D)
             if c['st_context_4h'] == val and should_send(symbol, f"context_A_{val}", event_id=event_id):
                 macd_2d_status = ""
                 if c['macd_2d']:
@@ -786,23 +820,25 @@ def webhook():
                     f"🛑 SL: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
                 )
                 track_alert(symbol, 'CONTEXT_A')
+                logger.info(f"[CONTEXT A] Alerte envoyée: {symbol} {direction}")
 
-            # ALERTE B — MACD 2D obligatoire
+            # ALERTE B — MACD 2D + Bias 1D + EMA200 (prix < EMA pour LONG, > pour SHORT) + ST Context 1H + Flip ST AI 1H
             ema_trend_ok = False
             ema_status = "N/A"
             if c['ema200_1h']:
-                if val == 'buy' and price > c['ema200_1h']:
+                if val == 'buy' and price < c['ema200_1h']:
                     ema_trend_ok = True
-                    ema_status = f"✅ ${price:.4f} > EMA200 ${c['ema200_1h']:.4f} (tendance HAUSSIERE)"
-                elif val == 'sell' and price < c['ema200_1h']:
+                    ema_status = f"✅ ${price:.4f} < EMA200 ${c['ema200_1h']:.4f} (zone de value)"
+                elif val == 'sell' and price > c['ema200_1h']:
                     ema_trend_ok = True
-                    ema_status = f"✅ ${price:.4f} < EMA200 ${c['ema200_1h']:.4f} (tendance BAISSIERE)"
+                    ema_status = f"✅ ${price:.4f} > EMA200 ${c['ema200_1h']:.4f} (zone de value)"
                 else:
-                    ema_status = f"❌ Contre-tendance EMA200 (prix: ${price:.4f} | EMA200: ${c['ema200_1h']:.4f})"
+                    ema_status = f"❌ Hors zone EMA200 (prix: ${price:.4f} | EMA200: ${c['ema200_1h']:.4f})"
 
             macd_2d_ok = c['macd_2d'] == macd_2d_expected
+            bias_1d_ok = c['bias_1d'] == bias_1d_expected
 
-            if ema_trend_ok and macd_2d_ok and c['st_context_1h'] == val and should_send(symbol, f"context_B_{val}", event_id=event_id):
+            if ema_trend_ok and macd_2d_ok and bias_1d_ok and c['st_context_1h'] == val and should_send(symbol, f"context_B_{val}", event_id=event_id):
                 send_telegram(
                     f"{emoji} <b>[CONTEXT B - ALERTE {direction}]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -811,16 +847,18 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 2D: {c['macd_2d'].upper()} (aligné)\n"
-                    f"✅ Tendance EMA 200 1H: {ema_status}\n"
+                    f"✅ Bias 1D: {c['bias_1d'].upper()} (aligné)\n"
+                    f"✅ EMA200 1H: {ema_status}\n"
                     f"✅ ST Context 1H: {c['st_context_1h'].upper()} (zone active)\n"
                     f"✅ Flip SuperTrend AI 1H: {val.upper()} (signal)\n\n"
-                    f"💡 Tendance + Zone 1H + Signal alignés\n"
+                    f"💡 Zone de value + Tendance + Signal alignés\n"
                     f"🛑 SL: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
                 )
                 track_alert(symbol, 'CONTEXT_B')
+                logger.info(f"[CONTEXT B] Alerte envoyée: {symbol} {direction}")
 
             # ALERTE B+ — tout aligné + ST Context 4H
-            if ema_trend_ok and macd_2d_ok and c['st_context_1h'] == val and c['st_context_4h'] == val and should_send(symbol, f"context_B_plus_{val}", event_id=event_id):
+            if ema_trend_ok and macd_2d_ok and bias_1d_ok and c['st_context_1h'] == val and c['st_context_4h'] == val and should_send(symbol, f"context_B_plus_{val}", event_id=event_id):
                 send_telegram(
                     f"{emoji} <b>[CONTEXT B+ - SETUP COMPLET {direction}]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -830,7 +868,8 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 2D: {c['macd_2d'].upper()} (aligné)\n"
-                    f"✅ Tendance EMA 200 1H: {ema_status}\n"
+                    f"✅ Bias 1D: {c['bias_1d'].upper()} (aligné)\n"
+                    f"✅ EMA200 1H: {ema_status}\n"
                     f"✅ ST Context 4H: {c['st_context_4h'].upper()} (zone active)\n"
                     f"✅ ST Context 1H: {c['st_context_1h'].upper()} (zone active)\n"
                     f"✅ Flip SuperTrend AI 1H: {val.upper()} (signal)\n\n"
@@ -838,6 +877,7 @@ def webhook():
                     f"🛑 SL: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
                 )
                 track_alert(symbol, 'CONTEXT_B+')
+                logger.info(f"[CONTEXT B+] Alerte MAXIMALE envoyée: {symbol} {direction}")
 
     persist_runtime_state()
     return jsonify({'status': 'success', 'symbol': symbol}), 200

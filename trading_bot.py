@@ -47,6 +47,7 @@ CONFIG = {
         'PEPE/USDT': 'okx',
         'WIF/USDT': 'okx',
         'DOGE/USDT': 'okx',
+        'BONK/USDT': 'okx',
 
         # Tier 5 - Wildcard
         'VIRTUAL/USDT': 'okx',
@@ -57,7 +58,6 @@ CONFIG = {
         'NEAR/USDT': 'okx',
         'PYTH/USDT': 'okx',
         'STX/USDT': 'okx',
-        'ZEC/USDT': 'okx',
         'ZRO/USDT': 'okx',
 
         # Tier 7 - Nouveaux

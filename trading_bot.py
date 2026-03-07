@@ -235,8 +235,17 @@ def send_telegram(msg):
     url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
     payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'], 'text': msg, 'parse_mode': 'HTML'}
     try:
-        requests.post(url, json=payload, timeout=10)
-        logger.info("✅ Message Telegram envoyé")
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            logger.info("✅ Message Telegram envoyé")
+        elif resp.status_code == 429:
+            retry_after = resp.json().get('parameters', {}).get('retry_after', 30)
+            logger.warning(f"⚠️ Telegram rate limit — retry after {retry_after}s")
+            time.sleep(retry_after)
+            requests.post(url, json=payload, timeout=10)
+            logger.info("✅ Message Telegram envoyé (après retry)")
+        else:
+            logger.error(f"❌ Telegram erreur HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
         logger.error(f"❌ Erreur Telegram: {e}")
 
@@ -836,7 +845,7 @@ def webhook():
                     ema_status = f"❌ Hors zone EMA200 (prix: ${price:.4f} | EMA200: ${c['ema200_1h']:.4f})"
 
             macd_2d_ok = c['macd_2d'] == macd_2d_expected
-            bias_1d_ok = c['bias_1d'] == bias_1d_expected
+            bias_1d_ok = c.get('bias_1d') == bias_1d_expected
 
             if ema_trend_ok and macd_2d_ok and bias_1d_ok and c['st_context_1h'] == val and should_send(symbol, f"context_B_{val}", event_id=event_id):
                 send_telegram(

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import ccxt
 import pandas as pd
 import numpy as np
 import json
@@ -213,19 +212,8 @@ def load_runtime_state():
 
 def init_exchanges():
     global exchanges
-    try:
-        exchanges['okx'] = ccxt.okx({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
-        for name, exchange in exchanges.items():
-            try:
-                exchange.load_markets()
-                logger.info(f"✅ {name.upper()} - Markets chargés")
-            except Exception as e:
-                logger.error(f"❌ {name.upper()} - Erreur: {e}")
-    except Exception as e:
-        logger.error(f"❌ Erreur initialisation exchanges: {e}")
+    exchanges['okx'] = 'okx'
+    logger.info("✅ Exchange OKX configuré (webhook mode — pas d'API)")
 
 # ============================================================================ #
 # FONCTIONS TELEGRAM

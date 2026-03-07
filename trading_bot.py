@@ -219,6 +219,10 @@ def init_exchanges():
 # FONCTIONS TELEGRAM
 # ============================================================================ #
 
+def escape_html(text):
+    """Échappe les caractères HTML dans le texte (hors balises intentionnelles)."""
+    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
     payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'], 'text': msg, 'parse_mode': 'HTML'}
@@ -709,10 +713,10 @@ def webhook():
             if m['ema200_1h']:
                 if direction == "LONG" and price < m['ema200_1h']:
                     ema_ok = True
-                    ema_status = f"✅ ${price:.2f} < EMA200 ${m['ema200_1h']:.2f}"
+                    ema_status = f"✅ ${price:.2f} &lt; EMA200 ${m['ema200_1h']:.2f}"
                 elif direction == "SHORT" and price > m['ema200_1h']:
                     ema_ok = True
-                    ema_status = f"✅ ${price:.2f} > EMA200 ${m['ema200_1h']:.2f}"
+                    ema_status = f"✅ ${price:.2f} &gt; EMA200 ${m['ema200_1h']:.2f}"
                 else:
                     ema_status = f"❌ Prix: ${price:.2f} | EMA200: ${m['ema200_1h']:.2f}"
 
@@ -825,10 +829,10 @@ def webhook():
             if c['ema200_1h']:
                 if val == 'buy' and price < c['ema200_1h']:
                     ema_trend_ok = True
-                    ema_status = f"✅ ${price:.4f} < EMA200 ${c['ema200_1h']:.4f} (zone de value)"
+                    ema_status = f"✅ ${price:.4f} &lt; EMA200 ${c['ema200_1h']:.4f} (zone de value)"
                 elif val == 'sell' and price > c['ema200_1h']:
                     ema_trend_ok = True
-                    ema_status = f"✅ ${price:.4f} > EMA200 ${c['ema200_1h']:.4f} (zone de value)"
+                    ema_status = f"✅ ${price:.4f} &gt; EMA200 ${c['ema200_1h']:.4f} (zone de value)"
                 else:
                     ema_status = f"❌ Hors zone EMA200 (prix: ${price:.4f} | EMA200: ${c['ema200_1h']:.4f})"
 

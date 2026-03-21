@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import ccxt
 import pandas as pd
 import numpy as np
 import json
@@ -987,6 +988,351 @@ def reset_state_symbol(symbol):
     return jsonify({'status': 'reset', 'symbol': symbol, 'message': f'État de {symbol} remis à zéro'}), 200
 
 
+
+
+def supertrend_ai(df, atr_len=6, min_mult=1.0, max_mult=2.0, step=1.0,
+                  perf_alpha=100, from_cluster='Best', max_iter=100):
+    """SuperTrend AI — reproduction exacte du Pine Script (ATR 6, factors 1-2, Best cluster)."""
+    high  = df['high'].values
+    low   = df['low'].values
+    close = df['close'].values
+    n     = len(close)
+    tr = np.zeros(n)
+    for i in range(1, n):
+        tr[i] = max(high[i]-low[i], abs(high[i]-close[i-1]), abs(low[i]-close[i-1]))
+    atr = pd.Series(tr).ewm(alpha=1/atr_len, adjust=False).mean().values
+    hl2 = (high + low) / 2.0
+    factors, f = [], min_mult
+    while f <= max_mult + 1e-9:
+        factors.append(round(f, 10))
+        f += step
+    nf = len(factors)
+    upper_arr  = np.full((n, nf), hl2[0])
+    lower_arr  = np.full((n, nf), hl2[0])
+    trend_arr  = np.zeros((n, nf), dtype=int)
+    output_arr = np.full((n, nf), hl2[0])
+    perf_arr   = np.zeros((n, nf))
+    alpha_perf = 2.0 / (perf_alpha + 1)
+    for i in range(1, n):
+        for k, factor in enumerate(factors):
+            up = hl2[i] + atr[i] * factor
+            dn = hl2[i] - atr[i] * factor
+            if close[i] > upper_arr[i-1, k]:   trend_arr[i, k] = 1
+            elif close[i] < lower_arr[i-1, k]: trend_arr[i, k] = 0
+            else:                               trend_arr[i, k] = trend_arr[i-1, k]
+            upper_arr[i, k] = min(up, upper_arr[i-1, k]) if close[i-1] < upper_arr[i-1, k] else up
+            lower_arr[i, k] = max(dn, lower_arr[i-1, k]) if close[i-1] > lower_arr[i-1, k] else dn
+            output_arr[i, k] = lower_arr[i, k] if trend_arr[i, k] == 1 else upper_arr[i, k]
+            diff = np.sign(close[i-1] - output_arr[i-1, k]) if output_arr[i-1, k] != 0 else 0
+            perf_arr[i, k] = perf_arr[i-1, k] + alpha_perf * ((close[i] - close[i-1]) * diff - perf_arr[i-1, k])
+    perf_final   = perf_arr[-1]
+    factor_final = np.array(factors)
+    centroids    = np.percentile(perf_final, [25, 50, 75])
+    clusters_p = [[], [], []]
+    clusters_f = [[], [], []]
+    for _ in range(max_iter):
+        clusters_p = [[], [], []]
+        clusters_f = [[], [], []]
+        for j, val in enumerate(perf_final):
+            idx = int(np.argmin([abs(val - c) for c in centroids]))
+            clusters_p[idx].append(val)
+            clusters_f[idx].append(factor_final[j])
+        new_c = [np.mean(cp) if cp else 0.0 for cp in clusters_p]
+        if np.max(np.abs(np.array(new_c) - centroids)) < 0.0001:
+            centroids = np.array(new_c)
+            break
+        centroids = np.array(new_c)
+    from_idx = {'Best': 2, 'Average': 1, 'Worst': 0}.get(from_cluster, 2)
+    sorted_idx = np.argsort(centroids)
+    target_idx = sorted_idx[from_idx]
+    target_factor = np.mean(clusters_f[target_idx]) if clusters_f[target_idx] else factors[0]
+    upper_f = lower_f = hl2[0]
+    os_f = 0
+    direction = pd.Series('', index=df.index, dtype=str)
+    for i in range(1, n):
+        up = hl2[i] + atr[i] * target_factor
+        dn = hl2[i] - atr[i] * target_factor
+        upper_f = min(up, upper_f) if close[i-1] < upper_f else up
+        lower_f = max(dn, lower_f) if close[i-1] > lower_f else dn
+        if close[i] > upper_f:   os_f = 1
+        elif close[i] < lower_f: os_f = 0
+        direction.iloc[i] = 'buy' if os_f == 1 else 'sell'
+    return direction
+
+# ============================================================================ #
+# CALCUL AUTOMATIQUE DES INDICATEURS DEPUIS OKX
+# ============================================================================ #
+
+_okx_exchange = None
+
+def get_okx():
+    global _okx_exchange
+    if _okx_exchange is None:
+        _okx_exchange = ccxt.okx({'enableRateLimit': True})
+    return _okx_exchange
+
+def fetch_ohlcv_okx(symbol, timeframe, limit=250):
+    """Fetch OHLCV depuis OKX."""
+    try:
+        raw = get_okx().fetch_ohlcv(symbol, timeframe, limit=limit)
+        df  = pd.DataFrame(raw, columns=['ts','open','high','low','close','volume'])
+        return df
+    except Exception as e:
+        logger.error(f"[OKX] fetch_ohlcv {symbol} {timeframe}: {e}")
+        return None
+
+def calc_bias_okx(df, ema_len=13, sma_len=30):
+    """EMA13 vs SMA30 — CarréBias."""
+    close   = df['close']
+    ema_val = close.ewm(span=ema_len, adjust=False).mean().iloc[-1]
+    sma_val = close.rolling(window=sma_len).mean().iloc[-1]
+    return 'bull' if ema_val > sma_val else 'bear'
+
+def calc_macd_okx(df, fast=12, slow=26, signal=9):
+    """Retourne bull/bear selon le signe de l histogramme MACD."""
+    close       = df['close']
+    ema_fast    = close.ewm(span=fast,   adjust=False).mean()
+    ema_slow    = close.ewm(span=slow,   adjust=False).mean()
+    macd_line   = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram   = macd_line - signal_line
+    val = histogram.iloc[-2]
+    return 'bull' if val > 0 else 'bear'
+
+def calc_ema200_okx(df):
+    """EMA200 sur le close."""
+    return float(df['close'].ewm(span=200, adjust=False).mean().iloc[-2])
+
+
+def supertrend_ai(df, atr_len=6, min_mult=1.0, max_mult=2.0, step=1.0,
+                  perf_alpha=100, from_cluster='Best', max_iter=100):
+    """SuperTrend AI — reproduction exacte du Pine Script."""
+    high  = df['high'].values
+    low   = df['low'].values
+    close = df['close'].values
+    n     = len(close)
+    factors = []
+    f = min_mult
+    while f <= max_mult + 1e-9:
+        factors.append(round(f, 10))
+        f += step
+    num_factors = len(factors)
+    tr = np.zeros(n)
+    for i in range(1, n):
+        tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
+    atr = pd.Series(tr).ewm(alpha=1/atr_len, adjust=False).mean().values
+    hl2 = (high + low) / 2.0
+    upper  = np.full(num_factors, hl2[0])
+    lower  = np.full(num_factors, hl2[0])
+    trend  = np.zeros(num_factors, dtype=int)
+    output = np.full(num_factors, hl2[0])
+    perf   = np.zeros(num_factors)
+    alpha_perf = 2.0 / (perf_alpha + 1)
+    for i in range(1, n):
+        for k, factor in enumerate(factors):
+            up = hl2[i] + atr[i] * factor
+            dn = hl2[i] - atr[i] * factor
+            if close[i] > upper[k]:   trend[k] = 1
+            elif close[i] < lower[k]: trend[k] = 0
+            upper[k] = min(up, upper[k]) if close[i-1] < upper[k] else up
+            lower[k] = max(dn, lower[k]) if close[i-1] > lower[k] else dn
+            diff = np.sign(close[i-1] - output[k]) if output[k] != 0 else 0
+            perf[k] += alpha_perf * ((close[i] - close[i-1]) * diff - perf[k])
+            output[k] = lower[k] if trend[k] == 1 else upper[k]
+    perf_arr   = perf.copy()
+    factor_arr = np.array(factors)
+    centroids  = np.array([np.percentile(perf_arr, 25), np.percentile(perf_arr, 50), np.percentile(perf_arr, 75)])
+    clusters_factors = [[], [], []]
+    for _ in range(max_iter):
+        clusters_factors = [[], [], []]
+        clusters_perf    = [[], [], []]
+        for i, val in enumerate(perf_arr):
+            idx = int(np.argmin(np.abs(val - centroids)))
+            clusters_perf[idx].append(val)
+            clusters_factors[idx].append(factor_arr[i])
+        new_c = np.array([np.mean(c) if c else centroids[i] for i, c in enumerate(clusters_perf)])
+        if np.all(np.abs(new_c - centroids) < 0.0001):
+            break
+        centroids = new_c
+    cidx = {'Best': 2, 'Average': 1, 'Worst': 0}[from_cluster]
+    target_factor = np.mean(clusters_factors[cidx]) if clusters_factors[cidx] else factors[0]
+    upper_f = hl2[0]
+    lower_f = hl2[0]
+    os = 0
+    direction = np.zeros(n, dtype=int)
+    for i in range(1, n):
+        up = hl2[i] + atr[i] * target_factor
+        dn = hl2[i] - atr[i] * target_factor
+        upper_f = min(up, upper_f) if close[i-1] < upper_f else up
+        lower_f = max(dn, lower_f) if close[i-1] > lower_f else dn
+        if close[i] > upper_f:   os = 1
+        elif close[i] < lower_f: os = 0
+        direction[i] = os
+    return pd.Series(['buy' if d == 1 else 'sell' for d in direction], dtype=str)
+
+def calc_macd_2d(symbol):
+    """Calcule le MACD 2D en agrégeant les bougies 1D par paires."""
+    try:
+        df_1d = fetch_ohlcv_okx(symbol, '1d', limit=200)
+        if df_1d is None or len(df_1d) < 60:
+            return None
+        # Agréger par paires de bougies 1D -> bougies 2D
+        df_2d = df_1d.groupby(df_1d.index // 2).agg({
+            'open':   'first',
+            'high':   'max',
+            'low':    'min',
+            'close':  'last',
+            'volume': 'sum'
+        }).reset_index(drop=True)
+        return calc_macd_okx(df_2d)
+    except Exception as e:
+        logger.error(f"[OKX] calc_macd_2d {symbol}: {e}")
+        return None
+
+def update_indicators_for_symbol(symbol):
+    """Met a jour tous les indicateurs calculables pour un asset."""
+    try:
+        # Fetch bougies
+        df_1h  = fetch_ohlcv_okx(symbol, '1h',  limit=250)
+        df_4h  = fetch_ohlcv_okx(symbol, '4h',  limit=200)
+        df_1d  = fetch_ohlcv_okx(symbol, '1d',  limit=100)
+        df_3d  = fetch_ohlcv_okx(symbol, '1d',  limit=200)  # aggregate pour 3D
+
+        df_1h_st = fetch_ohlcv_okx(symbol, '1h',  limit=500)  # plus de bougies pour ST AI
+        if df_1h is None or df_4h is None or df_1d is None or df_1h_st is None:
+            return
+
+        # Calculs
+        bias_1h  = calc_bias_okx(df_1h)
+        bias_4h  = calc_bias_okx(df_4h)
+        bias_1d  = calc_bias_okx(df_1d)
+        macd_4h  = calc_macd_okx(df_4h)
+        macd_1d  = calc_macd_okx(df_1d)
+        macd_2d  = calc_macd_2d(symbol)
+        ema200_1h = calc_ema200_okx(df_1h)
+
+        # Bias 3D — agreger bougies 1D par triplets
+        try:
+            df_3d_agg = df_3d.groupby(df_3d.index // 3).agg({
+                'open': 'first', 'high': 'max', 'low': 'min',
+                'close': 'last', 'volume': 'sum'
+            }).reset_index(drop=True)
+            bias_3d = calc_bias_okx(df_3d_agg)
+        except Exception:
+            bias_3d = None
+
+        # SuperTrend AI 1H
+        try:
+            st_1h_series = supertrend_ai(df_1h_st)
+            st_1h_val    = st_1h_series.iloc[-2]  # derniere bougie fermee
+        except Exception as e:
+            logger.error(f'[OKX] ST AI {symbol}: {e}')
+            st_1h_val = None
+
+        price = float(df_1h['close'].iloc[-1])
+
+        with STATE_LOCK:
+            # SAFE
+            if symbol in SAFE_STATE:
+                old_macd_2d = SAFE_STATE[symbol].get('macd_2d')
+                SAFE_STATE[symbol]['bias_1h']  = bias_1h
+                if st_1h_val: SAFE_STATE[symbol]['st_1h'] = st_1h_val
+                SAFE_STATE[symbol]['bias_4h']  = bias_4h
+                SAFE_STATE[symbol]['macd_4h']  = macd_4h
+                SAFE_STATE[symbol]['macd_1d']  = macd_1d
+                if macd_2d: SAFE_STATE[symbol]['macd_2d'] = macd_2d
+                if bias_3d: SAFE_STATE[symbol]['bias_3d'] = bias_3d
+                # Alerte TP MACD 2D
+                if macd_2d and old_macd_2d and old_macd_2d != macd_2d:
+                    emoji = "🟢" if macd_2d == 'bull' else "🔴"
+                    send_telegram(
+                        f"{emoji} <b>[SAFE - TP PARTIEL]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 Trigger: MACD 2D Inversion (calcul auto)\n"
+                        f"📈 New Direction: {'BULLISH' if macd_2d == 'bull' else 'BEARISH'}\n"
+                        f"💰 Price: ${price:.4f}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"💡 Action: Take partial profits (30-50%)"
+                    )
+
+            # MOMENTUM
+            if symbol in MOMENTUM_STATE:
+                old_macd_2d = MOMENTUM_STATE[symbol].get('macd_2d')
+                old_bias_1d = MOMENTUM_STATE[symbol].get('bias_1d')
+                MOMENTUM_STATE[symbol]['bias_1d']   = bias_1d
+                if st_1h_val: MOMENTUM_STATE[symbol]['st_1h'] = st_1h_val
+                MOMENTUM_STATE[symbol]['macd_4h']   = macd_4h
+                MOMENTUM_STATE[symbol]['macd_1d']   = macd_1d
+                MOMENTUM_STATE[symbol]['ema200_1h']  = ema200_1h
+                if macd_2d: MOMENTUM_STATE[symbol]['macd_2d'] = macd_2d
+                # Alerte TP MACD 2D
+                if macd_2d and old_macd_2d and old_macd_2d != macd_2d:
+                    emoji = "🟢" if macd_2d == 'bull' else "🔴"
+                    send_telegram(
+                        f"{emoji} <b>[MOMENTUM - TP PARTIEL]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 Trigger: MACD 2D Inversion (calcul auto)\n"
+                        f"📈 New Direction: {'BULLISH' if macd_2d == 'bull' else 'BEARISH'}\n"
+                        f"💰 Price: ${price:.4f}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"💡 Action: Take partial profits (30-50%)"
+                    )
+                # Alerte EXIT Bias 1D
+                if old_bias_1d and old_bias_1d != bias_1d:
+                    send_telegram(
+                        f"🚪 <b>[MOMENTUM - EXIT COMPLET]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 Trigger: Bias 1D Inversion (calcul auto)\n"
+                        f"📈 New Bias: {'BULLISH' if bias_1d == 'bull' else 'BEARISH'}\n"
+                        f"💰 Price: ${price:.4f}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"❌ Action: EXIT ALL POSITIONS NOW"
+                    )
+
+            # CONTEXT
+            if symbol in CONTEXT_STATE:
+                old_macd_2d = CONTEXT_STATE[symbol].get('macd_2d')
+                CONTEXT_STATE[symbol]['bias_1d']  = bias_1d
+                CONTEXT_STATE[symbol]['ema200_1h'] = ema200_1h
+                if macd_2d: CONTEXT_STATE[symbol]['macd_2d'] = macd_2d
+                # Alerte TP MACD 2D
+                if macd_2d and old_macd_2d and old_macd_2d != macd_2d:
+                    emoji = "🟢" if macd_2d == 'bull' else "🔴"
+                    send_telegram(
+                        f"{emoji} <b>[CONTEXT - TP PARTIEL]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 Trigger: MACD 2D Inversion (calcul auto)\n"
+                        f"📈 New Direction: {'BULLISH' if macd_2d == 'bull' else 'BEARISH'}\n"
+                        f"💰 Price: ${price:.4f}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"💡 Action: Take partial profits (30-50%)"
+                    )
+
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B3D={bias_3d} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
+
+    except Exception as e:
+        logger.error(f"[OKX] update_indicators {symbol}: {e}")
+
+
+def indicators_scheduler():
+    """Recalcule tous les indicateurs depuis OKX toutes les heures."""
+    logger.info("[OKX] Scheduler indicateurs démarré (toutes les heures)")
+    # Premier calcul au démarrage après 30s
+    time.sleep(30)
+    while True:
+        logger.info(f"[OKX] Calcul indicateurs pour {len(CONFIG['SYMBOLS'])} assets...")
+        for symbol in CONFIG['SYMBOLS']:
+            update_indicators_for_symbol(symbol)
+            time.sleep(0.5)  # rate limit OKX
+        persist_runtime_state()
+        logger.info("[OKX] Mise a jour indicateurs terminée")
+        # Attendre la prochaine heure pile
+        now  = datetime.now(timezone.utc)
+        next_hour = (now + timedelta(hours=1)).replace(minute=2, second=0, microsecond=0)
+        wait = (next_hour - now).total_seconds()
+        logger.info(f"[OKX] Prochain calcul dans {int(wait)}s")
+        time.sleep(wait)
+
 # ============================================================================ #
 # INITIALISATION AU DEMARRAGE (compatible gunicorn)
 # ============================================================================ #
@@ -1008,7 +1354,10 @@ def startup():
         prep_thread = threading.Thread(target=prep_report_scheduler, daemon=True)
         prep_thread.start()
 
-        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report)")
+        indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
+        indicators_thread.start()
+
+        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX)")
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")
 

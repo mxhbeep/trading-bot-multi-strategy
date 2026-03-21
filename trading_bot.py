@@ -88,6 +88,7 @@ CONTEXT_STATE = {}
 
 WEEKLY_STATS = {}
 WEEKLY_START = datetime.now(timezone.utc)
+PREP_BUFFER = []  # Buffer des alertes de preparation
 STATE_LOCK = threading.Lock()
 
 def track_alert(symbol, strategy):
@@ -320,6 +321,47 @@ def send_weekly_report():
     WEEKLY_START = datetime.now(timezone.utc)
     persist_runtime_state()
 
+
+
+def send_prep_report():
+    """Envoie un rapport groupé des assets en préparation — appelé toutes les heures."""
+    global PREP_BUFFER
+    with STATE_LOCK:
+        entries = list(PREP_BUFFER)
+        PREP_BUFFER.clear()
+    if not entries:
+        return
+    now = datetime.now(timezone.utc).strftime('%H:%M UTC')
+    msg = '⏳ <b>Assets en préparation</b> — ' + now + '\n' + '━' * 20
+
+    # Group by strategy and direction
+    groups = {}
+    for e in entries:
+        key = e['strat'] + '_' + e['dir']
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(e['sym'].replace('/USDT', '') + ' $' + str(round(e['price'], 4)))
+
+    for key in sorted(groups.keys()):
+        strat, direction = key.split('_', 1)
+        emoji = "🟢" if direction == "LONG" else "🔴"
+        msg += '\n\n<b>' + strat + ' ' + direction + '</b>\n'
+        msg += '\n'.join([emoji + ' ' + x for x in groups[key]]) + '\n'
+    send_telegram(msg)
+    logger.info(f"[PREP REPORT] {len(entries)} assets envoyés")
+
+
+def prep_report_scheduler():
+    """Envoie le rapport de préparation à HH:05 chaque heure."""
+    logger.info("⏰ Scheduler rapport préparation démarré (HH:05 UTC)")
+    while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(minute=5, second=0, microsecond=0)
+        if now.minute >= 5:
+            next_run = (now + timedelta(hours=1)).replace(minute=5, second=0, microsecond=0)
+        wait = (next_run - now).total_seconds()
+        time.sleep(wait)
+        send_prep_report()
 
 def weekly_report_scheduler():
     logger.info("⏰ Scheduler rapport hebdomadaire démarré (dimanche minuit Taiwan)")
@@ -627,21 +669,9 @@ def webhook():
             if s['bias_4h'] == expected:    stars = 5
 
             if stars >= 3 and alert_type == 'bias' and tf == '1h' and val == expected and should_send(symbol, f"safe_prep_{stars}*", event_id=event_id):
-                emoji = "🟡" if direction == "LONG" else "🟠"
-                send_telegram(
-                    f"{emoji} <b>[SAFE {stars}⭐ - PREPARATION]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 3D: {s['bias_3d']}\n"
-                    f"✅ MACD 4H: {s['macd_4h']}\n"
-                    f"✅ Bias 1H: {s['bias_1h']}\n"
-                    f"⏳ SuperTrend 1H: En attente...\n"
-                    f"{'✅' if stars >= 5 else '❌'} Bias 4H: {s['bias_4h']}\n\n"
-                    f"💡 Préparez-vous si SuperTrend 1H confirme"
-                )
+                with STATE_LOCK:
+                    PREP_BUFFER.append({'strat': f'SAFE {stars}⭐', 'dir': direction, 'sym': symbol, 'price': price})
+                logger.info(f"[PREP] SAFE {stars}* {direction} {symbol} ajouté au buffer")
                 track_alert(symbol, 'SAFE')
 
             if stars >= 2 and alert_type == 'supertrend' and tf == '1h' and should_send(symbol, f"safe_{stars}*", event_id=event_id):
@@ -721,19 +751,9 @@ def webhook():
                     ema_status = f"❌ Prix: ${price:.2f} | EMA200: ${m['ema200_1h']:.2f}"
 
             if ema_ok and alert_type == 'ema200' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
-                emoji = "🟡" if direction == "LONG" else "🟠"
-                send_telegram(
-                    f"{emoji} <b>[MOMENTUM - PREPARATION]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 1D: {m['bias_1d']}\n"
-                    f"✅ EMA200 1H: {ema_status}\n"
-                    f"⏳ SuperTrend 1H: En attente...\n\n"
-                    f"💡 Préparez-vous si SuperTrend 1H confirme"
-                )
+                with STATE_LOCK:
+                    PREP_BUFFER.append({'strat': 'MOMENTUM', 'dir': direction, 'sym': symbol, 'price': price})
+                logger.info(f"[PREP] MOMENTUM {direction} {symbol} ajouté au buffer")
 
             if ema_ok and alert_type == 'supertrend' and tf == '1h':
                 st_expected = 'buy' if direction == "LONG" else 'sell'
@@ -985,7 +1005,10 @@ def startup():
         heartbeat_thread = threading.Thread(target=heartbeat_scheduler, daemon=True)
         heartbeat_thread.start()
 
-        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat)")
+        prep_thread = threading.Thread(target=prep_report_scheduler, daemon=True)
+        prep_thread.start()
+
+        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report)")
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")
 

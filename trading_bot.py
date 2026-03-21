@@ -1068,13 +1068,21 @@ _okx_exchange = None
 def get_okx():
     global _okx_exchange
     if _okx_exchange is None:
-        _okx_exchange = ccxt.okx({'enableRateLimit': True})
+        ex = ccxt.okx({'enableRateLimit': True})
+        try:
+            ex.load_markets()
+        except Exception as e:
+            logger.error(f"[OKX] load_markets: {e}")
+        _okx_exchange = ex
     return _okx_exchange
 
 def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis OKX."""
     try:
-        raw = get_okx().fetch_ohlcv(symbol, timeframe, limit=limit)
+        okx_symbol = symbol  # BTC/USDT format
+        raw = get_okx().fetch_ohlcv(okx_symbol, timeframe, limit=limit)
+        if not raw:
+            return None
         df  = pd.DataFrame(raw, columns=['ts','open','high','low','close','volume'])
         return df
     except Exception as e:

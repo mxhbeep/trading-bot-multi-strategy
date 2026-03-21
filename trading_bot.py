@@ -1063,27 +1063,24 @@ def supertrend_ai(df, atr_len=6, min_mult=1.0, max_mult=2.0, step=1.0,
 # CALCUL AUTOMATIQUE DES INDICATEURS DEPUIS OKX
 # ============================================================================ #
 
-_okx_exchange = None
-
-def get_okx():
-    global _okx_exchange
-    if _okx_exchange is None:
-        ex = ccxt.okx({'enableRateLimit': True})
-        try:
-            ex.load_markets()
-        except Exception as e:
-            logger.error(f"[OKX] load_markets: {e}")
-        _okx_exchange = ex
-    return _okx_exchange
-
 def fetch_ohlcv_okx(symbol, timeframe, limit=250):
-    """Fetch OHLCV depuis OKX."""
+    """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
     try:
-        okx_symbol = symbol  # BTC/USDT format
-        raw = get_okx().fetch_ohlcv(okx_symbol, timeframe, limit=limit)
-        if not raw:
+        # Convertir BTC/USDT -> BTC-USDT
+        inst_id = symbol.replace('/', '-')
+        # Map timeframe
+        tf_map = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H'}
+        bar = tf_map.get(timeframe, timeframe.upper())
+        url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}'
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if data.get('code') != '0' or not data.get('data'):
+            logger.error(f"[OKX] API error {symbol} {timeframe}: {data.get('msg', 'no data')}")
             return None
-        df  = pd.DataFrame(raw, columns=['ts','open','high','low','close','volume'])
+        # OKX retourne [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+        rows = [[int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])]
+                for r in reversed(data['data'])]
+        df = pd.DataFrame(rows, columns=['ts','open','high','low','close','volume'])
         return df
     except Exception as e:
         logger.error(f"[OKX] fetch_ohlcv {symbol} {timeframe}: {e}")

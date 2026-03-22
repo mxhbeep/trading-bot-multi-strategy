@@ -23,48 +23,69 @@ CONFIG = {
     'TELEGRAM_CHAT_ID': '6473214015',
     
     'SYMBOLS': {
-        # Tier 1 - Majors
+        'AAVE/USDT': 'okx',
+        'APT/USDT': 'okx',
+        'ARB/USDT': 'okx',
+        'ATOM/USDT': 'okx',
+        'AVAX/USDT': 'okx',
+        'AXS/USDT': 'okx',
+        'BNB/USDT': 'okx',
+        'BONK/USDT': 'okx',
         'BTC/USDT': 'okx',
-        'ETH/USDT': 'okx',
-        'SOL/USDT': 'okx',
-        'XRP/USDT': 'okx',
-        'LINK/USDT': 'okx',
-        'TIA/USDT': 'okx',
-
-        # Tier 2 - IA & Tech
-        'TAO/USDT': 'okx',
-        'FET/USDT': 'okx',
-        'RENDER/USDT': 'okx',
-        'ZK/USDT': 'okx',
-
-        # Tier 3 - DeFi & RWA
-        'ONDO/USDT': 'okx',
-        'PENDLE/USDT': 'okx',
         'CRV/USDT': 'okx',
         'CVX/USDT': 'okx',
-
-        # Tier 4 - Memes
-        'PEPE/USDT': 'okx',
-        'WIF/USDT': 'okx',
         'DOGE/USDT': 'okx',
-        'BONK/USDT': 'okx',
-
-        # Tier 5 - Wildcard
-        'VIRTUAL/USDT': 'okx',
-        'HYPE/USDT': 'okx',
-
-        # Tier 6 - Expansions
-        'AAVE/USDT': 'okx',
-        'NEAR/USDT': 'okx',
-        'PYTH/USDT': 'okx',
-        'STX/USDT': 'okx',
-        'ZRO/USDT': 'okx',
-
-        # Tier 7 - Nouveaux
-        'SUI/USDT': 'okx',
+        'DOT/USDT': 'okx',
         'ENA/USDT': 'okx',
-        'ARB/USDT': 'okx',
-        'AVAX/USDT': 'okx',
+        'ETH/USDT': 'okx',
+        'FET/USDT': 'okx',
+        'FIL/USDT': 'okx',
+        'FLOKI/USDT': 'okx',
+        'GALA/USDT': 'okx',
+        'HBAR/USDT': 'okx',
+        'HYPE/USDT': 'okx',
+        'IMX/USDT': 'okx',
+        'INJ/USDT': 'okx',
+        'JTO/USDT': 'okx',
+        'JUP/USDT': 'okx',
+        'LINK/USDT': 'okx',
+        'LTC/USDT': 'okx',
+        'MANA/USDT': 'okx',
+        'MOVE/USDT': 'okx',
+        'NEAR/USDT': 'okx',
+        'ONDO/USDT': 'okx',
+        'OP/USDT': 'okx',
+        'PENDLE/USDT': 'okx',
+        'PENGU/USDT': 'okx',
+        'PEPE/USDT': 'okx',
+        'PYTH/USDT': 'okx',
+        'RAY/USDT': 'okx',
+        'RENDER/USDT': 'okx',
+        'SAND/USDT': 'okx',
+        'SEI/USDT': 'okx',
+        'SOL/USDT': 'okx',
+        'STX/USDT': 'okx',
+        'SUI/USDT': 'okx',
+        'TIA/USDT': 'okx',
+        'TON/USDT': 'okx',
+        'VIRTUAL/USDT': 'okx',
+        'WIF/USDT': 'okx',
+        'WLD/USDT': 'okx',
+        'XRP/USDT': 'okx',
+        'ZK/USDT': 'okx',
+        'ZRO/USDT': 'okx',
+        'UNI/USDT': 'okx',
+        'SHIB/USDT': 'okx',
+        'GRT/USDT': 'okx',
+        'ENJ/USDT': 'okx',
+        'APE/USDT': 'okx',
+        'CORE/USDT': 'okx',
+        'TURBO/USDT': 'okx',
+        'MEW/USDT': 'okx',
+        'NEIRO/USDT': 'okx',
+        'STRK/USDT': 'okx',
+        'BERA/USDT': 'okx',
+        'SONIC/USDT': 'okx',
     },
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
@@ -499,7 +520,7 @@ def init_symbol_states(symbol):
         }
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_1d': None, 'macd_4h': None, 'ema200_1h': None,
+            'bias_1d': None, 'bias_2d': None, 'macd_4h': None, 'ema200_1h': None,
             'st_1h': None, 'macd_1d': None, 'macd_2d': None,
             'st_context_4h': None, 'st_context_1h': None,
         }
@@ -735,8 +756,9 @@ def webhook():
             )
 
         direction = None
-        if m['bias_1d'] == 'bull':   direction = "LONG"
-        elif m['bias_1d'] == 'bear': direction = "SHORT"
+        bias_2d_val = m.get('bias_2d') or m.get('bias_1d')  # fallback sur bias_1d si bias_2d pas encore dispo
+        if bias_2d_val == 'bull':   direction = "LONG"
+        elif bias_2d_val == 'bear': direction = "SHORT"
 
         if direction:
             ema_ok = False
@@ -751,7 +773,8 @@ def webhook():
                 else:
                     ema_status = f"❌ Prix: ${price:.2f} | EMA200: ${m['ema200_1h']:.2f}"
 
-            if ema_ok and alert_type == 'ema200' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
+            st_ctx_ok = m.get('st_context_1h') == ('buy' if direction == 'LONG' else 'sell')
+            if ema_ok and st_ctx_ok and alert_type == 'ema200' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
                 with STATE_LOCK:
                     PREP_BUFFER.append({'strat': 'MOMENTUM', 'dir': direction, 'sym': symbol, 'price': price})
                 logger.info(f"[PREP] MOMENTUM {direction} {symbol} ajouté au buffer")
@@ -773,7 +796,7 @@ def webhook():
                         f"💰 Price: ${price:.4f}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ Bias 1D: {m['bias_1d']}\n"
+                        f"✅ Bias 2D: {bias_2d_val}\n"
                         f"✅ EMA200 1H: {ema_status}\n"
                         f"✅ SuperTrend AI 1H: {val} (CONFIRME)\n"
                     )
@@ -1175,6 +1198,21 @@ def supertrend_ai(df, atr_len=6, min_mult=1.0, max_mult=2.0, step=1.0,
         direction[i] = os
     return pd.Series(['buy' if d == 1 else 'sell' for d in direction], dtype=str)
 
+def calc_bias_2d(symbol):
+    """Calcule le Bias 2D en agrégeant les bougies 1D par paires."""
+    try:
+        df_1d = fetch_ohlcv_okx(symbol, '1d', limit=100)
+        if df_1d is None or len(df_1d) < 40:
+            return None
+        df_2d = df_1d.groupby(df_1d.index // 2).agg({
+            'open': 'first', 'high': 'max', 'low': 'min',
+            'close': 'last', 'volume': 'sum'
+        }).reset_index(drop=True)
+        return calc_bias_okx(df_2d)
+    except Exception as e:
+        logger.error(f'[OKX] calc_bias_2d {symbol}: {e}')
+        return None
+
 def calc_macd_2d(symbol):
     """Calcule le MACD 2D en agrégeant les bougies 1D par paires."""
     try:
@@ -1265,6 +1303,7 @@ def update_indicators_for_symbol(symbol):
                 old_macd_2d = MOMENTUM_STATE[symbol].get('macd_2d')
                 old_bias_1d = MOMENTUM_STATE[symbol].get('bias_1d')
                 MOMENTUM_STATE[symbol]['bias_1d']   = bias_1d
+                if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 if st_1h_val: MOMENTUM_STATE[symbol]['st_1h'] = st_1h_val
                 MOMENTUM_STATE[symbol]['macd_4h']   = macd_4h
                 MOMENTUM_STATE[symbol]['macd_1d']   = macd_1d
@@ -1313,7 +1352,7 @@ def update_indicators_for_symbol(symbol):
                         f"💡 Action: Take partial profits (30-50%)"
                     )
 
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B3D={bias_3d} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
 
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")

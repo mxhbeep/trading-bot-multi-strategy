@@ -983,6 +983,7 @@ def update_indicators_for_symbol(symbol):
         macd_4h  = calc_macd_okx(df_4h)
         macd_1d  = calc_macd_okx(df_1d)
         macd_2d  = calc_macd_2d(symbol)
+        bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)
 
         # Bias 3D — agreger bougies 1D par triplets

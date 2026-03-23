@@ -100,9 +100,7 @@ CONFIG = {
 
 LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
-SAFE_STATE = {}
 MOMENTUM_STATE = {}
-CONTEXT_STATE = {}
 
 # ============================================================================ #
 # STATISTIQUES HEBDOMADAIRES
@@ -166,9 +164,7 @@ def persist_runtime_state():
         return
     with STATE_LOCK:
         payload = {
-            'safe_state':         SAFE_STATE,
             'momentum_state':     MOMENTUM_STATE,
-            'context_state':      CONTEXT_STATE,
             'weekly_stats':       WEEKLY_STATS,
             'weekly_start':       WEEKLY_START.isoformat(),
             'last_signals':       LAST_SIGNALS,
@@ -200,7 +196,7 @@ def audit_log(data, status="reçu"):
 
 
 def load_runtime_state():
-    global SAFE_STATE, MOMENTUM_STATE, CONTEXT_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
+    global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -211,9 +207,7 @@ def load_runtime_state():
             return
 
         payload = json.loads(raw)
-        SAFE_STATE          = payload.get('safe_state', {})
         MOMENTUM_STATE      = payload.get('momentum_state', {})
-        CONTEXT_STATE       = payload.get('context_state', {})
         WEEKLY_STATS        = payload.get('weekly_stats', {})
         LAST_SIGNALS        = payload.get('last_signals', {})
         LAST_SIGNAL_EVENTS  = payload.get('last_signal_events', {})
@@ -224,7 +218,7 @@ def load_runtime_state():
 
         logger.info(
             f"✅ État restauré depuis Redis | "
-            f"safe={len(SAFE_STATE)} momentum={len(MOMENTUM_STATE)} context={len(CONTEXT_STATE)}"
+            f"momentum={len(MOMENTUM_STATE)}"
         )
     except Exception as e:
         logger.error(f"❌ Redis load error: {e}")
@@ -406,7 +400,7 @@ def heartbeat_scheduler():
             "💓 <b>[BOT HEARTBEAT]</b>\n"
             f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
             f"📊 Assets: {len(CONFIG['SYMBOLS'])}\n"
-            f"🧠 State safe/momentum/context: {len(SAFE_STATE)}/{len(MOMENTUM_STATE)}/{len(CONTEXT_STATE)}\n"
+            f"🧠 State momentum: {len(MOMENTUM_STATE)}\n"
             f"💾 Redis: {redis_status}"
         )
         send_telegram(msg)
@@ -512,26 +506,12 @@ def should_send(symbol, key, event_id=None):
     return False
 
 def init_symbol_states(symbol):
-    if symbol not in SAFE_STATE:
-        SAFE_STATE[symbol] = {
-            'bias_3d': None, 'macd_4h': None, 'bias_1h': None,
-            'st_1h': None, 'bias_4h': None, 'macd_1d': None,
-            'macd_2d': None,
-        }
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_1d': None, 'bias_2d': None, 'macd_4h': None, 'ema200_1h': None,
-            'st_1h': None, 'macd_1d': None, 'macd_2d': None,
-            'st_context_4h': None, 'st_context_1h': None,
+            'bias_2d': None, 'st_context_1h': None,
+            'st_context_4h': None, 'st_1h': None, 'st_4h': None,
         }
-    if symbol not in CONTEXT_STATE:
-        CONTEXT_STATE[symbol] = {
-            'st_context_4h': None,
-            'ema200_1h': None,
-            'st_context_1h': None,
-            'macd_2d': None,
-            'bias_1d': None,
-        }
+
 
 # ============================================================================ #
 # WEBHOOK HANDLER
@@ -584,345 +564,101 @@ def webhook():
                 logger.warning(f"[WARN] EMA200 valeur invalide pour {symbol}: '{ema200_raw}'")
 
     # ========================================================================
-    # MACD 2D — sortie partielle sur toutes les stratégies
+    # LOGIQUE MOMENTUM : Bias 2D + ST Context 1H → ST AI 1H ou ST AI 4H
     # ========================================================================
-    if alert_type == 'macd' and tf == '2d':
-        if symbol in SAFE_STATE:
-            old = SAFE_STATE[symbol].get('macd_2d')
-            SAFE_STATE[symbol]['macd_2d'] = val
-            if old and old != val:
-                emoji = "🟢" if val == 'bull' else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[SAFE - TP PARTIEL]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 Trigger: MACD 2D Inversion\n"
-                    f"📈 New Direction: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"💡 Action: Take partial profits (30-50%)"
-                )
-
-        if symbol in MOMENTUM_STATE:
-            old = MOMENTUM_STATE[symbol].get('macd_2d')
-            MOMENTUM_STATE[symbol]['macd_2d'] = val
-            if old and old != val:
-                emoji = "🟢" if val == 'bull' else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[MOMENTUM - TP PARTIEL]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 Trigger: MACD 2D Inversion\n"
-                    f"📈 New Direction: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"💡 Action: Take partial profits (30-50%)"
-                )
-
-        if symbol in CONTEXT_STATE:
-            old = CONTEXT_STATE[symbol].get('macd_2d')
-            CONTEXT_STATE[symbol]['macd_2d'] = val
-            if old and old != val:
-                emoji = "🟢" if val == 'bull' else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[CONTEXT - TP PARTIEL]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 Trigger: MACD 2D Inversion\n"
-                    f"📈 New Direction: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"💡 Action: Take partial profits (30-50%)"
-                )
-
-        persist_runtime_state()
-        return jsonify({'status': 'success', 'symbol': symbol}), 200
-
-    # ========================================================================
-    # LOGIQUE SAFE
-    # ========================================================================
-    if strat in ['safe', 'all']:
-        s = SAFE_STATE[symbol]
-
-        if alert_type == 'bias' and tf == '3d':       s['bias_3d'] = val
-        if alert_type == 'macd' and tf == '4h':       s['macd_4h'] = val
-        if alert_type == 'bias' and tf == '1h':       s['bias_1h'] = val
-        if alert_type == 'supertrend' and tf == '1h': s['st_1h'] = val
-        if alert_type == 'bias_9_26' and tf == '4h':  s['bias_4h'] = val
-        if alert_type == 'macd' and tf == '1d':       s['macd_1d'] = val
-
-        if alert_type == 'macd' and tf == '1d':
-            emoji = "🟢" if val == 'bull' else "🔴"
-            send_telegram(
-                f"{emoji} <b>[SAFE - TP PARTIEL]</b> {symbol}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: MACD 1D Inversion\n"
-                f"📈 New Direction: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                f"💰 Price: ${price:.4f}\n"
-                f"🏦 Exchange: {exchange_name.upper()}\n"
-                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"💡 Action: Take partial profits (30-50%)"
-            )
-
-        if alert_type == 'macd' and tf == '3d':
-            emoji = "🟢" if val == 'bull' else "🔴"
-            send_telegram(
-                f"🚪 <b>[SAFE - EXIT COMPLET]</b> {symbol}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: MACD 3D Change\n"
-                f"📈 New Direction: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                f"💰 Price: ${price:.4f}\n"
-                f"🏦 Exchange: {exchange_name.upper()}\n"
-                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"❌ Action: EXIT ALL POSITIONS NOW"
-            )
-
-        direction = None
-        if s['bias_3d'] == 'bull' and s['macd_4h'] == 'bull':   direction = "LONG"
-        elif s['bias_3d'] == 'bear' and s['macd_4h'] == 'bear': direction = "SHORT"
-
-        if direction:
-            stars = 2
-            expected    = 'bull' if direction == "LONG" else 'bear'
-            st_expected = 'buy'  if direction == "LONG" else 'sell'
-
-            if s['bias_1h'] == expected:    stars = 3
-            if s['st_1h'] == st_expected:   stars = 4
-            if s['bias_4h'] == expected:    stars = 5
-
-            if stars >= 3 and alert_type == 'bias' and tf == '1h' and val == expected and should_send(symbol, f"safe_prep_{stars}*", event_id=event_id):
-                with STATE_LOCK:
-                    PREP_BUFFER.append({'strat': f'SAFE {stars}⭐', 'dir': direction, 'sym': symbol, 'price': price})
-                logger.info(f"[PREP] SAFE {stars}* {direction} {symbol} ajouté au buffer")
-                track_alert(symbol, 'SAFE')
-
-            if stars >= 2 and alert_type == 'supertrend' and tf == '1h' and should_send(symbol, f"safe_{stars}*", event_id=event_id):
-                emoji  = "🟢" if direction == "LONG" else "🔴"
-                action = "ENTREE MAINTENANT" if stars >= 4 else "POSITION POSSIBLE"
-                send_telegram(
-                    f"{emoji} <b>[SAFE {stars}⭐ - {action}]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 3D: {s['bias_3d']}\n"
-                    f"✅ MACD 4H: {s['macd_4h']}\n"
-                    f"{'✅' if stars >= 3 else '❌'} Bias 1H: {s['bias_1h']}\n"
-                    f"✅ SuperTrend 1H: {s['st_1h']} (CONFIRME)\n"
-                    f"{'✅' if stars == 5 else '❌'} Bias 4H: {s['bias_4h']}"
-                )
-                track_alert(symbol, 'SAFE')
-
-    # ========================================================================
-    # LOGIQUE MOMENTUM
-    # ========================================================================
-    if strat in ['momentum', 'momentum_context', 'all']:
+    if strat in ['momentum', 'all']:
         m = MOMENTUM_STATE[symbol]
-        old_bias_1d = m.get('bias_1d')
 
-        if alert_type == 'bias' and tf == '1d':       m['bias_1d'] = val
-        if alert_type == 'macd' and tf == '4h':       m['macd_4h'] = val
-        if alert_type == 'ema200' and tf == '1h':
-            if ema200_value is not None:              m['ema200_1h'] = ema200_value
-        if alert_type == 'supertrend' and tf == '1h': m['st_1h'] = val
-        if alert_type == 'macd' and tf == '1d':       m['macd_1d'] = val
-        if alert_type == 'st_context' and tf == '4h': m['st_context_4h'] = parse_st_context_value(val)
+        # Mise a jour des etats
         if alert_type == 'st_context' and tf == '1h': m['st_context_1h'] = parse_st_context_value(val)
+        if alert_type == 'supertrend' and tf == '1h': m['st_1h'] = val
+        if alert_type == 'supertrend' and tf == '4h': m['st_4h'] = val
 
-        if alert_type == 'macd' and tf == '1d':
-            emoji = "🟢" if val == 'bull' else "🔴"
-            send_telegram(
-                f"{emoji} <b>[MOMENTUM - TP PARTIEL]</b> {symbol}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: MACD 1D Inversion\n"
-                f"📈 New Direction: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                f"💰 Price: ${price:.4f}\n"
-                f"🏦 Exchange: {exchange_name.upper()}\n"
-                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"💡 Action: Take partial profits (40-60%)"
-            )
-
-        if alert_type == 'bias' and tf == '1d' and old_bias_1d and old_bias_1d != val:
-            send_telegram(
-                f"🚪 <b>[MOMENTUM - EXIT COMPLET]</b> {symbol}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 Trigger: Bias 1D Inversion\n"
-                f"📈 New Bias: {'BULLISH' if val == 'bull' else 'BEARISH'}\n"
-                f"💰 Price: ${price:.4f}\n"
-                f"🏦 Exchange: {exchange_name.upper()}\n"
-                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"❌ Action: EXIT ALL POSITIONS NOW"
-            )
-
+        bias_2d_val = m.get('bias_2d')
         direction = None
-        bias_2d_val = m.get('bias_2d') or m.get('bias_1d')  # fallback sur bias_1d si bias_2d pas encore dispo
         if bias_2d_val == 'bull':   direction = "LONG"
         elif bias_2d_val == 'bear': direction = "SHORT"
 
         if direction:
-            ema_ok = False
-            ema_status = "N/A"
-            if m['ema200_1h']:
-                if direction == "LONG" and price < m['ema200_1h']:
-                    ema_ok = True
-                    ema_status = f"✅ ${price:.2f} &lt; EMA200 ${m['ema200_1h']:.2f}"
-                elif direction == "SHORT" and price > m['ema200_1h']:
-                    ema_ok = True
-                    ema_status = f"✅ ${price:.2f} &gt; EMA200 ${m['ema200_1h']:.2f}"
-                else:
-                    ema_status = f"❌ Prix: ${price:.2f} | EMA200: ${m['ema200_1h']:.2f}"
+            st_expected  = 'buy'  if direction == "LONG" else 'sell'
+            ctx_expected = 'buy'  if direction == "LONG" else 'sell'
+            ctx_ok = m.get('st_context_1h') == ctx_expected
 
-            st_ctx_ok = m.get('st_context_1h') == ('buy' if direction == 'LONG' else 'sell')
-            if ema_ok and st_ctx_ok and alert_type == 'ema200' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
+            # PREP : Bias 2D + ST Context 1H (sans signal ST)
+            if ctx_ok and alert_type == 'st_context' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
                 with STATE_LOCK:
                     PREP_BUFFER.append({'strat': 'MOMENTUM', 'dir': direction, 'sym': symbol, 'price': price})
                 logger.info(f"[PREP] MOMENTUM {direction} {symbol} ajouté au buffer")
 
-            if ema_ok and alert_type == 'supertrend' and tf == '1h':
-                st_expected = 'buy' if direction == "LONG" else 'sell'
-                if val == st_expected and should_send(symbol, "momentum_entry", event_id=event_id):
-                    stars = 3
-                    if m['st_context_1h'] == st_expected:
-                        stars = 4
-                        if m['st_context_4h'] == st_expected:
-                            stars = 5
+            # SIGNAL : ST AI 1H flip
+            if ctx_ok and alert_type == 'supertrend' and tf == '1h' and val == st_expected and should_send(symbol, "momentum_entry_1h", event_id=event_id):
+                emoji = "🟢" if direction == "LONG" else "🔴"
+                send_telegram(
+                    f"{emoji} <b>[MOMENTUM - ENTREE 1H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 2D: {bias_2d_val.upper()}\n"
+                    f"✅ ST Context 1H: {m['st_context_1h'].upper()}\n"
+                    f"✅ SuperTrend AI 1H: {val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'MOMENTUM')
 
-                    emoji = "🟢" if direction == "LONG" else "🔴"
-                    msg = (
-                        f"{emoji} <b>[MOMENTUM {stars}⭐ - ENTREE MAINTENANT]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📈 Direction: {direction}\n"
-                        f"💰 Price: ${price:.4f}\n"
-                        f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ Bias 2D: {bias_2d_val}\n"
-                        f"✅ EMA200 1H: {ema_status}\n"
-                        f"✅ SuperTrend AI 1H: {val} (CONFIRME)\n"
-                    )
-                    if m['st_context_1h']:
-                        icon = "✅" if m['st_context_1h'] == st_expected else "❌"
-                        msg += f"{icon} ST Context 1H: {m['st_context_1h']}\n"
-                    if m['st_context_4h']:
-                        icon = "✅" if m['st_context_4h'] == st_expected else "❌"
-                        msg += f"{icon} ST Context 4H: {m['st_context_4h']}\n"
-                    msg += "\n🎯 <b>Position Size: "
-                    if stars == 5:   msg += "70-80% (SETUP PARFAIT)"
-                    elif stars == 4: msg += "60-70% (BONUS ST CONTEXT 1H)"
-                    else:            msg += "50-60%"
-                    msg += "</b>"
-                    send_telegram(msg)
-                    track_alert(symbol, 'MOMENTUM')
+            # SIGNAL : ST AI 4H flip
+            if ctx_ok and alert_type == 'supertrend' and tf == '4h' and val == st_expected and should_send(symbol, "momentum_entry_4h", event_id=event_id):
+                emoji = "🟢" if direction == "LONG" else "🔴"
+                send_telegram(
+                    f"{emoji} <b>[MOMENTUM - ENTREE 4H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 2D: {bias_2d_val.upper()}\n"
+                    f"✅ ST Context 1H: {m['st_context_1h'].upper()}\n"
+                    f"✅ SuperTrend AI 4H: {val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'MOMENTUM')
 
     # ========================================================================
-    # LOGIQUE CONTEXT
+    # LOGIQUE CONTEXT : ST Context 4H → ST AI 4H
     # ========================================================================
     if strat in ['context', 'momentum_context', 'all']:
-        c = CONTEXT_STATE[symbol]
-
+        # On utilise MOMENTUM_STATE pour stocker le context 4H aussi
+        m = MOMENTUM_STATE[symbol]
         if alert_type == 'st_context' and tf == '4h':
-            old_val = c['st_context_4h']
-            c['st_context_4h'] = parse_st_context_value(val)
-            logger.info(f"[CONTEXT] {symbol} - ST Context 4H: {old_val} → {c['st_context_4h']} (CT={val})")
+            old_val = m.get('st_context_4h')
+            m['st_context_4h'] = parse_st_context_value(val)
+            logger.info(f"[CONTEXT] {symbol} ST Context 4H: {old_val} → {m['st_context_4h']}")
 
-        if alert_type == 'bias' and tf == '1d':
-            c['bias_1d'] = val
-            logger.info(f"[CONTEXT] {symbol} - Bias 1D: {val}")
+            # PREP : envoi alerte zone dès réception ST Context 4H
+            if m['st_context_4h'] is not None and should_send(symbol, f"context_prep_{m['st_context_4h']}", event_id=event_id):
+                direction = "LONG" if m['st_context_4h'] == 'buy' else "SHORT"
+                emoji = "🟡"
+                with STATE_LOCK:
+                    PREP_BUFFER.append({'strat': 'CONTEXT', 'dir': direction, 'sym': symbol, 'price': price})
+                logger.info(f"[PREP] CONTEXT {direction} {symbol} zone 4H active")
 
-        if alert_type == 'ema200' and tf == '1h':
-            if ema200_value is not None:
-                c['ema200_1h'] = ema200_value
-                logger.info(f"[CONTEXT] {symbol} - EMA200 1H: {ema200_value}")
-
-        if alert_type == 'st_context' and tf == '1h':
-            old_val = c['st_context_1h']
-            c['st_context_1h'] = parse_st_context_value(val)
-            logger.info(f"[CONTEXT] {symbol} - ST Context 1H: {old_val} → {c['st_context_1h']} (CT={val})")
-
-        if alert_type == 'supertrend' and tf == '1h':
-            direction = "LONG" if val == 'buy' else "SHORT"
-            emoji = "🟢" if val == 'buy' else "🔴"
-            macd_2d_expected = 'bull' if val == 'buy' else 'bear'
-            bias_1d_expected = 'bull' if val == 'buy' else 'bear'
-
-            # ALERTE A — ST Context 4H + Flip ST AI 1H (pas de filtre MACD 2D)
-            if c['st_context_4h'] == val and should_send(symbol, f"context_A_{val}", event_id=event_id):
-                macd_2d_status = ""
-                if c['macd_2d']:
-                    icon = "✅" if c['macd_2d'] == macd_2d_expected else "❌"
-                    macd_2d_status = f"\n{icon} MACD 2D: {c['macd_2d'].upper()} (info)"
+        # SIGNAL : ST AI 4H flip dans le sens du context 4H
+        if alert_type == 'supertrend' and tf == '4h':
+            ctx_4h = m.get('st_context_4h')
+            if ctx_4h == val and should_send(symbol, f"context_entry_{val}", event_id=event_id):
+                direction = "LONG" if val == 'buy' else "SHORT"
+                emoji = "🟢" if direction == "LONG" else "🔴"
                 send_telegram(
-                    f"{emoji} <b>[CONTEXT A - ALERTE {direction}]</b> {symbol}\n"
+                    f"{emoji} <b>[CONTEXT - ENTREE 4H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction}\n"
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {c['st_context_4h'].upper()} (zone active)\n"
-                    f"✅ Flip SuperTrend AI 1H: {val.upper()} (signal)"
-                    f"{macd_2d_status}\n\n"
-                    f"💡 Zone 4H alignée avec signal 1H\n"
-                    f"🛑 SL: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
+                    f"✅ ST Context 4H: {ctx_4h.upper()} (zone active)\n"
+                    f"✅ SuperTrend AI 4H: {val.upper()} (SIGNAL)"
                 )
-                track_alert(symbol, 'CONTEXT_A')
-                logger.info(f"[CONTEXT A] Alerte envoyée: {symbol} {direction}")
-
-            # ALERTE B — MACD 2D + Bias 1D + EMA200 (prix < EMA pour LONG, > pour SHORT) + ST Context 1H + Flip ST AI 1H
-            ema_trend_ok = False
-            ema_status = "N/A"
-            if c['ema200_1h']:
-                if val == 'buy' and price < c['ema200_1h']:
-                    ema_trend_ok = True
-                    ema_status = f"✅ ${price:.4f} &lt; EMA200 ${c['ema200_1h']:.4f} (zone de value)"
-                elif val == 'sell' and price > c['ema200_1h']:
-                    ema_trend_ok = True
-                    ema_status = f"✅ ${price:.4f} &gt; EMA200 ${c['ema200_1h']:.4f} (zone de value)"
-                else:
-                    ema_status = f"❌ Hors zone EMA200 (prix: ${price:.4f} | EMA200: ${c['ema200_1h']:.4f})"
-
-            macd_2d_ok = c['macd_2d'] == macd_2d_expected
-            bias_1d_ok = c.get('bias_1d') == bias_1d_expected
-
-            if ema_trend_ok and macd_2d_ok and bias_1d_ok and c['st_context_1h'] == val and should_send(symbol, f"context_B_{val}", event_id=event_id):
-                send_telegram(
-                    f"{emoji} <b>[CONTEXT B - ALERTE {direction}]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ MACD 2D: {c['macd_2d'].upper()} (aligné)\n"
-                    f"✅ Bias 1D: {c['bias_1d'].upper()} (aligné)\n"
-                    f"✅ EMA200 1H: {ema_status}\n"
-                    f"✅ ST Context 1H: {c['st_context_1h'].upper()} (zone active)\n"
-                    f"✅ Flip SuperTrend AI 1H: {val.upper()} (signal)\n\n"
-                    f"💡 Zone de value + Tendance + Signal alignés\n"
-                    f"🛑 SL: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
-                )
-                track_alert(symbol, 'CONTEXT_B')
-                logger.info(f"[CONTEXT B] Alerte envoyée: {symbol} {direction}")
-
-            # ALERTE B+ — tout aligné + ST Context 4H
-            if ema_trend_ok and macd_2d_ok and bias_1d_ok and c['st_context_1h'] == val and c['st_context_4h'] == val and should_send(symbol, f"context_B_plus_{val}", event_id=event_id):
-                send_telegram(
-                    f"{emoji} <b>[CONTEXT B+ - SETUP COMPLET {direction}]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔥 <b>CONFLUENCE MAXIMALE — TOUS LES FILTRES ALIGNES</b>\n\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ MACD 2D: {c['macd_2d'].upper()} (aligné)\n"
-                    f"✅ Bias 1D: {c['bias_1d'].upper()} (aligné)\n"
-                    f"✅ EMA200 1H: {ema_status}\n"
-                    f"✅ ST Context 4H: {c['st_context_4h'].upper()} (zone active)\n"
-                    f"✅ ST Context 1H: {c['st_context_1h'].upper()} (zone active)\n"
-                    f"✅ Flip SuperTrend AI 1H: {val.upper()} (signal)\n\n"
-                    f"🎯 <b>Position Size: 70-80% (SETUP PARFAIT)</b>\n"
-                    f"🛑 SL: {'Sous dernier swing low' if direction == 'LONG' else 'Au-dessus dernier swing high'}"
-                )
-                track_alert(symbol, 'CONTEXT_B+')
-                logger.info(f"[CONTEXT B+] Alerte MAXIMALE envoyée: {symbol} {direction}")
+                track_alert(symbol, 'CONTEXT')
+                logger.info(f"[CONTEXT] Alerte envoyée: {symbol} {direction}")
 
     persist_runtime_state()
     return jsonify({'status': 'success', 'symbol': symbol}), 200
@@ -945,15 +681,13 @@ def health():
 @app.route('/state', methods=['GET'])
 def state():
     return jsonify({
-        'safe_state': SAFE_STATE,
-        'momentum_state': MOMENTUM_STATE,
-        'context_state': CONTEXT_STATE,
-        'watchlist': CONFIG['SYMBOLS']
+          'momentum_state': MOMENTUM_STATE,
+             'watchlist': CONFIG['SYMBOLS']
     }), 200
 
 @app.route('/context_state', methods=['GET'])
 def context_state_route():
-    return jsonify(CONTEXT_STATE), 200
+    return jsonify(MOMENTUM_STATE), 200
 
 @app.route('/weekly_stats', methods=['GET'])
 def weekly_stats_route():
@@ -984,9 +718,7 @@ def audit_route():
 @app.route('/reset_state', methods=['POST'])
 def reset_state_all():
     """Remet tout le state à zéro."""
-    SAFE_STATE.clear()
     MOMENTUM_STATE.clear()
-    CONTEXT_STATE.clear()
     LAST_SIGNALS.clear()
     LAST_SIGNAL_EVENTS.clear()
     persist_runtime_state()
@@ -999,9 +731,8 @@ def reset_state_symbol(symbol):
     symbol = symbol.upper().replace('-', '/')
     if symbol not in CONFIG['SYMBOLS']:
         return jsonify({'status': 'error', 'message': f'{symbol} non trouvé dans la watchlist'}), 404
-    SAFE_STATE.pop(symbol, None)
     MOMENTUM_STATE.pop(symbol, None)
-    CONTEXT_STATE.pop(symbol, None)
+   
     keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
     for k in keys_to_remove:
         LAST_SIGNALS.pop(k, None)
@@ -1275,82 +1006,11 @@ def update_indicators_for_symbol(symbol):
         price = float(df_1h['close'].iloc[-1])
 
         with STATE_LOCK:
-            # SAFE
-            if symbol in SAFE_STATE:
-                old_macd_2d = SAFE_STATE[symbol].get('macd_2d')
-                SAFE_STATE[symbol]['bias_1h']  = bias_1h
-                if st_1h_val: SAFE_STATE[symbol]['st_1h'] = st_1h_val
-                SAFE_STATE[symbol]['bias_4h']  = bias_4h
-                SAFE_STATE[symbol]['macd_4h']  = macd_4h
-                SAFE_STATE[symbol]['macd_1d']  = macd_1d
-                if macd_2d: SAFE_STATE[symbol]['macd_2d'] = macd_2d
-                if bias_3d: SAFE_STATE[symbol]['bias_3d'] = bias_3d
-                # Alerte TP MACD 2D
-                if macd_2d and old_macd_2d and old_macd_2d != macd_2d:
-                    emoji = "🟢" if macd_2d == 'bull' else "🔴"
-                    send_telegram(
-                        f"{emoji} <b>[SAFE - TP PARTIEL]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 Trigger: MACD 2D Inversion (calcul auto)\n"
-                        f"📈 New Direction: {'BULLISH' if macd_2d == 'bull' else 'BEARISH'}\n"
-                        f"💰 Price: ${price:.4f}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"💡 Action: Take partial profits (30-50%)"
-                    )
-
-            # MOMENTUM
             if symbol in MOMENTUM_STATE:
-                old_macd_2d = MOMENTUM_STATE[symbol].get('macd_2d')
-                old_bias_1d = MOMENTUM_STATE[symbol].get('bias_1d')
-                MOMENTUM_STATE[symbol]['bias_1d']   = bias_1d
-                if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
-                if st_1h_val: MOMENTUM_STATE[symbol]['st_1h'] = st_1h_val
-                MOMENTUM_STATE[symbol]['macd_4h']   = macd_4h
-                MOMENTUM_STATE[symbol]['macd_1d']   = macd_1d
-                MOMENTUM_STATE[symbol]['ema200_1h']  = ema200_1h
-                if macd_2d: MOMENTUM_STATE[symbol]['macd_2d'] = macd_2d
-                # Alerte TP MACD 2D
-                if macd_2d and old_macd_2d and old_macd_2d != macd_2d:
-                    emoji = "🟢" if macd_2d == 'bull' else "🔴"
-                    send_telegram(
-                        f"{emoji} <b>[MOMENTUM - TP PARTIEL]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 Trigger: MACD 2D Inversion (calcul auto)\n"
-                        f"📈 New Direction: {'BULLISH' if macd_2d == 'bull' else 'BEARISH'}\n"
-                        f"💰 Price: ${price:.4f}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"💡 Action: Take partial profits (30-50%)"
-                    )
-                # Alerte EXIT Bias 1D
-                if old_bias_1d and old_bias_1d != bias_1d:
-                    send_telegram(
-                        f"🚪 <b>[MOMENTUM - EXIT COMPLET]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 Trigger: Bias 1D Inversion (calcul auto)\n"
-                        f"📈 New Bias: {'BULLISH' if bias_1d == 'bull' else 'BEARISH'}\n"
-                        f"💰 Price: ${price:.4f}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"❌ Action: EXIT ALL POSITIONS NOW"
-                    )
+                if bias_2d:   MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
+                if st_1h_val: MOMENTUM_STATE[symbol]['st_1h']   = st_1h_val
 
-            # CONTEXT
-            if symbol in CONTEXT_STATE:
-                old_macd_2d = CONTEXT_STATE[symbol].get('macd_2d')
-                CONTEXT_STATE[symbol]['bias_1d']  = bias_1d
-                CONTEXT_STATE[symbol]['ema200_1h'] = ema200_1h
-                if macd_2d: CONTEXT_STATE[symbol]['macd_2d'] = macd_2d
-                # Alerte TP MACD 2D
-                if macd_2d and old_macd_2d and old_macd_2d != macd_2d:
-                    emoji = "🟢" if macd_2d == 'bull' else "🔴"
-                    send_telegram(
-                        f"{emoji} <b>[CONTEXT - TP PARTIEL]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 Trigger: MACD 2D Inversion (calcul auto)\n"
-                        f"📈 New Direction: {'BULLISH' if macd_2d == 'bull' else 'BEARISH'}\n"
-                        f"💰 Price: ${price:.4f}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"💡 Action: Take partial profits (30-50%)"
-                    )
+
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
 

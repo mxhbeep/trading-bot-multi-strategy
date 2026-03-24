@@ -1004,6 +1004,7 @@ def update_indicators_for_symbol(symbol):
 
         price = float(df_1h['close'].iloc[-1])
 
+        old_st_1h = None
         with STATE_LOCK:
             if symbol in MOMENTUM_STATE:
                 old_st_1h = MOMENTUM_STATE[symbol].get('st_1h')

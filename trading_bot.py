@@ -623,10 +623,9 @@ def webhook():
                 track_alert(symbol, 'MOMENTUM')
 
     # ========================================================================
-    # LOGIQUE CONTEXT : ST Context 4H → ST AI 4H
+    # LOGIQUE CONTEXT : ST Context 4H → ST AI 1H
     # ========================================================================
     if strat in ['context', 'momentum_context', 'all']:
-        # On utilise MOMENTUM_STATE pour stocker le context 4H aussi
         m = MOMENTUM_STATE[symbol]
         if alert_type == 'st_context' and tf == '4h':
             old_val = m.get('st_context_4h')
@@ -636,26 +635,25 @@ def webhook():
             # PREP : envoi alerte zone dès réception ST Context 4H
             if m['st_context_4h'] is not None and should_send(symbol, f"context_prep_{m['st_context_4h']}", event_id=event_id):
                 direction = "LONG" if m['st_context_4h'] == 'buy' else "SHORT"
-                emoji = "🟡"
                 with STATE_LOCK:
                     PREP_BUFFER.append({'strat': 'CONTEXT', 'dir': direction, 'sym': symbol, 'price': price})
                 logger.info(f"[PREP] CONTEXT {direction} {symbol} zone 4H active")
 
-        # SIGNAL : ST AI 4H flip dans le sens du context 4H
-        if alert_type == 'supertrend' and tf == '4h':
+        # SIGNAL : ST AI 1H flip dans le sens du context 4H
+        if alert_type == 'supertrend' and tf == '1h':
             ctx_4h = m.get('st_context_4h')
-            if ctx_4h == val and should_send(symbol, f"context_entry_{val}", event_id=event_id):
+            if ctx_4h == val and should_send(symbol, f"context_entry_1h_{val}", event_id=event_id):
                 direction = "LONG" if val == 'buy' else "SHORT"
                 emoji = "🟢" if direction == "LONG" else "🔴"
                 send_telegram(
-                    f"{emoji} <b>[CONTEXT - ENTREE 4H]</b> {symbol}\n"
+                    f"{emoji} <b>[CONTEXT - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction}\n"
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ ST Context 4H: {ctx_4h.upper()} (zone active)\n"
-                    f"✅ SuperTrend AI 4H: {val.upper()} (SIGNAL)"
+                    f"✅ SuperTrend AI 1H: {val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'CONTEXT')
                 logger.info(f"[CONTEXT] Alerte envoyée: {symbol} {direction}")
@@ -1008,8 +1006,51 @@ def update_indicators_for_symbol(symbol):
 
         with STATE_LOCK:
             if symbol in MOMENTUM_STATE:
+                old_st_1h = MOMENTUM_STATE[symbol].get('st_1h')
                 if bias_2d:   MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 if st_1h_val: MOMENTUM_STATE[symbol]['st_1h']   = st_1h_val
+
+        # Détection flip ST AI 1H
+        if st_1h_val and old_st_1h and st_1h_val != old_st_1h:
+            m = MOMENTUM_STATE.get(symbol, {})
+            ctx_4h    = m.get('st_context_4h')
+            ctx_1h    = m.get('st_context_1h')
+            bias_2d_v = m.get('bias_2d')
+            st_expected = st_1h_val  # 'buy' ou 'sell'
+            direction   = "LONG" if st_1h_val == 'buy' else "SHORT"
+            emoji       = "🟢" if direction == "LONG" else "🔴"
+
+            # CONTEXT : ST Context 4H + flip ST AI 1H
+            if ctx_4h == st_expected and should_send(symbol, f"context_entry_1h_{st_expected}"):
+                send_telegram(
+                    f"{emoji} <b>[CONTEXT - ENTREE 1H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ ST Context 4H: {ctx_4h.upper()} (zone active)\n"
+                    f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'CONTEXT')
+                logger.info(f"[CONTEXT] Flip ST AI 1H: {symbol} {direction}")
+
+            # MOMENTUM : Bias 2D + ST Context 1H + flip ST AI 1H
+            if bias_2d_v and ctx_1h == st_expected and (
+                (direction == "LONG"  and bias_2d_v == 'bull') or
+                (direction == "SHORT" and bias_2d_v == 'bear')
+            ) and should_send(symbol, f"momentum_entry_1h_{st_expected}"):
+                send_telegram(
+                    f"{emoji} <b>[MOMENTUM - ENTREE 1H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 2D: {bias_2d_v.upper()}\n"
+                    f"✅ ST Context 1H: {ctx_1h.upper()}\n"
+                    f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'MOMENTUM')
+                logger.info(f"[MOMENTUM] Flip ST AI 1H: {symbol} {direction}")
 
 
 

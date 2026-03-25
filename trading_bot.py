@@ -19,8 +19,8 @@ import redis
 # ============================================================================ #
 
 CONFIG = {
-    'TELEGRAM_BOT_TOKEN': '8110041550:AAHJKAWxIG1ZBjZ8fRfFMKq-4iTeo5v4-Hw',
-    'TELEGRAM_CHAT_ID': '6473214015',
+    'TELEGRAM_BOT_TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
+    'TELEGRAM_CHAT_ID': os.environ.get('TELEGRAM_CHAT_ID', ''),
     
     'SYMBOLS': {
         'AAVE/USDT': 'okx',
@@ -241,6 +241,9 @@ def escape_html(text):
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 def send_telegram(msg):
+    if not CONFIG['TELEGRAM_BOT_TOKEN'] or not CONFIG['TELEGRAM_CHAT_ID']:
+        logger.warning("⚠️ Telegram non configuré (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID manquants)")
+        return
     url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
     payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'], 'text': msg, 'parse_mode': 'HTML'}
     try:
@@ -538,7 +541,10 @@ def webhook():
     val_raw     = data.get('value', '')
     val2_raw    = data.get('value2')
     val         = str(val_raw).strip().lower()
-    price       = float(data.get('price', 0))
+    try:
+        price = float(data.get('price', 0) or 0)
+    except (TypeError, ValueError):
+        price = 0.0
 
     if alert_type in {'bias', 'bias_9_26'}:
         bias_value = parse_bias_value(val_raw, val2_raw)

@@ -113,7 +113,7 @@ STATE_LOCK = threading.Lock()
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'MOMENTUM': 0, 'CONTEXT': 0,
             'CONTEXT_A': 0, 'CONTEXT_B': 0, 'CONTEXT_B+': 0,
         }
     if strategy in WEEKLY_STATS[symbol]:
@@ -298,6 +298,7 @@ def send_weekly_report():
 
     total_safe      = sum(s.get('SAFE', 0)       for s in WEEKLY_STATS.values())
     total_momentum  = sum(s.get('MOMENTUM', 0)   for s in WEEKLY_STATS.values())
+    total_context   = sum(s.get('CONTEXT', 0)    for s in WEEKLY_STATS.values())
     total_ctx_a     = sum(s.get('CONTEXT_A', 0)  for s in WEEKLY_STATS.values())
     total_ctx_b     = sum(s.get('CONTEXT_B', 0)  for s in WEEKLY_STATS.values())
     total_ctx_bplus = sum(s.get('CONTEXT_B+', 0) for s in WEEKLY_STATS.values())
@@ -306,6 +307,7 @@ def send_weekly_report():
         "📋 <b>Par stratégie:</b>\n"
         f"  • SAFE: {total_safe}\n"
         f"  • MOMENTUM: {total_momentum}\n"
+        f"  • CONTEXT: {total_context}\n"
         f"  • CONTEXT A: {total_ctx_a}\n"
         f"  • CONTEXT B: {total_ctx_b}\n"
         f"  • CONTEXT B+: {total_ctx_bplus}\n\n"
@@ -323,6 +325,7 @@ def send_weekly_report():
             details = []
             if stats.get('SAFE', 0):       details.append(f"S:{stats['SAFE']}")
             if stats.get('MOMENTUM', 0):   details.append(f"M:{stats['MOMENTUM']}")
+            if stats.get('CONTEXT', 0):    details.append(f"C:{stats['CONTEXT']}")
             if stats.get('CONTEXT_A', 0):  details.append(f"CA:{stats['CONTEXT_A']}")
             if stats.get('CONTEXT_B', 0):  details.append(f"CB:{stats['CONTEXT_B']}")
             if stats.get('CONTEXT_B+', 0): details.append(f"CB+:{stats['CONTEXT_B+']}")

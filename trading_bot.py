@@ -182,6 +182,7 @@ def audit_log(data, status="reçu"):
         "ts": datetime.now(timezone.utc).isoformat(),
         "sym": data.get('symbol'),
         "type": data.get('type'),
+        "strategy": data.get('strategy'),
         "tf": data.get('tf'),
         "val": data.get('value'),
         "price": data.get('price'),
@@ -561,6 +562,7 @@ def webhook():
 
     if symbol not in CONFIG['SYMBOLS']:
         logger.info(f"⏭️ {symbol} non dans la watchlist")
+        audit_log(data, status="ignoré_watchlist")
         return jsonify({'status': 'ignored', 'reason': 'not_in_watchlist'}), 200
 
     exchange_name = CONFIG['SYMBOLS'][symbol]
@@ -674,6 +676,7 @@ def webhook():
                 logger.info(f"[CONTEXT] Alerte envoyée: {symbol} {direction}")
 
     persist_runtime_state()
+    audit_log(data, status="traité")
     return jsonify({'status': 'success', 'symbol': symbol}), 200
 
 

@@ -425,6 +425,14 @@ def get_exchange_for_symbol(symbol):
     return exchanges.get(exchange_name)
 
 def parse_st_context_value(val, trend_level=1.96):
+    """
+    Convertit la valeur brute du ST Context (plot_1 = Short time context) en 'buy', 'sell' ou None.
+    Accepte les strings 'buy'/'sell' (rétrocompatibilité) et les valeurs numériques
+    envoyées par TradingView via {{plot_1}}.
+      plot_1 > +trend_level  → zone baissière → 'sell'
+      plot_1 < -trend_level  → zone haussière → 'buy'
+      entre les deux         → neutre         → None
+    """
     if str(val).lower() in ['buy', 'sell', 'neutral']:
         return None if str(val).lower() == 'neutral' else str(val).lower()
     try:

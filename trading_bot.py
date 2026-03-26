@@ -836,24 +836,71 @@ def supertrend_ai(df, atr_len=6, min_mult=1.0, max_mult=2.0, step=1.0,
 def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
     try:
-        # Convertir BTC/USDT -> BTC-USDT
         inst_id = symbol.replace('/', '-')
-        # Map timeframe
         tf_map = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H'}
         bar = tf_map.get(timeframe, timeframe.upper())
-        url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}'
+        url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={min(limit, 300)}'
         resp = requests.get(url, timeout=10)
         data = resp.json()
         if data.get('code') != '0' or not data.get('data'):
             logger.error(f"[OKX] API error {symbol} {timeframe}: {data.get('msg', 'no data')}")
             return None
-        # OKX retourne [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
         rows = [[int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])]
                 for r in reversed(data['data'])]
         df = pd.DataFrame(rows, columns=['ts','open','high','low','close','volume'])
         return df
     except Exception as e:
         logger.error(f"[OKX] fetch_ohlcv {symbol} {timeframe}: {e}")
+        return None
+
+def fetch_ohlcv_okx_paginated(symbol, timeframe, total=1500):
+    """Fetch jusqu'à `total` bougies depuis OKX via pagination (max 300 par requête).
+    Utilisé pour le SuperTrend AI qui nécessite un long historique pour calibrer le k-means.
+    """
+    try:
+        inst_id = symbol.replace('/', '-')
+        tf_map  = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H'}
+        bar     = tf_map.get(timeframe, timeframe.upper())
+        all_rows = []
+        after = None  # timestamp du plus ancien point déjà récupéré
+        per_page = 300
+
+        while len(all_rows) < total:
+            url = f'https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar={bar}&limit={per_page}'
+            if after:
+                url += f'&after={after}'
+            resp = requests.get(url, timeout=10)
+            data = resp.json()
+            if data.get('code') != '0' or not data.get('data'):
+                break
+            batch = data['data']
+            if not batch:
+                break
+            all_rows.extend(batch)
+            after = batch[-1][0]  # timestamp le plus ancien de ce batch
+            if len(batch) < per_page:
+                break  # plus de données disponibles
+            time.sleep(0.1)  # rate limit
+
+        if not all_rows:
+            return None
+
+        # Trier par timestamp croissant et dédupliquer
+        all_rows.sort(key=lambda r: int(r[0]))
+        seen = set()
+        deduped = []
+        for r in all_rows:
+            if r[0] not in seen:
+                seen.add(r[0])
+                deduped.append(r)
+
+        rows = [[int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])]
+                for r in deduped[-total:]]
+        df = pd.DataFrame(rows, columns=['ts','open','high','low','close','volume'])
+        logger.info(f"[OKX] {symbol} {timeframe} paginated: {len(df)} bougies")
+        return df
+    except Exception as e:
+        logger.error(f"[OKX] fetch_ohlcv_paginated {symbol} {timeframe}: {e}")
         return None
 
 def calc_bias_okx(df, ema_len=13, sma_len=30):
@@ -922,7 +969,7 @@ def update_indicators_for_symbol(symbol):
         df_1d  = fetch_ohlcv_okx(symbol, '1d',  limit=100)
         df_3d  = fetch_ohlcv_okx(symbol, '1d',  limit=200)  # aggregate pour 3D
 
-        df_1h_st = fetch_ohlcv_okx(symbol, '1h',  limit=500)  # plus de bougies pour ST AI
+        df_1h_st = fetch_ohlcv_okx_paginated(symbol, '1h', total=1500)  # historique long pour ST AI k-means
         if df_1h is None or df_4h is None or df_1d is None or df_1h_st is None:
             return
 

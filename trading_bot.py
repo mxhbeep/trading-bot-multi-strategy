@@ -557,7 +557,7 @@ def init_symbol_states(symbol):
             'st_context_1h': None, 'st_context_4h': None,
             'st_1h': None, 'st_4h': None,
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_15m': None, 'st_ai_15m': None,
+            'bias_1h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
         }
 
 
@@ -894,6 +894,13 @@ def audit_route():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/sentiment', methods=['POST', 'GET'])
+def sentiment_now():
+    """Déclenche un envoi immédiat du sentiment de marché."""
+    threading.Thread(target=send_market_sentiment, daemon=True).start()
+    logger.info("[SENTIMENT] Envoi manuel déclenché")
+    return jsonify({'status': 'ok', 'message': 'Sentiment envoyé'}), 200
+
 @app.route('/reset_state', methods=['POST'])
 def reset_state_all():
     """Remet tout le state à zéro."""
@@ -1054,6 +1061,7 @@ def update_indicators_for_symbol(symbol):
             if symbol in MOMENTUM_STATE:
                 if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 MOMENTUM_STATE[symbol]['bias_1h'] = bias_1h
+                MOMENTUM_STATE[symbol]['bias_4h'] = bias_4h
 
 
 
@@ -1082,6 +1090,66 @@ def indicators_scheduler():
         logger.info(f"[OKX] Prochain calcul dans {int(wait)}s")
         time.sleep(wait)
 
+
+def send_market_sentiment():
+    """Calcule et envoie le sentiment de marché basé sur les biais 2D et 4H."""
+    try:
+        with STATE_LOCK:
+            state_copy = dict(MOMENTUM_STATE)
+
+        total = len(state_copy)
+        if total == 0:
+            return
+
+        bulls_2d = sum(1 for m in state_copy.values() if m.get('bias_2d') == 'bull')
+        bears_2d = total - bulls_2d
+        pct_2d   = round(bulls_2d / total * 100)
+
+        bulls_4h = sum(1 for m in state_copy.values() if m.get('bias_4h') == 'bull')
+        bears_4h = total - bulls_4h
+        pct_4h   = round(bulls_4h / total * 100)
+
+        def sentiment_label(pct):
+            if pct >= 60:   return "🟢 BULLISH"
+            elif pct <= 40: return "🔴 BEARISH"
+            else:           return "🟡 NEUTRE"
+
+        label_2d = sentiment_label(pct_2d)
+        label_4h = sentiment_label(pct_4h)
+
+        msg = (
+            f"📊 <b>Sentiment de marché</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🕯 <b>Long terme (2D)</b> : {label_2d}\n"
+            f"   {bulls_2d} bulls / {bears_2d} bears — {pct_2d}%\n\n"
+            f"⚡ <b>Court terme (4H)</b> : {label_4h}\n"
+            f"   {bulls_4h} bulls / {bears_4h} bears — {pct_4h}%\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+        send_telegram(msg)
+        logger.info(f"[SENTIMENT] 2D: {pct_2d}% bull | 4H: {pct_4h}% bull")
+    except Exception as e:
+        logger.error(f"[SENTIMENT] Erreur: {e}")
+
+
+def sentiment_scheduler():
+    """Envoie le sentiment de marché toutes les 4H (à 00:02, 04:02, 08:02, 12:02, 16:02, 20:02 UTC)."""
+    logger.info("[SENTIMENT] Scheduler démarré (toutes les 4H)")
+    while True:
+        now  = datetime.now(timezone.utc)
+        # Prochaine bougie 4H fermée : 00, 04, 08, 12, 16, 20 + 2min
+        next_4h = now.replace(minute=2, second=0, microsecond=0)
+        if next_4h.hour % 4 != 0:
+            hours_ahead = 4 - (next_4h.hour % 4)
+            next_4h = next_4h + timedelta(hours=hours_ahead)
+        if next_4h <= now:
+            next_4h += timedelta(hours=4)
+        wait = (next_4h - now).total_seconds()
+        logger.info(f"[SENTIMENT] Prochain envoi dans {int(wait)}s")
+        time.sleep(wait)
+        send_market_sentiment()
+
 # ============================================================================ #
 # INITIALISATION AU DEMARRAGE (compatible gunicorn)
 # ============================================================================ #
@@ -1106,7 +1174,10 @@ def startup():
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
 
-        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX)")
+        sentiment_thread = threading.Thread(target=sentiment_scheduler, daemon=True)
+        sentiment_thread.start()
+
+        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX + sentiment 4H)")
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")
 

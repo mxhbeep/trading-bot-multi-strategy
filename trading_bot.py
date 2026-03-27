@@ -707,26 +707,6 @@ def webhook():
     if strat in ['context', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        # Signal ST AI 1H — CONTEXT original (ST Context 4H seul)
-        if alert_type == 'supertrend' and tf == '1h':
-            ctx_4h = m.get('st_context_4h')
-            st_val = parse_supertrend_value(val)
-            if ctx_4h == st_val and should_send(symbol, f"context_entry_1h_{st_val}", event_id=event_id):
-                direction = "LONG" if st_val == 'buy' else "SHORT"
-                emoji = "🟢" if direction == "LONG" else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[CONTEXT - ENTREE 1H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {ctx_4h.upper()} (zone active)\n"
-                    f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'CONTEXT')
-                logger.info(f"[CONTEXT] Alerte envoyée: {symbol} {direction}")
-
         # Signal ST AI 1H — CONTEXT V2 (Bias 2D + ST Context 4H + ST Context 1H)
         if alert_type == 'supertrend' and tf == '1h':
             bias_2d_v    = m.get('bias_2d')
@@ -1218,20 +1198,6 @@ def update_indicators_for_symbol(symbol):
             st_expected = st_1h_val  # 'buy' ou 'sell'
             direction   = "LONG" if st_1h_val == 'buy' else "SHORT"
             emoji       = "🟢" if direction == "LONG" else "🔴"
-
-            # CONTEXT : ST Context 4H + flip ST AI 1H
-            if ctx_4h == st_expected and should_send(symbol, f"context_entry_1h_{st_expected}"):
-                send_telegram(
-                    f"{emoji} <b>[CONTEXT - ENTREE 1H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {ctx_4h.upper()} (zone active)\n"
-                    f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'CONTEXT')
-                logger.info(f"[CONTEXT] Flip ST AI 1H: {symbol} {direction}")
 
             # MOMENTUM : Bias 2D + ST Context 1H + flip ST AI 1H
             if bias_2d_v and ctx_1h == st_expected and (

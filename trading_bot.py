@@ -735,7 +735,8 @@ def webhook():
             st_val       = parse_supertrend_value(val)
             direction_v2 = "LONG" if st_val == 'buy' else "SHORT"
             expected     = st_val
-            if (bias_2d_v and ctx_4h == expected and ctx_1h == expected
+            bias_2d_ok   = (bias_2d_v == 'bull' and direction_v2 == 'LONG') or (bias_2d_v == 'bear' and direction_v2 == 'SHORT')
+            if (bias_2d_ok and ctx_4h == expected and ctx_1h == expected
                     and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 send_telegram(
@@ -761,7 +762,8 @@ def webhook():
             ctx_1h      = m.get('st_context_1h')
             direction_p = "LONG" if st_4h_val == 'buy' else "SHORT"
             expected    = st_4h_val
-            if (bias_2d_v and ctx_4h == expected and ctx_1h == expected
+            bias_2d_ok  = (bias_2d_v == 'bull' and direction_p == 'LONG') or (bias_2d_v == 'bear' and direction_p == 'SHORT')
+            if (bias_2d_ok and ctx_4h == expected and ctx_1h == expected
                     and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
                 send_telegram(

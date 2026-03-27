@@ -1038,7 +1038,7 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
     try:
         inst_id = symbol.replace('/', '-')
-        tf_map = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H'}
+        tf_map = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H', '15m': '15m'}
         bar = tf_map.get(timeframe, timeframe.upper())
         url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={min(limit, 300)}'
         resp = requests.get(url, timeout=10)
@@ -1060,7 +1060,7 @@ def fetch_ohlcv_okx_paginated(symbol, timeframe, total=1500):
     """
     try:
         inst_id = symbol.replace('/', '-')
-        tf_map  = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H'}
+        tf_map  = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H', '15m': '15m'}
         bar     = tf_map.get(timeframe, timeframe.upper())
         all_rows = []
         after = None  # timestamp du plus ancien point déjà récupéré

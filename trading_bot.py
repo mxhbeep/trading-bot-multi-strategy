@@ -701,24 +701,6 @@ def webhook():
                 logger.info(f"[PREP] CONTEXT {direction} {symbol} zone 4H active")
 
         # SIGNAL : ST AI 1H flip dans le sens du context 4H
-        if alert_type == 'supertrend' and tf == '1h':
-            ctx_4h = m.get('st_context_4h')
-            if ctx_4h == val and should_send(symbol, f"context_orig_entry_1h_{val}", event_id=event_id):
-                direction = "LONG" if val == 'buy' else "SHORT"
-                emoji = "🟢" if direction == "LONG" else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[CONTEXT - ENTREE 1H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {ctx_4h.upper()} (zone active)\n"
-                    f"✅ SuperTrend AI 1H: {val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'CONTEXT')
-                logger.info(f"[CONTEXT] Alerte envoyée: {symbol} {direction}")
-
     # ========================================================================
     # LOGIQUE CONTEXT V2 : Bias 2D + ST Context 4H + ST Context 1H → ST AI 1H
     # ========================================================================

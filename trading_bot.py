@@ -450,6 +450,19 @@ def parse_st_context_value(val, trend_level=1.96):
         logger.warning(f"[WARN] ST Context valeur invalide: '{val}'")
         return None
 
+def parse_supertrend_value(val):
+    """Convertit la valeur brute du SuperTrend AI en 'buy' ou 'sell'.
+    Accepte 'buy'/'sell' (ancien format) et '1'/'0' (nouveau format via {{plot_2}}).
+    """
+    s = str(val).strip().lower()
+    if s == 'buy'  or s == '1': return 'buy'
+    if s == 'sell' or s == '0': return 'sell'
+    try:
+        return 'buy' if float(s) >= 0.5 else 'sell'
+    except (ValueError, TypeError):
+        logger.warning(f"[WARN] SuperTrend valeur invalide: '{val}'")
+        return None
+
 def parse_ema200_value(val):
     normalized = str(val).strip().lower()
     if normalized in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
@@ -588,8 +601,8 @@ def webhook():
 
         # Mise a jour des etats
         if alert_type == 'st_context' and tf == '1h': m['st_context_1h'] = parse_st_context_value(val)
-        if alert_type == 'supertrend' and tf == '1h': m['st_1h'] = val
-        if alert_type == 'supertrend' and tf == '4h': m['st_4h'] = val
+        if alert_type == 'supertrend' and tf == '1h': m['st_1h'] = parse_supertrend_value(val)
+        if alert_type == 'supertrend' and tf == '4h': m['st_4h'] = parse_supertrend_value(val)
 
         bias_2d_val = m.get('bias_2d')
         direction = None

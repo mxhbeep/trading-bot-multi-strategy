@@ -532,14 +532,15 @@ def build_event_id(data, symbol, strat, tf, alert_type, val):
 def should_send(symbol, key, event_id=None):
     now = time.time()
     k = f"{symbol}:{key}"
-    if event_id:
-        previous_event = LAST_SIGNAL_EVENTS.get(k)
-        if previous_event == event_id:
-            return False
-        LAST_SIGNAL_EVENTS[k] = event_id
-    if k not in LAST_SIGNALS or (now - LAST_SIGNALS[k] > CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']):
-        LAST_SIGNALS[k] = now
-        return True
+    with STATE_LOCK:
+        if event_id:
+            previous_event = LAST_SIGNAL_EVENTS.get(k)
+            if previous_event == event_id:
+                return False
+            LAST_SIGNAL_EVENTS[k] = event_id
+        if k not in LAST_SIGNALS or (now - LAST_SIGNALS[k] > CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']):
+            LAST_SIGNALS[k] = now
+            return True
     return False
 
 # États SCALP — ST AI 15min + contexte 15min

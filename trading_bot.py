@@ -108,7 +108,7 @@ MOMENTUM_STATE = {}
 WEEKLY_STATS = {}
 WEEKLY_START = datetime.now(timezone.utc)
 PREP_BUFFER = []  # Buffer des alertes de preparation
-STATE_LOCK = threading.Lock()
+STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:

@@ -926,78 +926,6 @@ def reset_state_symbol(symbol):
 
 
 
-def supertrend_ai(df, atr_len=6, min_mult=1.0, max_mult=2.0, step=1.0,
-                  perf_alpha=100, from_cluster='Best', max_iter=100):
-    """SuperTrend AI — reproduction exacte du Pine Script (ATR 6, factors 1-2, Best cluster)."""
-    high  = df['high'].values
-    low   = df['low'].values
-    close = df['close'].values
-    n     = len(close)
-    tr = np.zeros(n)
-    for i in range(1, n):
-        tr[i] = max(high[i]-low[i], abs(high[i]-close[i-1]), abs(low[i]-close[i-1]))
-    atr = pd.Series(tr).ewm(alpha=1/atr_len, adjust=False).mean().values
-    hl2 = (high + low) / 2.0
-    factors, f = [], min_mult
-    while f <= max_mult + 1e-9:
-        factors.append(round(f, 10))
-        f += step
-    nf = len(factors)
-    upper_arr  = np.full((n, nf), hl2[0])
-    lower_arr  = np.full((n, nf), hl2[0])
-    trend_arr  = np.zeros((n, nf), dtype=int)
-    output_arr = np.full((n, nf), hl2[0])
-    perf_arr   = np.zeros((n, nf))
-    alpha_perf = 2.0 / (perf_alpha + 1)
-    for i in range(1, n):
-        for k, factor in enumerate(factors):
-            up = hl2[i] + atr[i] * factor
-            dn = hl2[i] - atr[i] * factor
-            if close[i] > upper_arr[i-1, k]:   trend_arr[i, k] = 1
-            elif close[i] < lower_arr[i-1, k]: trend_arr[i, k] = 0
-            else:                               trend_arr[i, k] = trend_arr[i-1, k]
-            upper_arr[i, k] = min(up, upper_arr[i-1, k]) if close[i-1] < upper_arr[i-1, k] else up
-            lower_arr[i, k] = max(dn, lower_arr[i-1, k]) if close[i-1] > lower_arr[i-1, k] else dn
-            output_arr[i, k] = lower_arr[i, k] if trend_arr[i, k] == 1 else upper_arr[i, k]
-            diff = np.sign(close[i-1] - output_arr[i-1, k]) if output_arr[i-1, k] != 0 else 0
-            perf_arr[i, k] = perf_arr[i-1, k] + alpha_perf * ((close[i] - close[i-1]) * diff - perf_arr[i-1, k])
-    perf_final   = perf_arr[-1]
-    factor_final = np.array(factors)
-    centroids    = np.percentile(perf_final, [25, 50, 75])
-    clusters_p = [[], [], []]
-    clusters_f = [[], [], []]
-    for _ in range(max_iter):
-        clusters_p = [[], [], []]
-        clusters_f = [[], [], []]
-        for j, val in enumerate(perf_final):
-            idx = int(np.argmin([abs(val - c) for c in centroids]))
-            clusters_p[idx].append(val)
-            clusters_f[idx].append(factor_final[j])
-        new_c = [np.mean(cp) if cp else 0.0 for cp in clusters_p]
-        if np.max(np.abs(np.array(new_c) - centroids)) < 0.0001:
-            centroids = np.array(new_c)
-            break
-        centroids = np.array(new_c)
-    from_idx = {'Best': 2, 'Average': 1, 'Worst': 0}.get(from_cluster, 2)
-    sorted_idx = np.argsort(centroids)
-    target_idx = sorted_idx[from_idx]
-    target_factor = np.mean(clusters_f[target_idx]) if clusters_f[target_idx] else factors[0]
-    upper_f = lower_f = hl2[0]
-    os_f = 0
-    direction = pd.Series('', index=df.index, dtype=str)
-    for i in range(1, n):
-        up = hl2[i] + atr[i] * target_factor
-        dn = hl2[i] - atr[i] * target_factor
-        upper_f = min(up, upper_f) if close[i-1] < upper_f else up
-        lower_f = max(dn, lower_f) if close[i-1] > lower_f else dn
-        if close[i] > upper_f:   os_f = 1
-        elif close[i] < lower_f: os_f = 0
-        direction.iloc[i] = 'buy' if os_f == 1 else 'sell'
-    return direction
-
-# ============================================================================ #
-# CALCUL AUTOMATIQUE DES INDICATEURS DEPUIS OKX
-# ============================================================================ #
 
 def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
@@ -1019,55 +947,6 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
         logger.error(f"[OKX] fetch_ohlcv {symbol} {timeframe}: {e}")
         return None
 
-def fetch_ohlcv_okx_paginated(symbol, timeframe, total=1500):
-    """Fetch jusqu'à `total` bougies depuis OKX via pagination (max 300 par requête).
-    Utilisé pour le SuperTrend AI qui nécessite un long historique pour calibrer le k-means.
-    """
-    try:
-        inst_id = symbol.replace('/', '-')
-        tf_map  = {'1h': '1H', '4h': '4H', '1d': '1D', '2h': '2H', '3h': '3H', '15m': '15m'}
-        bar     = tf_map.get(timeframe, timeframe.upper())
-        all_rows = []
-        after = None  # timestamp du plus ancien point déjà récupéré
-        per_page = 300
-
-        while len(all_rows) < total:
-            url = f'https://www.okx.com/api/v5/market/history-candles?instId={inst_id}&bar={bar}&limit={per_page}'
-            if after:
-                url += f'&after={after}'
-            resp = requests.get(url, timeout=10)
-            data = resp.json()
-            if data.get('code') != '0' or not data.get('data'):
-                break
-            batch = data['data']
-            if not batch:
-                break
-            all_rows.extend(batch)
-            after = batch[-1][0]  # timestamp le plus ancien de ce batch
-            if len(batch) < per_page:
-                break  # plus de données disponibles
-            time.sleep(0.1)  # rate limit
-
-        if not all_rows:
-            return None
-
-        # Trier par timestamp croissant et dédupliquer
-        all_rows.sort(key=lambda r: int(r[0]))
-        seen = set()
-        deduped = []
-        for r in all_rows:
-            if r[0] not in seen:
-                seen.add(r[0])
-                deduped.append(r)
-
-        rows = [[int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])]
-                for r in deduped[-total:]]
-        df = pd.DataFrame(rows, columns=['ts','open','high','low','close','volume'])
-        logger.info(f"[OKX] {symbol} {timeframe} paginated: {len(df)} bougies")
-        return df
-    except Exception as e:
-        logger.error(f"[OKX] fetch_ohlcv_paginated {symbol} {timeframe}: {e}")
-        return None
 
 def calc_bias_okx(df, ema_len=13, sma_len=30):
     """EMA13 vs SMA30 — CarréBias."""
@@ -1135,8 +1014,7 @@ def update_indicators_for_symbol(symbol):
         df_1d  = fetch_ohlcv_okx(symbol, '1d',  limit=100)
         df_3d  = fetch_ohlcv_okx(symbol, '1d',  limit=200)  # aggregate pour 3D
 
-        df_1h_st = fetch_ohlcv_okx_paginated(symbol, '1h', total=1500)  # historique long pour ST AI k-means
-        if df_1h is None or df_4h is None or df_1d is None or df_1h_st is None:
+        if df_1h is None or df_4h is None or df_1d is None:
             return
 
         # Calculs
@@ -1170,52 +1048,12 @@ def update_indicators_for_symbol(symbol):
         except Exception as e:
             logger.error(f'[OKX] bias_15m {symbol}: {e}')
 
-        # SuperTrend AI 1H
-        try:
-            st_1h_series = supertrend_ai(df_1h_st)
-            st_1h_val    = st_1h_series.iloc[-2]  # derniere bougie fermee
-        except Exception as e:
-            logger.error(f'[OKX] ST AI {symbol}: {e}')
-            st_1h_val = None
-
         price = float(df_1h['close'].iloc[-1])
 
-        old_st_1h = None
         with STATE_LOCK:
             if symbol in MOMENTUM_STATE:
-                old_st_1h = MOMENTUM_STATE[symbol].get('st_1h')
-                if bias_2d:   MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
-                if st_1h_val: MOMENTUM_STATE[symbol]['st_1h']   = st_1h_val
-                # Stocker bias_1h et bias_15m pour la stratégie SCALP
+                if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 MOMENTUM_STATE[symbol]['bias_1h'] = bias_1h
-
-        # Détection flip ST AI 1H
-        if st_1h_val and old_st_1h and st_1h_val != old_st_1h:
-            m = MOMENTUM_STATE.get(symbol, {})
-            ctx_4h    = m.get('st_context_4h')
-            ctx_1h    = m.get('st_context_1h')
-            bias_2d_v = m.get('bias_2d')
-            st_expected = st_1h_val  # 'buy' ou 'sell'
-            direction   = "LONG" if st_1h_val == 'buy' else "SHORT"
-            emoji       = "🟢" if direction == "LONG" else "🔴"
-
-            # MOMENTUM : Bias 2D + ST Context 1H + flip ST AI 1H
-            if bias_2d_v and ctx_1h == st_expected and (
-                (direction == "LONG"  and bias_2d_v == 'bull') or
-                (direction == "SHORT" and bias_2d_v == 'bear')
-            ) and should_send(symbol, f"momentum_entry_1h_{st_expected}"):
-                send_telegram(
-                    f"{emoji} <b>[MOMENTUM - ENTREE 1H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 2D: {bias_2d_v.upper()}\n"
-                    f"✅ ST Context 1H: {ctx_1h.upper()}\n"
-                    f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'MOMENTUM')
-                logger.info(f"[MOMENTUM] Flip ST AI 1H: {symbol} {direction}")
 
 
 

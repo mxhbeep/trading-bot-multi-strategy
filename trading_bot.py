@@ -22,72 +22,71 @@ CONFIG = {
     'TELEGRAM_CHAT_ID': os.environ.get('TELEGRAM_CHAT_ID', ''),
     
     'SYMBOLS': {
-        'AAVE/USDT': 'okx',
-        'APT/USDT': 'okx',
-        'ARB/USDT': 'okx',
-        'ATOM/USDT': 'okx',
-        'AVAX/USDT': 'okx',
-        'AXS/USDT': 'okx',
-        'BNB/USDT': 'okx',
-        'BONK/USDT': 'okx',
-        'BTC/USDT': 'okx',
-        'CRV/USDT': 'okx',
-        'CVX/USDT': 'okx',
-        'DOGE/USDT': 'okx',
-        'ADA/USDT': 'okx',
-        'DYDX/USDT': 'okx',
-        'LDO/USDT': 'okx',
-        'DOT/USDT': 'okx',
-        'ENA/USDT': 'okx',
-        'ETH/USDT': 'okx',
-        'FET/USDT': 'okx',
-        'FIL/USDT': 'okx',
-        'FLOKI/USDT': 'okx',
-        'GALA/USDT': 'okx',
-        'HBAR/USDT': 'okx',
-        'HYPE/USDT': 'okx',
-        'IMX/USDT': 'okx',
-        'INJ/USDT': 'okx',
-        'JTO/USDT': 'okx',
-        'JUP/USDT': 'okx',
-        'LINK/USDT': 'okx',
-        'LTC/USDT': 'okx',
-        'MANA/USDT': 'okx',
-        'MOVE/USDT': 'okx',
-        'NEAR/USDT': 'okx',
-        'ONDO/USDT': 'okx',
-        'OP/USDT': 'okx',
-        'PENDLE/USDT': 'okx',
-        'PENGU/USDT': 'okx',
-        'PEPE/USDT': 'okx',
-        'PYTH/USDT': 'okx',
-        'RAY/USDT': 'okx',
-        'RENDER/USDT': 'okx',
-        'SAND/USDT': 'okx',
-        'SEI/USDT': 'okx',
-        'SOL/USDT': 'okx',
-        'STX/USDT': 'okx',
-        'SUI/USDT': 'okx',
-        'TIA/USDT': 'okx',
-        'TON/USDT': 'okx',
-        'VIRTUAL/USDT': 'okx',
-        'WIF/USDT': 'okx',
-        'WLD/USDT': 'okx',
-        'XRP/USDT': 'okx',
-        'ZK/USDT': 'okx',
-        'ZRO/USDT': 'okx',
-        'UNI/USDT': 'okx',
-        'SHIB/USDT': 'okx',
-
-        'ENJ/USDT': 'okx',
-        'APE/USDT': 'okx',
-        'CORE/USDT': 'okx',
-        'TURBO/USDT': 'okx',
-        'MEW/USDT': 'okx',
-        'NEIRO/USDT': 'okx',
-        'STRK/USDT': 'okx',
-        'BERA/USDT': 'okx',
-        'SONIC/USDT': 'okx',
+        'AAVE/USDT': {'exchange': 'okx', 'scalp': False},
+        'APT/USDT': {'exchange': 'okx', 'scalp': True},
+        'ARB/USDT': {'exchange': 'okx', 'scalp': True},
+        'ATOM/USDT': {'exchange': 'okx', 'scalp': False},
+        'AVAX/USDT': {'exchange': 'okx', 'scalp': True},
+        'AXS/USDT': {'exchange': 'okx', 'scalp': False},
+        'BNB/USDT': {'exchange': 'okx', 'scalp': True},
+        'BONK/USDT': {'exchange': 'okx', 'scalp': True},
+        'BTC/USDT': {'exchange': 'okx', 'scalp': True},
+        'CRV/USDT': {'exchange': 'okx', 'scalp': False},
+        'CVX/USDT': {'exchange': 'okx', 'scalp': False},
+        'DOGE/USDT': {'exchange': 'okx', 'scalp': True},
+        'ADA/USDT': {'exchange': 'okx', 'scalp': True},
+        'DYDX/USDT': {'exchange': 'okx', 'scalp': False},
+        'LDO/USDT': {'exchange': 'okx', 'scalp': False},
+        'DOT/USDT': {'exchange': 'okx', 'scalp': False},
+        'ENA/USDT': {'exchange': 'okx', 'scalp': False},
+        'ETH/USDT': {'exchange': 'okx', 'scalp': True},
+        'FET/USDT': {'exchange': 'okx', 'scalp': False},
+        'FIL/USDT': {'exchange': 'okx', 'scalp': False},
+        'FLOKI/USDT': {'exchange': 'okx', 'scalp': True},
+        'GALA/USDT': {'exchange': 'okx', 'scalp': False},
+        'HBAR/USDT': {'exchange': 'okx', 'scalp': False},
+        'HYPE/USDT': {'exchange': 'okx', 'scalp': False},
+        'IMX/USDT': {'exchange': 'okx', 'scalp': False},
+        'INJ/USDT': {'exchange': 'okx', 'scalp': True},
+        'JTO/USDT': {'exchange': 'okx', 'scalp': False},
+        'JUP/USDT': {'exchange': 'okx', 'scalp': False},
+        'LINK/USDT': {'exchange': 'okx', 'scalp': True},
+        'LTC/USDT': {'exchange': 'okx', 'scalp': False},
+        'MANA/USDT': {'exchange': 'okx', 'scalp': False},
+        'MOVE/USDT': {'exchange': 'okx', 'scalp': False},
+        'NEAR/USDT': {'exchange': 'okx', 'scalp': True},
+        'ONDO/USDT': {'exchange': 'okx', 'scalp': False},
+        'OP/USDT': {'exchange': 'okx', 'scalp': True},
+        'PENDLE/USDT': {'exchange': 'okx', 'scalp': False},
+        'PENGU/USDT': {'exchange': 'okx', 'scalp': False},
+        'PEPE/USDT': {'exchange': 'okx', 'scalp': True},
+        'PYTH/USDT': {'exchange': 'okx', 'scalp': False},
+        'RAY/USDT': {'exchange': 'okx', 'scalp': False},
+        'RENDER/USDT': {'exchange': 'okx', 'scalp': False},
+        'SAND/USDT': {'exchange': 'okx', 'scalp': False},
+        'SEI/USDT': {'exchange': 'okx', 'scalp': False},
+        'SOL/USDT': {'exchange': 'okx', 'scalp': True},
+        'STX/USDT': {'exchange': 'okx', 'scalp': False},
+        'SUI/USDT': {'exchange': 'okx', 'scalp': True},
+        'TIA/USDT': {'exchange': 'okx', 'scalp': False},
+        'TON/USDT': {'exchange': 'okx', 'scalp': False},
+        'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False},
+        'WIF/USDT': {'exchange': 'okx', 'scalp': True},
+        'WLD/USDT': {'exchange': 'okx', 'scalp': False},
+        'XRP/USDT': {'exchange': 'okx', 'scalp': True},
+        'ZK/USDT': {'exchange': 'okx', 'scalp': False},
+        'ZRO/USDT': {'exchange': 'okx', 'scalp': False},
+        'UNI/USDT': {'exchange': 'okx', 'scalp': False},
+        'SHIB/USDT': {'exchange': 'okx', 'scalp': True},
+        'ENJ/USDT': {'exchange': 'okx', 'scalp': False},
+        'APE/USDT': {'exchange': 'okx', 'scalp': False},
+        'CORE/USDT': {'exchange': 'okx', 'scalp': False},
+        'TURBO/USDT': {'exchange': 'okx', 'scalp': False},
+        'MEW/USDT': {'exchange': 'okx', 'scalp': False},
+        'NEIRO/USDT': {'exchange': 'okx', 'scalp': False},
+        'STRK/USDT': {'exchange': 'okx', 'scalp': False},
+        'BERA/USDT': {'exchange': 'okx', 'scalp': False},
+        'SONIC/USDT': {'exchange': 'okx', 'scalp': False},
     },
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
@@ -133,7 +132,7 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     total_symbols = len(CONFIG['SYMBOLS'])
-    okx_count = sum(1 for ex in CONFIG['SYMBOLS'].values() if ex == 'okx')
+    okx_count = sum(1 for ex in CONFIG['SYMBOLS'].values() if ex.get('exchange') == 'okx')
     return f"""
     <h1>Trading Bot Multi-Strategy</h1>
     <p>Status: Running</p>
@@ -442,10 +441,10 @@ def format_tv_symbol(s):
     return s
 
 def get_exchange_for_symbol(symbol):
-    exchange_name = CONFIG['SYMBOLS'].get(symbol)
-    if not exchange_name:
+    sym_cfg = CONFIG['SYMBOLS'].get(symbol)
+    if not sym_cfg:
         return None
-    return exchanges.get(exchange_name)
+    return exchanges.get(sym_cfg.get('exchange'))
 
 def parse_st_context_value(val, trend_level=1.96):
     """
@@ -606,7 +605,7 @@ def webhook():
         audit_log(data, status="ignoré_watchlist")
         return jsonify({'status': 'ignored', 'reason': 'not_in_watchlist'}), 200
 
-    exchange_name = CONFIG['SYMBOLS'][symbol]
+    exchange_name = CONFIG['SYMBOLS'][symbol].get('exchange', 'okx')
     init_symbol_states(symbol)
 
     ema200_value = None
@@ -770,7 +769,7 @@ def webhook():
     # ========================================================================
     # LOGIQUE SCALP : ST Context 4H + ST Context 1H + Bias 1H → ST AI 15min
     # ========================================================================
-    if strat in ['scalp', 'all']:
+    if strat in ['scalp', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
         m = MOMENTUM_STATE[symbol]
 
         if alert_type == 'supertrend' and tf == '15m':

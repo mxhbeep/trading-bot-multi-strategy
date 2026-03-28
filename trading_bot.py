@@ -34,6 +34,9 @@ CONFIG = {
         'CRV/USDT': 'okx',
         'CVX/USDT': 'okx',
         'DOGE/USDT': 'okx',
+        'ADA/USDT': 'okx',
+        'DYDX/USDT': 'okx',
+        'LDO/USDT': 'okx',
         'DOT/USDT': 'okx',
         'ENA/USDT': 'okx',
         'ETH/USDT': 'okx',
@@ -75,7 +78,7 @@ CONFIG = {
         'ZRO/USDT': 'okx',
         'UNI/USDT': 'okx',
         'SHIB/USDT': 'okx',
-        'GRT/USDT': 'okx',
+
         'ENJ/USDT': 'okx',
         'APE/USDT': 'okx',
         'CORE/USDT': 'okx',

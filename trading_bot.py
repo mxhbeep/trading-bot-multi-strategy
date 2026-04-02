@@ -117,7 +117,7 @@ def track_alert(symbol, strategy):
         WEEKLY_STATS[symbol] = {
             'SAFE': 0, 'MOMENTUM': 0, 'CONTEXT': 0,
             'CONTEXT_A': 0, 'CONTEXT_B': 0, 'CONTEXT_B+': 0,
-            'CONTEXT_V2': 0, 'SCALP': 0,
+            'CONTEXT_V2': 0, 'TREND': 0, 'SCALP': 0,
         }
     if strategy in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] += 1
@@ -313,6 +313,7 @@ def send_weekly_report():
     total_momentum  = sum(s.get('MOMENTUM', 0)    for s in WEEKLY_STATS.values())
     total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
     total_ctx_v2    = sum(s.get('CONTEXT_V2', 0)  for s in WEEKLY_STATS.values())
+    total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
     total_scalp     = sum(s.get('SCALP', 0)       for s in WEEKLY_STATS.values())
     total_ctx_a     = sum(s.get('CONTEXT_A', 0)  for s in WEEKLY_STATS.values())
     total_ctx_b     = sum(s.get('CONTEXT_B', 0)  for s in WEEKLY_STATS.values())
@@ -324,6 +325,7 @@ def send_weekly_report():
         f"  • MOMENTUM: {total_momentum}\n"
         f"  • CONTEXT: {total_context}\n"
         f"  • CONTEXT V2: {total_ctx_v2}\n"
+        f"  • TREND: {total_trend}\n"
         f"  • SCALP: {total_scalp}\n"
         f"  • CONTEXT A: {total_ctx_a}\n"
         f"  • CONTEXT B: {total_ctx_b}\n"
@@ -560,7 +562,7 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
-            'st_1h': None, 'st_4h': None,
+            'st_1h': None, 'st_4h': None, 'st_1d': None,
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
         }
@@ -632,6 +634,7 @@ def webhook():
             pass  # géré dans le bloc CONTEXT ci-dessous
         if alert_type == 'supertrend' and tf == '1h':  m['st_1h'] = parse_supertrend_value(val)
         if alert_type == 'supertrend' and tf == '4h':  m['st_4h'] = parse_supertrend_value(val)
+        if alert_type == 'supertrend' and tf == '1d':  m['st_1d'] = parse_supertrend_value(val)
         # Nouveaux états 15min pour SCALP
         if alert_type == 'st_context' and tf == '15m':
             ST_CONTEXT_15M[symbol] = parse_st_context_value(val)
@@ -765,6 +768,38 @@ def webhook():
                 )
                 track_alert(symbol, 'CONTEXT_V2')
                 logger.info(f"[CONTEXT V2] Pyramiding 4H: {symbol} {direction_p}")
+
+    # ========================================================================
+    # LOGIQUE TREND : Bias 3D + ST AI 1D → flip ST AI 1H
+    # ========================================================================
+    if strat in ['trend', 'all']:
+        m = MOMENTUM_STATE[symbol]
+
+        if alert_type == 'supertrend' and tf == '1h':
+            bias_3d_v  = m.get('bias_3d')
+            st_1d      = m.get('st_1d')
+            st_val     = parse_supertrend_value(val)
+            direction_t = "LONG" if st_val == 'buy' else "SHORT"
+            expected   = st_val
+            bias_3d_ok = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
+            st_1d_ok   = st_1d == expected
+
+            if (bias_3d_ok and st_1d_ok
+                    and should_send(symbol, f"trend_entry_1h_{st_val}", event_id=event_id)):
+                emoji = "🟢" if direction_t == "LONG" else "🔴"
+                send_telegram(
+                    f"{emoji} <b>[TREND - ENTREE 1H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction_t}\n"
+                    f"💰 Price: ${price:.4f}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 3D: {bias_3d_v.upper()}\n"
+                    f"✅ SuperTrend AI 1D: {st_1d.upper()} (filtre)\n"
+                    f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'TREND')
+                logger.info(f"[TREND] Alerte: {symbol} {direction_t}")
 
     # ========================================================================
     # LOGIQUE SCALP : ST Context 4H + ST Context 1H + Bias 1H → ST AI 15min

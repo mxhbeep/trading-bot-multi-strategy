@@ -536,16 +536,17 @@ def build_event_id(data, symbol, strat, tf, alert_type, val):
         return None
     return f"{symbol}|{strat}|{tf}|{alert_type}|{val}|{candle_ts}"
 
-def should_send(symbol, key, event_id=None):
+def should_send(symbol, key, event_id=None, cooldown=None):
     now = time.time()
     k = f"{symbol}:{key}"
+    effective_cooldown = cooldown if cooldown is not None else CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']
     with STATE_LOCK:
         if event_id:
             previous_event = LAST_SIGNAL_EVENTS.get(k)
             if previous_event == event_id:
                 return False
             LAST_SIGNAL_EVENTS[k] = event_id
-        if k not in LAST_SIGNALS or (now - LAST_SIGNALS[k] > CONFIG['MIN_TIME_BETWEEN_SAME_ALERT']):
+        if k not in LAST_SIGNALS or (now - LAST_SIGNALS[k] > effective_cooldown):
             LAST_SIGNALS[k] = now
             return True
     return False
@@ -660,7 +661,7 @@ def webhook():
                 logger.info(f"[PREP] MOMENTUM {direction} {symbol} ajouté au buffer")
 
             # SIGNAL : ST AI 1H flip
-            if ctx_ok and alert_type == 'supertrend' and tf == '1h' and val == st_expected and should_send(symbol, "momentum_entry_1h", event_id=event_id):
+            if ctx_ok and alert_type == 'supertrend' and tf == '1h' and val == st_expected and should_send(symbol, "momentum_entry_1h", event_id=event_id, cooldown=14400):
                 emoji = "🟢" if direction == "LONG" else "🔴"
                 send_telegram(
                     f"{emoji} <b>[MOMENTUM - ENTREE 1H]</b> {symbol}\n"
@@ -676,7 +677,7 @@ def webhook():
                 track_alert(symbol, 'MOMENTUM')
 
             # SIGNAL : ST AI 4H flip
-            if ctx_ok and alert_type == 'supertrend' and tf == '4h' and val == st_expected and should_send(symbol, "momentum_entry_4h", event_id=event_id):
+            if ctx_ok and alert_type == 'supertrend' and tf == '4h' and val == st_expected and should_send(symbol, "momentum_entry_4h", event_id=event_id, cooldown=14400):
                 emoji = "🟢" if direction == "LONG" else "🔴"
                 send_telegram(
                     f"{emoji} <b>[MOMENTUM - ENTREE 4H]</b> {symbol}\n"
@@ -725,7 +726,7 @@ def webhook():
             expected     = st_val
             bias_3d_ok   = (bias_3d_v == 'bull' and direction_v2 == 'LONG') or (bias_3d_v == 'bear' and direction_v2 == 'SHORT')
             if (bias_3d_ok and ctx_4h == expected and ctx_1h == expected
-                    and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id)):
+                    and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 send_telegram(
                     f"{emoji} <b>[CONTEXT V2 - ENTREE 1H]</b> {symbol}\n"
@@ -752,7 +753,7 @@ def webhook():
             expected    = st_4h_val
             bias_3d_ok  = (bias_3d_v == 'bull' and direction_p == 'LONG') or (bias_3d_v == 'bear' and direction_p == 'SHORT')
             if (bias_3d_ok and ctx_4h == expected and ctx_1h == expected
-                    and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id)):
+                    and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
                 send_telegram(
                     f"{emoji} <b>[CONTEXT V2 - PYRAMIDING 4H]</b> {symbol}\n"
@@ -785,7 +786,7 @@ def webhook():
             st_1d_ok   = st_1d == expected
 
             if (bias_3d_ok and st_1d_ok
-                    and should_send(symbol, f"trend_entry_1h_{st_val}", event_id=event_id)):
+                    and should_send(symbol, f"trend_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_t == "LONG" else "🔴"
                 send_telegram(
                     f"{emoji} <b>[TREND - ENTREE 1H]</b> {symbol}\n"

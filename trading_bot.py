@@ -654,11 +654,11 @@ def webhook():
             ctx_expected = 'buy'  if direction == "LONG" else 'sell'
             ctx_ok = m.get('st_context_1h') == ctx_expected
 
-            # PREP : Bias 2D + ST Context 1H (sans signal ST)
+            # PREP MOMENTUM : Bias 3D + ST Context 1H alignés (signal ST AI 1H attendu)
             if ctx_ok and alert_type == 'st_context' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
                 with STATE_LOCK:
                     PREP_BUFFER.append({'strat': 'MOMENTUM', 'dir': direction, 'sym': symbol, 'price': price})
-                logger.info(f"[PREP] MOMENTUM {direction} {symbol} ajouté au buffer")
+                logger.info(f"[PREP] MOMENTUM {direction} {symbol} — Bias 3D + ST Context 1H alignés")
 
             # SIGNAL : ST AI 1H flip
             if ctx_ok and alert_type == 'supertrend' and tf == '1h' and val == st_expected and should_send(symbol, "momentum_entry_1h", event_id=event_id, cooldown=14400):
@@ -702,12 +702,18 @@ def webhook():
             m['st_context_4h'] = parse_st_context_value(val)
             logger.info(f"[CONTEXT] {symbol} ST Context 4H: {old_val} → {m['st_context_4h']}")
 
-            # PREP : envoi alerte zone dès réception ST Context 4H
-            if m['st_context_4h'] is not None and should_send(symbol, f"context_prep_{m['st_context_4h']}", event_id=event_id):
-                direction = "LONG" if m['st_context_4h'] == 'buy' else "SHORT"
-                with STATE_LOCK:
-                    PREP_BUFFER.append({'strat': 'CONTEXT', 'dir': direction, 'sym': symbol, 'price': price})
-                logger.info(f"[PREP] CONTEXT {direction} {symbol} zone 4H active")
+            # PREP CONTEXT V2 : ST Context 4H + ST Context 1H + Bias 3D tous alignés
+            if m['st_context_4h'] is not None:
+                _dir_prep    = "LONG" if m['st_context_4h'] == 'buy' else "SHORT"
+                _expected    = m['st_context_4h']  # 'buy' ou 'sell'
+                _bias_3d     = m.get('bias_3d')
+                _ctx_1h      = m.get('st_context_1h')
+                _bias_3d_ok  = (_bias_3d == 'bull' and _dir_prep == 'LONG') or (_bias_3d == 'bear' and _dir_prep == 'SHORT')
+                _ctx_1h_ok   = _ctx_1h == _expected
+                if _bias_3d_ok and _ctx_1h_ok and should_send(symbol, f"context_prep_{_expected}", event_id=event_id):
+                    with STATE_LOCK:
+                        PREP_BUFFER.append({'strat': 'CONTEXT V2', 'dir': _dir_prep, 'sym': symbol, 'price': price})
+                    logger.info(f"[PREP] CONTEXT V2 {_dir_prep} {symbol} — Bias 3D + ST Context 4H + 1H alignés")
 
         # SIGNAL : ST AI 1H flip dans le sens du context 4H
     # ========================================================================

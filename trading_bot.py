@@ -91,6 +91,7 @@ CONFIG = {
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
+    'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
 }
@@ -468,6 +469,25 @@ def parse_st_context_value(val, trend_level=1.96):
         logger.warning(f"[WARN] ST Context valeur invalide: '{val}'")
         return None
 
+def send_to_tapbit_bot(symbol: str, bias_3d: str, macd_1d: str):
+    """Envoie Bias 3D et MACD 1D au bot Tapbit après chaque calcul OKX."""
+    url = CONFIG.get('TAPBIT_BOT_URL', '')
+    if not url:
+        return
+    try:
+        # Bias 3D
+        requests.post(f"{url}/webhook", json={
+            'symbol': symbol, 'type': 'bias_3d', 'value': bias_3d,
+            'tf': '3d', 'strategy': 'trend', 'price': 0
+        }, timeout=5)
+        # MACD 1D
+        requests.post(f"{url}/webhook", json={
+            'symbol': symbol, 'type': 'macd_1d', 'value': macd_1d,
+            'tf': '1d', 'strategy': 'trend', 'price': 0
+        }, timeout=5)
+    except Exception as e:
+        logger.debug(f"[TAPBIT] Envoi échoué {symbol}: {e}")
+
 def parse_supertrend_value(val):
     """Convertit la valeur brute du SuperTrend AI en 'buy' ou 'sell'.
     Accepte 'buy'/'sell' (ancien format) et '1'/'0' (nouveau format via {{plot_2}}).
@@ -563,7 +583,7 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
-            'st_1h': None, 'st_4h': None, 'st_1d': None,
+            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None,
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
         }
@@ -634,7 +654,23 @@ def webhook():
         if alert_type == 'st_context' and tf == '4h':
             pass  # géré dans le bloc CONTEXT ci-dessous
         if alert_type == 'supertrend' and tf == '1h':  m['st_1h'] = parse_supertrend_value(val)
-        if alert_type == 'supertrend' and tf == '4h':  m['st_4h'] = parse_supertrend_value(val)
+        if alert_type == 'macd_1d':
+            v = str(val_raw).strip().lower()
+            if v in ('bull', 'bear'): m['macd_1d'] = v
+        if alert_type == 'supertrend' and tf == '4h':
+            m['st_4h'] = parse_supertrend_value(val)
+            # Relai vers bot Tapbit
+            tapbit_url = CONFIG.get('TAPBIT_BOT_URL', '')
+            if tapbit_url and symbol in CONFIG['SYMBOLS']:
+                def _relay_4h(sym=symbol, v=val_raw, p=price):
+                    try:
+                        requests.post(f"{tapbit_url}/webhook", json={
+                            'symbol': sym, 'type': 'supertrend', 'tf': '4h',
+                            'value': v, 'price': p, 'strategy': 'trend'
+                        }, timeout=5)
+                    except Exception as e:
+                        logger.debug(f"[TAPBIT] Relai 4H échoué {sym}: {e}")
+                threading.Thread(target=_relay_4h, daemon=True).start()
         if alert_type == 'supertrend' and tf == '1d':  m['st_1d'] = parse_supertrend_value(val)
         # Nouveaux états 15min pour SCALP
         if alert_type == 'st_context' and tf == '15m':
@@ -777,36 +813,40 @@ def webhook():
                 logger.info(f"[CONTEXT V2] Pyramiding 4H: {symbol} {direction_p}")
 
     # ========================================================================
-    # LOGIQUE TREND : Bias 3D + ST AI 1D → flip ST AI 1H
+    # LOGIQUE TREND : Bias 3D + MACD 1D + ST AI 1D → flip ST AI 4H
     # ========================================================================
     if strat in ['trend', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        if alert_type == 'supertrend' and tf == '1h':
-            bias_3d_v  = m.get('bias_3d')
-            st_1d      = m.get('st_1d')
-            st_val     = parse_supertrend_value(val)
+        if alert_type == 'supertrend' and tf == '4h':
+            bias_3d_v   = m.get('bias_3d')
+            st_1d       = m.get('st_1d')
+            macd_1d_v   = m.get('macd_1d')
+            st_val      = parse_supertrend_value(val)
             direction_t = "LONG" if st_val == 'buy' else "SHORT"
-            expected   = st_val
-            bias_3d_ok = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
-            st_1d_ok   = st_1d == expected
+            expected    = st_val
+            bias_3d_ok  = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
+            st_1d_ok    = st_1d == expected
+            macd_1d_ok  = (macd_1d_v == 'bull' and direction_t == 'LONG') or (macd_1d_v == 'bear' and direction_t == 'SHORT')
 
-            if (bias_3d_ok and st_1d_ok
-                    and should_send(symbol, f"trend_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
+            if (bias_3d_ok and st_1d_ok and macd_1d_ok
+                    and should_send(symbol, f"trend_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_t == "LONG" else "🔴"
                 send_telegram(
-                    f"{emoji} <b>[TREND - ENTREE 1H]</b> {symbol}\n"
+                    f"{emoji} <b>[TREND - ENTREE 4H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_t}\n"
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 3D: {bias_3d_v.upper()}\n"
+                    f"✅ MACD 1D: {macd_1d_v.upper()} (filtre)\n"
                     f"✅ SuperTrend AI 1D: {st_1d.upper()} (filtre)\n"
-                    f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
+                    f"✅ SuperTrend AI 4H: {st_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'TREND')
                 logger.info(f"[TREND] Alerte: {symbol} {direction_t}")
+
 
     # ========================================================================
     # LOGIQUE SCALP : ST Context 4H + ST Context 1H + Bias 1H → ST AI 15min
@@ -1114,6 +1154,9 @@ def update_indicators_for_symbol(symbol):
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
+        # Envoyer Bias 3D + MACD 1D au bot Tapbit
+        if bias_3d and macd_1d:
+            threading.Thread(target=send_to_tapbit_bot, args=(symbol, bias_3d, macd_1d), daemon=True).start()
 
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")

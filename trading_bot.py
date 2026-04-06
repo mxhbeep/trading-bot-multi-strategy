@@ -584,6 +584,8 @@ def init_symbol_states(symbol):
             'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None,
+            'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
+            'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
         }
@@ -658,7 +660,10 @@ def webhook():
             v = str(val_raw).strip().lower()
             if v in ('bull', 'bear'): m['macd_1d'] = v
         if alert_type == 'supertrend' and tf == '4h':
+            prev_4h = m.get('st_4h')
             m['st_4h'] = parse_supertrend_value(val)
+            if m['st_4h'] and m['st_4h'] != prev_4h:  # flip détecté
+                m['last_st_4h'] = m['st_4h']
             # Relai vers bot Tapbit
             tapbit_url = CONFIG.get('TAPBIT_BOT_URL', '')
             if tapbit_url and symbol in CONFIG['SYMBOLS']:
@@ -676,8 +681,11 @@ def webhook():
         if alert_type == 'st_context' and tf == '15m':
             ST_CONTEXT_15M[symbol] = parse_st_context_value(val)
         if alert_type == 'supertrend' and tf == '15m':
+            prev_15m = m.get('st_ai_15m')
             st_15m_val = parse_supertrend_value(val)
             m['st_ai_15m'] = st_15m_val
+            if st_15m_val and st_15m_val != prev_15m:  # flip détecté
+                m['last_st_15m'] = st_15m_val
             ST_AI_15M[symbol] = st_15m_val
 
         bias_3d_val = m.get('bias_3d')
@@ -794,7 +802,10 @@ def webhook():
             direction_p = "LONG" if st_4h_val == 'buy' else "SHORT"
             expected    = st_4h_val
             bias_3d_ok  = (bias_3d_v == 'bull' and direction_p == 'LONG') or (bias_3d_v == 'bear' and direction_p == 'SHORT')
-            if (bias_3d_ok and ctx_4h == expected and ctx_1h == expected
+            last_4h     = m.get('last_st_4h')
+            opposite_4h = 'sell' if st_4h_val == 'buy' else 'buy'
+            pyra_4h_ok  = last_4h == opposite_4h
+            if (bias_3d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
                     and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
                 send_telegram(
@@ -809,6 +820,7 @@ def webhook():
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (PYRAMIDING)"
                 )
+                m['last_st_4h'] = None  # reset guard après pyramiding
                 track_alert(symbol, 'CONTEXT_V2')
                 logger.info(f"[CONTEXT V2] Pyramiding 4H: {symbol} {direction_p}")
 
@@ -908,7 +920,10 @@ def webhook():
             elif pos and pos['direction'] == direction_s:
                 bias_15m    = m.get('bias_15m')
                 bias_15m_ok = (bias_15m == 'bear' and direction_s == "LONG") or (bias_15m == 'bull' and direction_s == "SHORT")
-                if bias_15m_ok and should_send(symbol, f"scalp_pyra_{st_15m_val}", event_id=event_id):
+                last_15m     = m.get('last_st_15m')
+                opposite_15m = 'sell' if st_15m_val == 'buy' else 'buy'
+                pyra_15m_ok  = last_15m == opposite_15m
+                if bias_15m_ok and pyra_15m_ok and should_send(symbol, f"scalp_pyra_{st_15m_val}", event_id=event_id):
                     with STATE_LOCK:
                         pos['entries'].append({'price': price, 'ts': datetime.now(timezone.utc).isoformat()})
                         pos['entry_count'] += 1
@@ -922,6 +937,7 @@ def webhook():
                         f"✅ Bias 15m: {bias_15m.upper()} (opposé)\n"
                         f"✅ SuperTrend AI 15min: {st_15m_val.upper()} (PYRAMIDING)"
                     )
+                    m['last_st_15m'] = None  # reset guard après pyramiding
                     track_alert(symbol, 'SCALP')
                     logger.info(f"[SCALP] Pyramiding #{pos['entry_count']}: {symbol} {direction_s}")
 

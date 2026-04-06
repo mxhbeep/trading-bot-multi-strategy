@@ -583,7 +583,7 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
-            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None,
+            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             # Nouveaux états pour CONTEXT v2 et SCALP
@@ -861,7 +861,7 @@ def webhook():
 
 
     # ========================================================================
-    # LOGIQUE SCALP : ST Context 4H + ST Context 1H + Bias 1H → ST AI 15min
+    # LOGIQUE SCALP : ST Context 1H + Bias 15m opposé → flip ST AI 15min
     # ========================================================================
     if strat in ['scalp', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
         m = MOMENTUM_STATE[symbol]
@@ -871,23 +871,24 @@ def webhook():
             ST_AI_15M[symbol] = st_15m_val
             m['st_ai_15m'] = st_15m_val
 
-            ctx_4h      = m.get('st_context_4h')
             ctx_1h      = m.get('st_context_1h')
-            bias_1h     = m.get('bias_1h')
+            bias_15m    = m.get('bias_15m')
+            macd_1h_v   = m.get('macd_1h')
             expected    = st_15m_val
             direction_s = "LONG" if st_15m_val == 'buy' else "SHORT"
             emoji       = "🟢" if direction_s == "LONG" else "🔴"
-            bias_1h_ok  = (bias_1h == 'bull' and direction_s == "LONG") or (bias_1h == 'bear' and direction_s == "SHORT")
+            # Bias 15m opposé = zone de value (bear pour LONG, bull pour SHORT)
+            bias_15m_ok = (bias_15m == 'bear' and direction_s == "LONG") or (bias_15m == 'bull' and direction_s == "SHORT")
+            macd_1h_ok  = (macd_1h_v == 'bull' and direction_s == "LONG") or (macd_1h_v == 'bear' and direction_s == "SHORT")
 
             pos_key = f"{symbol}_SCALP"
-            # Lire et modifier pos dans un seul bloc lock
             with STATE_LOCK:
                 pos = SCALP_POSITIONS.get(pos_key)
                 if pos and pos['direction'] != direction_s:
                     del SCALP_POSITIONS[pos_key]
                     pos = None
-                # Créer position si conditions 1ère entrée réunies
-                is_first_entry = (ctx_4h == expected and ctx_1h == expected and bias_1h_ok)
+                # 1ère entrée : ST Context 1H + Bias 15m opposé
+                is_first_entry = (ctx_1h == expected and bias_15m_ok and macd_1h_ok)
                 if is_first_entry and pos is None and should_send(symbol, f"scalp_entry_{st_15m_val}", event_id=event_id):
                     SCALP_POSITIONS[pos_key] = {
                         'direction': direction_s,
@@ -899,7 +900,7 @@ def webhook():
                 else:
                     is_first_entry = False
 
-            # 1ère entrée : ST Context 4H + ST Context 1H + Bias 1H
+            # 1ère entrée : ST Context 1H + Bias 15m opposé
             if is_first_entry and pos is not None:
                 send_telegram(
                     f"{emoji} <b>[SCALP - ENTREE 15M]</b> {symbol}\n"
@@ -908,9 +909,9 @@ def webhook():
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
-                    f"✅ Bias 1H: {bias_1h.upper()}\n"
+                    f"✅ MACD 1H: {macd_1h_v.upper()}\n"
+                    f"✅ Bias 15m: {bias_15m.upper()} (zone de value)\n"
                     f"✅ SuperTrend AI 15min: {st_15m_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'SCALP')
@@ -1131,6 +1132,7 @@ def update_indicators_for_symbol(symbol):
         bias_1h  = calc_bias_okx(df_1h)
         bias_4h  = calc_bias_okx(df_4h)
         bias_1d  = calc_bias_okx(df_1d)
+        macd_1h  = calc_macd_okx(df_1h)
         macd_4h  = calc_macd_okx(df_4h)
         macd_1d  = calc_macd_okx(df_1d)
         macd_2d  = calc_macd_2d(symbol)
@@ -1164,12 +1166,13 @@ def update_indicators_for_symbol(symbol):
             if symbol in MOMENTUM_STATE:
                 if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 if bias_3d: MOMENTUM_STATE[symbol]['bias_3d'] = bias_3d
-                MOMENTUM_STATE[symbol]['bias_1h'] = bias_1h
-                MOMENTUM_STATE[symbol]['bias_4h'] = bias_4h
+                MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
+                MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
+                MOMENTUM_STATE[symbol]['macd_1h']  = macd_1h
 
 
 
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M1H={macd_1h} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
         # Envoyer Bias 3D + MACD 1D au bot Tapbit
         if bias_3d and macd_1d:
             threading.Thread(target=send_to_tapbit_bot, args=(symbol, bias_3d, macd_1d), daemon=True).start()

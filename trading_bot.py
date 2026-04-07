@@ -874,6 +874,7 @@ def webhook():
             m['st_ai_15m'] = st_15m_val
 
             ctx_1h      = m.get('st_context_1h')
+            ctx_15m     = ST_CONTEXT_15M.get(symbol)
             bias_15m    = m.get('bias_15m')
             macd_1h_v   = m.get('macd_1h')
             expected    = st_15m_val
@@ -890,7 +891,8 @@ def webhook():
                     del SCALP_POSITIONS[pos_key]
                     pos = None
                 # 1ère entrée : ST Context 1H + Bias 15m opposé
-                is_first_entry = (ctx_1h == expected and bias_15m_ok and macd_1h_ok)
+                ctx_15m_ok     = ctx_15m == expected
+                is_first_entry = (ctx_1h == expected and ctx_15m_ok and bias_15m_ok and macd_1h_ok)
                 if is_first_entry and pos is None and should_send(symbol, f"scalp_entry_{st_15m_val}", event_id=event_id):
                     SCALP_POSITIONS[pos_key] = {
                         'direction': direction_s,
@@ -912,6 +914,7 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
+                    f"✅ ST Context 15m: {ctx_15m.upper()}\n"
                     f"✅ MACD 1H: {macd_1h_v.upper()}\n"
                     f"✅ Bias 15m: {bias_15m.upper()} (zone de value)\n"
                     f"✅ SuperTrend AI 15min: {st_15m_val.upper()} (SIGNAL)"
@@ -1134,7 +1137,7 @@ def update_indicators_for_symbol(symbol):
         bias_1h  = calc_bias_okx(df_1h)
         bias_4h  = calc_bias_okx(df_4h)
         bias_1d  = calc_bias_okx(df_1d)
-        macd_1h  = calc_macd_okx(df_1h)
+        macd_1h  = calc_macd_okx(df_1h, fast=8, slow=17, signal=9)
         macd_4h  = calc_macd_okx(df_4h)
         macd_1d  = calc_macd_okx(df_1d)
         macd_2d  = calc_macd_2d(symbol)

@@ -471,6 +471,15 @@ def parse_st_context_value(val, trend_level=1.96):
         logger.warning(f"[WARN] ST Context valeur invalide: '{val}'")
         return None
 
+def is_signal_fresh(last_ts, max_age_seconds):
+    """Retourne True si un signal horodaté est encore frais."""
+    try:
+        if last_ts is None:
+            return False
+        return (datetime.now(timezone.utc).timestamp() - float(last_ts)) <= max_age_seconds
+    except (TypeError, ValueError):
+        return False
+
 def send_to_tapbit_bot(symbol: str, bias_3d: str, macd_1d: str):
     """Envoie Bias 3D et MACD 1D au bot Tapbit après chaque calcul OKX."""
     url = CONFIG.get('TAPBIT_BOT_URL', '')
@@ -585,6 +594,7 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
+            'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None,
             'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
@@ -635,6 +645,21 @@ def webhook():
     exchange_name = CONFIG['SYMBOLS'][symbol].get('exchange', 'okx')
     init_symbol_states(symbol)
 
+    # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
+    m = MOMENTUM_STATE[symbol]
+    if alert_type == 'st_context':
+        parsed_ctx = parse_st_context_value(val)
+        now_ts = datetime.now(timezone.utc).timestamp()
+        if tf == '1h':
+            m['st_context_1h'] = parsed_ctx
+            m['st_context_1h_ts'] = now_ts
+        elif tf == '4h':
+            m['st_context_4h'] = parsed_ctx
+            m['st_context_4h_ts'] = now_ts
+        elif tf == '15m':
+            ST_CONTEXT_15M[symbol] = parsed_ctx
+            m['st_context_15m_ts'] = now_ts
+
     ema200_value = None
     if alert_type == 'ema200' and tf == '1h':
         ema200_raw = get_ema200_raw_value(data, val_raw)
@@ -654,7 +679,6 @@ def webhook():
         m = MOMENTUM_STATE[symbol]
 
         # Mise a jour des etats
-        if alert_type == 'st_context' and tf == '1h':  m['st_context_1h'] = parse_st_context_value(val)
         if alert_type == 'st_context' and tf == '4h':
             pass  # géré dans le bloc CONTEXT ci-dessous
         if alert_type == 'supertrend' and tf == '1h':  m['st_1h'] = parse_supertrend_value(val)
@@ -680,8 +704,6 @@ def webhook():
                 threading.Thread(target=_relay_4h, daemon=True).start()
         if alert_type == 'supertrend' and tf == '1d':  m['st_1d'] = parse_supertrend_value(val)
         # Nouveaux états 15min pour SCALP
-        if alert_type == 'st_context' and tf == '15m':
-            ST_CONTEXT_15M[symbol] = parse_st_context_value(val)
         if alert_type == 'supertrend' and tf == '15m':
             prev_15m = m.get('st_ai_15m')
             st_15m_val = parse_supertrend_value(val)
@@ -745,7 +767,6 @@ def webhook():
         m = MOMENTUM_STATE[symbol]
         if alert_type == 'st_context' and tf == '4h':
             old_val = m.get('st_context_4h')
-            m['st_context_4h'] = parse_st_context_value(val)
             logger.info(f"[CONTEXT] {symbol} ST Context 4H: {old_val} → {m['st_context_4h']}")
 
             # PREP CONTEXT V2 : ST Context 4H + ST Context 1H + Bias 3D tous alignés
@@ -877,6 +898,8 @@ def webhook():
             ctx_15m     = ST_CONTEXT_15M.get(symbol)
             bias_15m    = m.get('bias_15m')
             macd_1h_v   = m.get('macd_1h')
+            ctx_1h_fresh  = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+            ctx_15m_fresh = is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
             expected    = st_15m_val
             direction_s = "LONG" if st_15m_val == 'buy' else "SHORT"
             emoji       = "🟢" if direction_s == "LONG" else "🔴"
@@ -891,8 +914,9 @@ def webhook():
                     del SCALP_POSITIONS[pos_key]
                     pos = None
                 # 1ère entrée : ST Context 1H + Bias 15m opposé
-                ctx_15m_ok     = ctx_15m == expected
-                is_first_entry = (ctx_1h == expected and ctx_15m_ok and bias_15m_ok and macd_1h_ok)
+                ctx_15m_ok     = ctx_15m == expected and ctx_15m_fresh
+                ctx_1h_ok      = ctx_1h == expected and ctx_1h_fresh
+                is_first_entry = (ctx_1h_ok and ctx_15m_ok and bias_15m_ok and macd_1h_ok)
                 if is_first_entry and pos is None and should_send(symbol, f"scalp_entry_{st_15m_val}", event_id=event_id):
                     SCALP_POSITIONS[pos_key] = {
                         'direction': direction_s,

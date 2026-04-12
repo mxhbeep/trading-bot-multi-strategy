@@ -416,6 +416,32 @@ def weekly_report_scheduler():
             time.sleep(30)
 
 
+def tv_alert_watchdog():
+    """Vérifie toutes les heures que les webhooks TradingView arrivent bien."""
+    time.sleep(6 * 3600)
+    logger.info("🔍 TV Alert Watchdog démarré")
+    MAX_AGE = {'1h': 3*3600, '4h': 6*3600, '1d': 30*3600, '15m': 3600}
+    while True:
+        time.sleep(3600)
+        now = time.time()
+        missing = []
+        for tf, max_age in MAX_AGE.items():
+            last_ts = LAST_WEBHOOK_TS.get(tf)
+            if last_ts is None:
+                missing.append(f"  • TF {tf.upper()}: jamais reçu")
+            elif (now - last_ts) > max_age:
+                age_h = (now - last_ts) / 3600
+                missing.append(f"  • TF {tf.upper()}: dernier reçu il y a {age_h:.1f}H")
+        if missing:
+            details = "\n".join(missing)
+            send_telegram(
+                "🚨 <b>[ALERTE] Webhooks TradingView manquants</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"{details}\n\n"
+                "➡️ Vérifier et redémarrer les alertes sur TradingView"
+            )
+            logger.warning(f"[TV WATCHDOG] Alertes manquantes: {missing}")
+
 def heartbeat_scheduler():
     interval = max(300, int(CONFIG['HEARTBEAT_INTERVAL_SECONDS']))
     logger.info(f"💓 Heartbeat scheduler démarré (interval={interval}s)")
@@ -586,6 +612,9 @@ def should_send(symbol, key, event_id=None, cooldown=None):
 ST_AI_15M: dict = {}       # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_15M: dict = {}  # symbol -> 'buy' | 'sell' | None
 
+# Timestamps derniers webhooks TradingView par tf (pour heartbeat)
+LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
+
 # Positions SCALP
 SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 
@@ -634,6 +663,8 @@ def webhook():
             logger.warning(f"[WARN] BIAS valeur invalide pour {symbol}: value='{val_raw}' value2='{val2_raw}'")
 
     logger.info(f"📥 Webhook: {symbol} | strat={strat} | tf={tf} | type={alert_type} | val={val} | price={price}")
+    # Tracker le dernier webhook reçu par tf
+    LAST_WEBHOOK_TS[tf] = time.time()
     audit_log(data, status="reçu")
     event_id = build_event_id(data, symbol, strat, tf, alert_type, val)
 
@@ -1388,7 +1419,10 @@ def startup():
         sentiment_thread = threading.Thread(target=sentiment_scheduler, daemon=True)
         sentiment_thread.start()
 
-        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX + sentiment 4H)")
+        watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
+        watchdog_thread.start()
+
+        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX + sentiment 4H + TV watchdog)")
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")
 

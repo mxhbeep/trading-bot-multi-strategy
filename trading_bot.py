@@ -1034,6 +1034,78 @@ def sentiment_now():
     logger.info("[SENTIMENT] Envoi manuel déclenché")
     return jsonify({'status': 'ok', 'message': 'Sentiment envoyé'}), 200
 
+@app.route('/force_context', methods=['POST'])
+def force_context():
+    """Injecte manuellement un état ST Context.
+    Body: {"symbol": "BTC/USDT", "tf": "1h"|"4h"|"15m", "value": "buy"|"sell"|"none"}
+    Ou pour plusieurs: {"symbols": ["BTC/USDT", "ETH/USDT"], "tf": "4h", "value": "sell"}
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'no data'}), 400
+
+    tf    = normalize_tf(data.get('tf', ''))
+    value = data.get('value', '').lower()
+    ctx   = None if value in ('none', 'null', '') else value
+    if ctx not in ('buy', 'sell', None):
+        return jsonify({'error': 'value doit être buy, sell ou none'}), 400
+
+    symbols = data.get('symbols') or ([data.get('symbol')] if data.get('symbol') else [])
+    updated = []
+    for symbol in symbols:
+        symbol = format_tv_symbol(symbol)
+        if symbol not in CONFIG['SYMBOLS']:
+            continue
+        init_symbol_states(symbol)
+        now_ts = datetime.now(timezone.utc).timestamp()
+        with STATE_LOCK:
+            m = MOMENTUM_STATE[symbol]
+            if tf == '1h':
+                m['st_context_1h']    = ctx
+                m['st_context_1h_ts'] = now_ts
+            elif tf == '4h':
+                m['st_context_4h']    = ctx
+                m['st_context_4h_ts'] = now_ts
+            elif tf == '15m':
+                ST_CONTEXT_15M[symbol] = ctx
+                m['st_context_15m_ts'] = now_ts
+        updated.append(symbol)
+        logger.info(f"[FORCE_CONTEXT] {symbol} st_context_{tf} = {ctx}")
+
+    persist_runtime_state()
+    return jsonify({'status': 'ok', 'updated': updated, 'tf': tf, 'value': ctx}), 200
+
+
+@app.route('/refresh', methods=['POST'])
+def refresh_indicators():
+    """Relance immédiatement le calcul des indicateurs OKX (Bias, MACD).
+    Body optionnel: {"symbol": "BTC/USDT"} pour un seul asset.
+    Sans body: relance pour tous les assets.
+    """
+    data = request.get_json(silent=True) or {}
+    symbol_filter = data.get('symbol')
+
+    if symbol_filter:
+        symbol = format_tv_symbol(symbol_filter)
+        if symbol not in CONFIG['SYMBOLS']:
+            return jsonify({'error': f'{symbol} non dans la watchlist'}), 404
+        symbols = [symbol]
+    else:
+        symbols = list(CONFIG['SYMBOLS'].keys())
+
+    def _run():
+        logger.info(f"[REFRESH] Calcul forcé pour {len(symbols)} assets...")
+        for sym in symbols:
+            try:
+                update_indicators_for_symbol(sym)
+            except Exception as e:
+                logger.error(f"[REFRESH] {sym}: {e}")
+        logger.info("[REFRESH] Terminé")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'status': 'ok', 'message': f'Refresh lancé pour {len(symbols)} assets'}), 200
+
+
 @app.route('/reset_state', methods=['POST'])
 def reset_state_all():
     """Remet tout le state à zéro."""

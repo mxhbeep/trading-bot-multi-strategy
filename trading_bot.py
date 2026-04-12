@@ -116,7 +116,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'MOMENTUM': 0, 'CONTEXT': 0,
+            'SAFE': 0, 'CONTEXT': 0,
             'CONTEXT_A': 0, 'CONTEXT_B': 0, 'CONTEXT_B+': 0,
             'CONTEXT_V2': 0, 'TREND': 0, 'SCALP': 0,
         }
@@ -281,14 +281,12 @@ def send_start_notification():
         f"📊 Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"💾 {redis_status}\n\n"
         "📋 <b>STRATEGIES:</b>\n\n"
-        "1️⃣ <b>MOMENTUM</b>\n"
-        "   • Bias 3D + ST Context 1H + flip ST AI 1H\n\n"
-        "2️⃣ <b>CONTEXT V2</b>\n"
+        "1️⃣ <b>CONTEXT V2</b>\n"
         "   • MACD 3D (12/26/9) + ST Context 4H + ST Context 1H\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n\n"
-        "3️⃣ <b>TREND</b>\n"
+        "2️⃣ <b>TREND</b>\n"
         "   • Bias 3D + MACD 1D (8/17/9) + ST AI 1D + flip ST AI 4H\n\n"
-        "4️⃣ <b>SCALP</b>\n"
+        "3️⃣ <b>SCALP</b>\n"
         "   • MACD 1H (8/17/9) + ST Context 15m\n"
         "   • Signal: Flip ST AI 15min\n"
         "   • Pyramiding: guard flip opposé + ST Context 15m\n\n"
@@ -313,7 +311,6 @@ def send_weekly_report():
     )
 
     total_safe      = sum(s.get('SAFE', 0)        for s in WEEKLY_STATS.values())
-    total_momentum  = sum(s.get('MOMENTUM', 0)    for s in WEEKLY_STATS.values())
     total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
     total_ctx_v2    = sum(s.get('CONTEXT_V2', 0)  for s in WEEKLY_STATS.values())
     total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
@@ -325,7 +322,6 @@ def send_weekly_report():
     msg += (
         "📋 <b>Par stratégie:</b>\n"
         f"  • SAFE: {total_safe}\n"
-        f"  • MOMENTUM: {total_momentum}\n"
         f"  • CONTEXT: {total_context}\n"
         f"  • CONTEXT V2: {total_ctx_v2}\n"
         f"  • TREND: {total_trend}\n"
@@ -704,14 +700,12 @@ def webhook():
                 logger.warning(f"[WARN] EMA200 valeur invalide pour {symbol}: '{ema200_raw}'")
 
     # ========================================================================
-    # LOGIQUE MOMENTUM : Bias 2D + ST Context 1H → ST AI 1H ou ST AI 4H
     # ========================================================================
-    if strat in ['momentum', 'all']:
+    # MISE À JOUR DES ÉTATS (ST AI, relai Tapbit, guards)
+    # ========================================================================
+    if strat in ['momentum', 'context', 'trend', 'scalp', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        # Mise a jour des etats
-        if alert_type == 'st_context' and tf == '4h':
-            pass  # géré dans le bloc CONTEXT ci-dessous
         if alert_type == 'supertrend' and tf == '1h':  m['st_1h'] = parse_supertrend_value(val)
         if alert_type == 'macd_1d':
             v = str(val_raw).strip().lower()
@@ -719,7 +713,7 @@ def webhook():
         if alert_type == 'supertrend' and tf == '4h':
             prev_4h = m.get('st_4h')
             m['st_4h'] = parse_supertrend_value(val)
-            if m['st_4h'] and m['st_4h'] != prev_4h:  # flip détecté
+            if m['st_4h'] and m['st_4h'] != prev_4h:
                 m['last_st_4h'] = m['st_4h']
             # Relai vers bot Tapbit
             tapbit_url = CONFIG.get('TAPBIT_BOT_URL', '')
@@ -734,64 +728,14 @@ def webhook():
                         logger.debug(f"[TAPBIT] Relai 4H échoué {sym}: {e}")
                 threading.Thread(target=_relay_4h, daemon=True).start()
         if alert_type == 'supertrend' and tf == '1d':  m['st_1d'] = parse_supertrend_value(val)
-        # Nouveaux états 15min pour SCALP
         if alert_type == 'supertrend' and tf == '15m':
             prev_15m = m.get('st_ai_15m')
             st_15m_val = parse_supertrend_value(val)
             m['st_ai_15m'] = st_15m_val
-            if st_15m_val and st_15m_val != prev_15m:  # flip détecté
+            if st_15m_val and st_15m_val != prev_15m:
                 m['last_st_15m'] = st_15m_val
             ST_AI_15M[symbol] = st_15m_val
 
-        bias_3d_val = m.get('bias_3d')
-        direction = None
-        if bias_3d_val == 'bull':   direction = "LONG"
-        elif bias_3d_val == 'bear': direction = "SHORT"
-
-        if direction:
-            st_expected  = 'buy'  if direction == "LONG" else 'sell'
-            ctx_expected = 'buy'  if direction == "LONG" else 'sell'
-            ctx_ok = m.get('st_context_1h') == ctx_expected
-
-            # PREP MOMENTUM : Bias 3D + ST Context 1H alignés (signal ST AI 1H attendu)
-            if ctx_ok and alert_type == 'st_context' and tf == '1h' and should_send(symbol, "momentum_prep", event_id=event_id):
-                with STATE_LOCK:
-                    PREP_BUFFER.append({'strat': 'MOMENTUM', 'dir': direction, 'sym': symbol, 'price': price})
-                logger.info(f"[PREP] MOMENTUM {direction} {symbol} — Bias 3D + ST Context 1H alignés")
-
-            # SIGNAL : ST AI 1H flip
-            if ctx_ok and alert_type == 'supertrend' and tf == '1h' and val == st_expected and should_send(symbol, "momentum_entry_1h", event_id=event_id, cooldown=14400):
-                emoji = "🟢" if direction == "LONG" else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[MOMENTUM - ENTREE 1H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 3D: {bias_3d_val.upper()}\n"
-                    f"✅ ST Context 1H: {m['st_context_1h'].upper()}\n"
-                    f"✅ SuperTrend AI 1H: {val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'MOMENTUM')
-
-            # SIGNAL : ST AI 4H flip
-            if ctx_ok and alert_type == 'supertrend' and tf == '4h' and val == st_expected and should_send(symbol, "momentum_entry_4h", event_id=event_id, cooldown=14400):
-                emoji = "🟢" if direction == "LONG" else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[MOMENTUM - ENTREE 4H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction}\n"
-                    f"💰 Price: ${price:.4f}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 3D: {bias_3d_val.upper()}\n"
-                    f"✅ ST Context 1H: {m['st_context_1h'].upper()}\n"
-                    f"✅ SuperTrend AI 4H: {val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'MOMENTUM')
-
-    # ========================================================================
     # LOGIQUE CONTEXT : ST Context 4H → ST AI 1H
     # ========================================================================
     if strat in ['context', 'momentum_context', 'all']:

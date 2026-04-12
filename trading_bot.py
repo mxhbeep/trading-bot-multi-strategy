@@ -624,7 +624,7 @@ def init_symbol_states(symbol):
             'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None,
-            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None,
+            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None, 'macd_3d': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             # Nouveaux états pour CONTEXT v2 et SCALP
@@ -815,21 +815,21 @@ def webhook():
 
         # SIGNAL : ST AI 1H flip dans le sens du context 4H
     # ========================================================================
-    # LOGIQUE CONTEXT V2 : Bias 2D + ST Context 4H + ST Context 1H → ST AI 1H
+    # LOGIQUE CONTEXT V2 : MACD 3D + ST Context 4H + ST Context 1H → ST AI 1H
     # ========================================================================
     if strat in ['context', 'all']:
         m = MOMENTUM_STATE[symbol]
 
         # Signal ST AI 1H — CONTEXT V2 (Bias 2D + ST Context 4H + ST Context 1H)
         if alert_type == 'supertrend' and tf == '1h':
-            bias_3d_v    = m.get('bias_3d')
+            macd_3d_v    = m.get('macd_3d')
             ctx_4h       = m.get('st_context_4h')
             ctx_1h       = m.get('st_context_1h')
             st_val       = parse_supertrend_value(val)
             direction_v2 = "LONG" if st_val == 'buy' else "SHORT"
             expected     = st_val
-            bias_3d_ok   = (bias_3d_v == 'bull' and direction_v2 == 'LONG') or (bias_3d_v == 'bear' and direction_v2 == 'SHORT')
-            if (bias_3d_ok and ctx_4h == expected and ctx_1h == expected
+            macd_3d_ok   = (macd_3d_v == 'bull' and direction_v2 == 'LONG') or (macd_3d_v == 'bear' and direction_v2 == 'SHORT')
+            if (macd_3d_ok and ctx_4h == expected and ctx_1h == expected
                     and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 send_telegram(
@@ -839,7 +839,7 @@ def webhook():
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 3D: {bias_3d_v.upper()}\n"
+                    f"✅ MACD 3D: {macd_3d_v.upper()}\n"
                     f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
@@ -850,16 +850,16 @@ def webhook():
         # Pyramiding CONTEXT V2 — flip ST AI 4H
         if alert_type == 'supertrend' and tf == '4h':
             st_4h_val   = parse_supertrend_value(val)
-            bias_3d_v   = m.get('bias_3d')
+            macd_3d_v   = m.get('macd_3d')
             ctx_4h      = m.get('st_context_4h')
             ctx_1h      = m.get('st_context_1h')
             direction_p = "LONG" if st_4h_val == 'buy' else "SHORT"
             expected    = st_4h_val
-            bias_3d_ok  = (bias_3d_v == 'bull' and direction_p == 'LONG') or (bias_3d_v == 'bear' and direction_p == 'SHORT')
+            macd_3d_ok  = (macd_3d_v == 'bull' and direction_p == 'LONG') or (macd_3d_v == 'bear' and direction_p == 'SHORT')
             last_4h     = m.get('last_st_4h')
             opposite_4h = 'sell' if st_4h_val == 'buy' else 'buy'
             pyra_4h_ok  = last_4h == opposite_4h
-            if (bias_3d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
+            if (macd_3d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
                     and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
                 send_telegram(
@@ -869,7 +869,7 @@ def webhook():
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 3D: {bias_3d_v.upper()}\n"
+                    f"✅ MACD 3D: {macd_3d_v.upper()}\n"
                     f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (PYRAMIDING)"
@@ -1239,6 +1239,24 @@ def calc_macd_2d(symbol):
         logger.error(f"[OKX] calc_macd_2d {symbol}: {e}")
         return None
 
+def calc_macd_3d(symbol):
+    """Calcule le MACD 3D en agrégeant les bougies 1D par groupes de 3."""
+    try:
+        df_1d = fetch_ohlcv_okx(symbol, '1d', limit=300)
+        if df_1d is None or len(df_1d) < 90:
+            return None
+        df_3d = df_1d.groupby(df_1d.index // 3).agg({
+            'open':   'first',
+            'high':   'max',
+            'low':    'min',
+            'close':  'last',
+            'volume': 'sum'
+        }).reset_index(drop=True)
+        return calc_macd_okx(df_3d, fast=12, slow=26, signal=9)
+    except Exception as e:
+        logger.error(f"[OKX] calc_macd_3d {symbol}: {e}")
+        return None
+
 def update_indicators_for_symbol(symbol):
     """Met a jour tous les indicateurs calculables pour un asset."""
     try:
@@ -1256,6 +1274,7 @@ def update_indicators_for_symbol(symbol):
         bias_4h  = calc_bias_okx(df_4h)
         bias_1d  = calc_bias_okx(df_1d)
         macd_1h  = calc_macd_okx(df_1h, fast=8, slow=17, signal=9)
+        macd_3d  = calc_macd_3d(symbol)
         macd_4h  = calc_macd_okx(df_4h)
         macd_1d  = calc_macd_okx(df_1d, fast=8, slow=17, signal=9)
         macd_2d  = calc_macd_2d(symbol)
@@ -1292,10 +1311,11 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 MOMENTUM_STATE[symbol]['macd_1h']  = macd_1h
+                MOMENTUM_STATE[symbol]['macd_3d']  = macd_3d
 
 
 
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M1H={macd_1h} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} EMA200={ema200_1h:.4f}")
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} M1H={macd_1h} M4H={macd_4h} M1D={macd_1d} M2D={macd_2d} M3D={macd_3d} EMA200={ema200_1h:.4f}")
         # Envoyer Bias 3D + MACD 1D au bot Tapbit
         if bias_3d and macd_1d:
             threading.Thread(target=send_to_tapbit_bot, args=(symbol, bias_3d, macd_1d), daemon=True).start()

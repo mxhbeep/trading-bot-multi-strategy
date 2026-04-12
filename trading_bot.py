@@ -915,7 +915,7 @@ def webhook():
 
 
     # ========================================================================
-    # LOGIQUE SCALP : ST Context 1H + Bias 15m opposé → flip ST AI 15min
+    # LOGIQUE SCALP : MACD 1H + ST Context 15m → flip ST AI 15min
     # ========================================================================
     if strat in ['scalp', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
         m = MOMENTUM_STATE[symbol]
@@ -925,18 +925,17 @@ def webhook():
             ST_AI_15M[symbol] = st_15m_val
             m['st_ai_15m'] = st_15m_val
 
-            ctx_1h      = m.get('st_context_1h')
-            ctx_15m     = ST_CONTEXT_15M.get(symbol)
-            bias_15m    = m.get('bias_15m')
             macd_1h_v   = m.get('macd_1h')
-            ctx_1h_fresh  = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+            ctx_15m     = ST_CONTEXT_15M.get(symbol)
             ctx_15m_fresh = is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
             expected    = st_15m_val
             direction_s = "LONG" if st_15m_val == 'buy' else "SHORT"
             emoji       = "🟢" if direction_s == "LONG" else "🔴"
-            # Bias 15m opposé = zone de value (bear pour LONG, bull pour SHORT)
-            bias_15m_ok = (bias_15m == 'bear' and direction_s == "LONG") or (bias_15m == 'bull' and direction_s == "SHORT")
+
+            # MACD 1H aligné dans le sens du trade
             macd_1h_ok  = (macd_1h_v == 'bull' and direction_s == "LONG") or (macd_1h_v == 'bear' and direction_s == "SHORT")
+            # ST Context 15m aligné et frais
+            ctx_15m_ok  = ctx_15m == expected and ctx_15m_fresh
 
             pos_key = f"{symbol}_SCALP"
             with STATE_LOCK:
@@ -944,10 +943,7 @@ def webhook():
                 if pos and pos['direction'] != direction_s:
                     del SCALP_POSITIONS[pos_key]
                     pos = None
-                # 1ère entrée : ST Context 1H + Bias 15m opposé
-                ctx_15m_ok     = ctx_15m == expected and ctx_15m_fresh
-                ctx_1h_ok      = ctx_1h == expected and ctx_1h_fresh
-                is_first_entry = (ctx_1h_ok and ctx_15m_ok and bias_15m_ok and macd_1h_ok)
+                is_first_entry = (macd_1h_ok and ctx_15m_ok)
                 if is_first_entry and pos is None and should_send(symbol, f"scalp_entry_{st_15m_val}", event_id=event_id):
                     SCALP_POSITIONS[pos_key] = {
                         'direction': direction_s,
@@ -959,7 +955,6 @@ def webhook():
                 else:
                     is_first_entry = False
 
-            # 1ère entrée : ST Context 1H + Bias 15m opposé
             if is_first_entry and pos is not None:
                 send_telegram(
                     f"{emoji} <b>[SCALP - ENTREE 15M]</b> {symbol}\n"
@@ -968,23 +963,19 @@ def webhook():
                     f"💰 Price: ${price:.4f}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST Context 1H: {ctx_1h.upper()}\n"
+                    f"✅ MACD 1H: {macd_1h_v.upper()} (filtre)\n"
                     f"✅ ST Context 15m: {ctx_15m.upper()}\n"
-                    f"✅ MACD 1H: {macd_1h_v.upper()}\n"
-                    f"✅ Bias 15m: {bias_15m.upper()} (zone de value)\n"
                     f"✅ SuperTrend AI 15min: {st_15m_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'SCALP')
                 logger.info(f"[SCALP] Entrée: {symbol} {direction_s}")
 
-            # Pyramiding : position existante + Bias 15m opposé + flip ST AI 15min
+            # Pyramiding : flip ST AI 15min avec guard flip opposé
             elif pos and pos['direction'] == direction_s:
-                bias_15m    = m.get('bias_15m')
-                bias_15m_ok = (bias_15m == 'bear' and direction_s == "LONG") or (bias_15m == 'bull' and direction_s == "SHORT")
                 last_15m     = m.get('last_st_15m')
                 opposite_15m = 'sell' if st_15m_val == 'buy' else 'buy'
                 pyra_15m_ok  = last_15m == opposite_15m
-                if bias_15m_ok and pyra_15m_ok and should_send(symbol, f"scalp_pyra_{st_15m_val}", event_id=event_id):
+                if ctx_15m_ok and pyra_15m_ok and should_send(symbol, f"scalp_pyra_{st_15m_val}", event_id=event_id):
                     with STATE_LOCK:
                         pos['entries'].append({'price': price, 'ts': datetime.now(timezone.utc).isoformat()})
                         pos['entry_count'] += 1
@@ -995,10 +986,10 @@ def webhook():
                         f"💰 Price: ${price:.4f}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ Bias 15m: {bias_15m.upper()} (opposé)\n"
+                        f"✅ ST Context 15m: {ctx_15m.upper()}\n"
                         f"✅ SuperTrend AI 15min: {st_15m_val.upper()} (PYRAMIDING)"
                     )
-                    m['last_st_15m'] = None  # reset guard après pyramiding
+                    m['last_st_15m'] = None
                     track_alert(symbol, 'SCALP')
                     logger.info(f"[SCALP] Pyramiding #{pos['entry_count']}: {symbol} {direction_s}")
 
@@ -1266,7 +1257,7 @@ def update_indicators_for_symbol(symbol):
         bias_1d  = calc_bias_okx(df_1d)
         macd_1h  = calc_macd_okx(df_1h, fast=8, slow=17, signal=9)
         macd_4h  = calc_macd_okx(df_4h)
-        macd_1d  = calc_macd_okx(df_1d)
+        macd_1d  = calc_macd_okx(df_1d, fast=8, slow=17, signal=9)
         macd_2d  = calc_macd_2d(symbol)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)

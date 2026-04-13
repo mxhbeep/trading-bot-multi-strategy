@@ -99,7 +99,8 @@ CONFIG = {
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
-    'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),
+    'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),  # legacy
+    'NTFY_TOPIC': os.environ.get('NTFY_TOPIC', ''),
     'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
@@ -260,22 +261,30 @@ def escape_html(text):
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 def send_bark(title: str, body: str, group: str = "TradingBot"):
-    """Envoie une notification via Bark (iOS, Chine-friendly)."""
-    token = CONFIG.get('BARK_TOKEN', '')
-    if not token:
+    """Legacy — remplacé par send_ntfy."""
+    send_ntfy(title, body)
+
+def send_ntfy(title: str, body: str):
+    """Envoie une notification via ntfy.sh (fonctionne sans VPN en Chine)."""
+    topic = CONFIG.get('NTFY_TOPIC', '')
+    if not topic:
         return
+    import re as _re
+    clean_title = _re.sub(r'<[^>]+>', '', title).strip()
+    clean_body  = _re.sub(r'<[^>]+>', '', body).strip()
     try:
-        import re as _re
-        clean_title = _re.sub(r'<[^>]+>', '', title).strip()
-        clean_body  = _re.sub(r'<[^>]+>', '', body).strip()
-        requests.get(
-            f"https://api.day.app/{token}/{requests.utils.quote(clean_title)}/{requests.utils.quote(clean_body)}",
-            params={'group': group},
+        r = requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=clean_body.encode('utf-8'),
+            headers={'Title': clean_title.encode('utf-8'), 'Priority': 'high', 'Tags': 'chart_increasing'},
             timeout=10
         )
-        logger.info("✅ Bark envoyé")
+        if r.status_code == 200:
+            logger.info("✅ ntfy envoyé")
+        else:
+            logger.warning(f"ntfy erreur: {r.status_code} {r.text}")
     except Exception as e:
-        logger.error(f"Bark error: {e}")
+        logger.error(f"ntfy error: {e}")
 
 def send_telegram(msg):
     if not CONFIG['TELEGRAM_BOT_TOKEN'] or not CONFIG['TELEGRAM_CHAT_ID']:
@@ -297,15 +306,15 @@ def send_telegram(msg):
             logger.error(f"❌ Telegram erreur HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
         logger.error(f"❌ Erreur Telegram: {e}")
-    # Envoi parallèle via Bark
-    if CONFIG.get('BARK_TOKEN'):
+    # Envoi parallèle via ntfy
+    if CONFIG.get('NTFY_TOPIC'):
         try:
             import re as _re
             lines = [l.strip() for l in msg.split('\n') if l.strip()]
             title = _re.sub(r'<[^>]+>', '', lines[0]).strip() if lines else "TradingBot"
-            threading.Thread(target=send_bark, args=(title, msg), daemon=True).start()
+            threading.Thread(target=send_ntfy, args=(title, msg), daemon=True).start()
         except Exception as e:
-            logger.error(f"Bark dispatch: {e}")
+            logger.error(f"ntfy dispatch: {e}")
 
 
 def send_start_notification():
@@ -1031,12 +1040,12 @@ def audit_route():
 
 @app.route('/test_bark', methods=['GET', 'POST'])
 def test_bark():
-    """Test l'envoi Bark."""
-    token = CONFIG.get('BARK_TOKEN', '')
-    if not token:
-        return jsonify({'error': 'BARK_TOKEN non configuré'}), 400
-    send_bark("🤖 Test Bark", "Si tu vois ce message, Bark fonctionne !")
-    return jsonify({'status': 'ok', 'token_prefix': token[:8] + '...'}), 200
+    """Test l'envoi ntfy."""
+    topic = CONFIG.get('NTFY_TOPIC', '')
+    if not topic:
+        return jsonify({'error': 'NTFY_TOPIC non configuré'}), 400
+    send_ntfy("🤖 Test ntfy", "Si tu vois ce message, ntfy fonctionne !")
+    return jsonify({'status': 'ok', 'topic': topic}), 200
 
 @app.route('/sentiment', methods=['POST', 'GET'])
 def sentiment_now():

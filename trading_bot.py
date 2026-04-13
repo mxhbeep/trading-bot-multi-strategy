@@ -342,7 +342,7 @@ def send_start_notification():
         "   • MACD 3D (12/26/9) + ST Context 4H + ST Context 1H\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n\n"
         "2️⃣ <b>TREND</b>\n"
-        "   • Bias 3D + MACD 1D (8/17/9) + ST AI 1D + flip ST AI 4H\n\n"
+        "   • Bias 3D + ST AI 1D + flip ST AI 4H\n\n"
         "3️⃣ <b>SWING</b>\n"
         "   • ST AI 1D + MACD 1D (8/17/9)\n"
         "   • Signal: Flip ST AI 1H — cooldown 4H\n"
@@ -886,7 +886,7 @@ def webhook():
                 logger.info(f"[CONTEXT V2] Pyramiding 4H: {symbol} {direction_p}")
 
     # ========================================================================
-    # LOGIQUE TREND : Bias 3D + MACD 1D + ST AI 1D → flip ST AI 4H
+    # LOGIQUE TREND : Bias 3D + ST AI 1D → flip ST AI 4H
     # ========================================================================
     if strat in ['trend', 'all']:
         m = MOMENTUM_STATE[symbol]
@@ -894,15 +894,13 @@ def webhook():
         if alert_type == 'supertrend' and tf == '4h':
             bias_3d_v   = m.get('bias_3d')
             st_1d       = m.get('st_1d')
-            macd_1d_v   = m.get('macd_1d')
             st_val      = parse_supertrend_value(val)
             direction_t = "LONG" if st_val == 'buy' else "SHORT"
             expected    = st_val
             bias_3d_ok  = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
             st_1d_ok    = st_1d == expected
-            macd_1d_ok  = (macd_1d_v == 'bull' and direction_t == 'LONG') or (macd_1d_v == 'bear' and direction_t == 'SHORT')
 
-            if (bias_3d_ok and st_1d_ok and macd_1d_ok
+            if (bias_3d_ok and st_1d_ok
                     and should_send(symbol, f"trend_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_t == "LONG" else "🔴"
                 send_telegram(
@@ -913,7 +911,6 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 3D: {bias_3d_v.upper()}\n"
-                    f"✅ MACD 1D: {macd_1d_v.upper()} (filtre)\n"
                     f"✅ SuperTrend AI 1D: {st_1d.upper()} (filtre)\n"
                     f"✅ SuperTrend AI 4H: {st_val.upper()} (SIGNAL)"
                 )

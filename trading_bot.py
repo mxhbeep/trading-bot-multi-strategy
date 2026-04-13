@@ -126,7 +126,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'CONTEXT': 0, 'SWING': 0,
+            'SAFE': 0, 'MOMENTUM': 0, 'CONTEXT': 0, 'SWING': 0,
             'CONTEXT_A': 0, 'CONTEXT_B': 0, 'CONTEXT_B+': 0,
             'CONTEXT_V2': 0, 'TREND': 0, 'SCALP': 0,
         }
@@ -343,7 +343,9 @@ def send_start_notification():
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n\n"
         "2️⃣ <b>TREND</b>\n"
         "   • Bias 3D + ST AI 1D + flip ST AI 4H\n\n"
-        "3️⃣ <b>SWING</b>\n"
+        "3️⃣ <b>MOMENTUM</b>\n"
+        "   • MACD 2D + Bias 1D + flip ST AI 4H\n\n"
+        "4️⃣ <b>SWING</b>\n"
         "   • ST AI 1D + MACD 1D (8/17/9)\n"
         "   • Signal: Flip ST AI 1H — cooldown 4H\n"
         "   • 22 assets\n\n"
@@ -371,6 +373,7 @@ def send_weekly_report():
     total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
     total_ctx_v2    = sum(s.get('CONTEXT_V2', 0)  for s in WEEKLY_STATS.values())
     total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
+    total_momentum  = sum(s.get('MOMENTUM', 0)    for s in WEEKLY_STATS.values())
     total_swing     = sum(s.get('SWING', 0)       for s in WEEKLY_STATS.values())
     total_ctx_a     = sum(s.get('CONTEXT_A', 0)  for s in WEEKLY_STATS.values())
     total_ctx_b     = sum(s.get('CONTEXT_B', 0)  for s in WEEKLY_STATS.values())
@@ -382,6 +385,7 @@ def send_weekly_report():
         f"  • CONTEXT: {total_context}\n"
         f"  • CONTEXT V2: {total_ctx_v2}\n"
         f"  • TREND: {total_trend}\n"
+        f"  • MOMENTUM: {total_momentum}\n"
         f"  • SWING: {total_swing}\n"
         f"  • CONTEXT A: {total_ctx_a}\n"
         f"  • CONTEXT B: {total_ctx_b}\n"
@@ -674,7 +678,7 @@ SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_1d': None, 'bias_2d': None, 'bias_3d': None,
+            'bias_1d': None, 'bias_2d': None, 'bias_3d': None, 'macd_2d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None,
             'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None, 'macd_3d': None,
@@ -919,6 +923,37 @@ def webhook():
 
 
     # ========================================================================
+    # ========================================================================
+    # LOGIQUE MOMENTUM : MACD 2D + Bias 1D → flip ST AI 4H
+    # ========================================================================
+    if strat in ['momentum', 'all']:
+        m = MOMENTUM_STATE[symbol]
+
+        if alert_type == 'supertrend' and tf == '4h':
+            macd_2d_v   = m.get('macd_2d')
+            bias_1d_v   = m.get('bias_1d')
+            st_val      = parse_supertrend_value(val)
+            direction_m = "LONG" if st_val == 'buy' else "SHORT"
+            macd_2d_ok  = (macd_2d_v == 'bull' and direction_m == 'LONG') or (macd_2d_v == 'bear' and direction_m == 'SHORT')
+            bias_1d_ok  = (bias_1d_v == 'bull' and direction_m == 'LONG') or (bias_1d_v == 'bear' and direction_m == 'SHORT')
+
+            if (macd_2d_ok and bias_1d_ok
+                    and should_send(symbol, f"momentum_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
+                emoji = "🟢" if direction_m == "LONG" else "🔴"
+                send_telegram(
+                    f"{emoji} <b>[MOMENTUM - ENTREE 4H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction_m}\n"
+                    f"💰 Price: ${format_price(price)}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ MACD 2D: {macd_2d_v.upper()} (filtre)\n"
+                    f"✅ Bias 1D: {bias_1d_v.upper()} (filtre)\n"
+                    f"✅ SuperTrend AI 4H: {st_val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'MOMENTUM')
+                logger.info(f"[MOMENTUM] Alerte: {symbol} {direction_m}")
+
     # ========================================================================
     # LOGIQUE SWING : ST AI 1D + MACD 1D → flip ST AI 1H
     # ========================================================================
@@ -1322,6 +1357,7 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 MOMENTUM_STATE[symbol]['macd_1h']  = macd_1h
+                MOMENTUM_STATE[symbol]['macd_2d']  = macd_2d
                 MOMENTUM_STATE[symbol]['macd_3d']  = macd_3d
 
 

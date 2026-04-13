@@ -260,6 +260,18 @@ def escape_html(text):
     """Échappe les caractères HTML dans le texte (hors balises intentionnelles)."""
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+def format_price(price: float) -> str:
+    """Formate un prix en évitant les zéros pour les très petits assets."""
+    if price == 0:
+        return "N/A"
+    if price < 0.0001:
+        return f"{price:.8f}"
+    if price < 0.01:
+        return f"{price:.6f}"
+    if price < 1:
+        return f"{price:.4f}"
+    return f"{price:.2f}"
+
 def send_bark(title: str, body: str, group: str = "TradingBot"):
     """Legacy — remplacé par send_ntfy."""
     send_ntfy(title, body)
@@ -825,7 +837,7 @@ def webhook():
                     f"{emoji} <b>[CONTEXT V2 - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_v2}\n"
-                    f"💰 Price: ${price:.4f}\n"
+                    f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 3D: {macd_3d_v.upper()}\n"
@@ -855,7 +867,7 @@ def webhook():
                     f"{emoji} <b>[CONTEXT V2 - PYRAMIDING 4H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_p}\n"
-                    f"💰 Price: ${price:.4f}\n"
+                    f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 3D: {macd_3d_v.upper()}\n"
@@ -891,7 +903,7 @@ def webhook():
                     f"{emoji} <b>[TREND - ENTREE 4H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_t}\n"
-                    f"💰 Price: ${price:.4f}\n"
+                    f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 3D: {bias_3d_v.upper()}\n"
@@ -949,7 +961,7 @@ def webhook():
                     f"{emoji} <b>[SCALP - ENTREE 15M]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_s}\n"
-                    f"💰 Price: ${price:.4f}\n"
+                    f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 1H: {macd_1h_v.upper()} (filtre)\n"
@@ -972,7 +984,7 @@ def webhook():
                         f"{emoji} <b>[SCALP - PYRAMIDING #{pos['entry_count']}]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_s}\n"
-                        f"💰 Price: ${price:.4f}\n"
+                        f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                         f"✅ ST Context 15m: {ctx_15m.upper()}\n"

@@ -674,7 +674,7 @@ SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_2d': None, 'bias_3d': None,
+            'bias_1d': None, 'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None,
             'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None, 'macd_3d': None,
@@ -824,13 +824,15 @@ def webhook():
         # Signal ST AI 1H — CONTEXT V2 (Bias 2D + ST Context 4H + ST Context 1H)
         if alert_type == 'supertrend' and tf == '1h':
             macd_3d_v    = m.get('macd_3d')
+            bias_1d_v    = m.get('bias_1d')
             ctx_4h       = m.get('st_context_4h')
             ctx_1h       = m.get('st_context_1h')
             st_val       = parse_supertrend_value(val)
             direction_v2 = "LONG" if st_val == 'buy' else "SHORT"
             expected     = st_val
             macd_3d_ok   = (macd_3d_v == 'bull' and direction_v2 == 'LONG') or (macd_3d_v == 'bear' and direction_v2 == 'SHORT')
-            if (macd_3d_ok and ctx_4h == expected and ctx_1h == expected
+            bias_1d_ok   = (bias_1d_v == 'bull' and direction_v2 == 'LONG') or (bias_1d_v == 'bear' and direction_v2 == 'SHORT')
+            if (macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected
                     and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 send_telegram(
@@ -841,6 +843,7 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 3D: {macd_3d_v.upper()}\n"
+                    f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
@@ -852,15 +855,17 @@ def webhook():
         if alert_type == 'supertrend' and tf == '4h':
             st_4h_val   = parse_supertrend_value(val)
             macd_3d_v   = m.get('macd_3d')
+            bias_1d_v   = m.get('bias_1d')
             ctx_4h      = m.get('st_context_4h')
             ctx_1h      = m.get('st_context_1h')
             direction_p = "LONG" if st_4h_val == 'buy' else "SHORT"
             expected    = st_4h_val
             macd_3d_ok  = (macd_3d_v == 'bull' and direction_p == 'LONG') or (macd_3d_v == 'bear' and direction_p == 'SHORT')
+            bias_1d_ok  = (bias_1d_v == 'bull' and direction_p == 'LONG') or (bias_1d_v == 'bear' and direction_p == 'SHORT')
             last_4h     = m.get('last_st_4h')
             opposite_4h = 'sell' if st_4h_val == 'buy' else 'buy'
             pyra_4h_ok  = last_4h == opposite_4h
-            if (macd_3d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
+            if (macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
                     and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
                 send_telegram(
@@ -871,6 +876,7 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 3D: {macd_3d_v.upper()}\n"
+                    f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (PYRAMIDING)"
@@ -1315,6 +1321,7 @@ def update_indicators_for_symbol(symbol):
             if symbol in MOMENTUM_STATE:
                 if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 if bias_3d: MOMENTUM_STATE[symbol]['bias_3d'] = bias_3d
+                MOMENTUM_STATE[symbol]['bias_1d']  = bias_1d
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 MOMENTUM_STATE[symbol]['macd_1h']  = macd_1h

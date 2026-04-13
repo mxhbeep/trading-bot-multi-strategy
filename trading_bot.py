@@ -273,9 +273,9 @@ def send_bark(title: str, body: str, group: str = "TradingBot"):
             params={'group': group},
             timeout=10
         )
-        logger.debug("✅ Bark envoyé")
+        logger.info("✅ Bark envoyé")
     except Exception as e:
-        logger.debug(f"Bark error: {e}")
+        logger.error(f"Bark error: {e}")
 
 def send_telegram(msg):
     if not CONFIG['TELEGRAM_BOT_TOKEN'] or not CONFIG['TELEGRAM_CHAT_ID']:
@@ -305,7 +305,7 @@ def send_telegram(msg):
             title = _re.sub(r'<[^>]+>', '', lines[0]).strip() if lines else "TradingBot"
             threading.Thread(target=send_bark, args=(title, msg), daemon=True).start()
         except Exception as e:
-            logger.debug(f"Bark dispatch: {e}")
+            logger.error(f"Bark dispatch: {e}")
 
 
 def send_start_notification():
@@ -1028,6 +1028,15 @@ def audit_route():
         return jsonify(logs[:limit]), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/test_bark', methods=['GET', 'POST'])
+def test_bark():
+    """Test l'envoi Bark."""
+    token = CONFIG.get('BARK_TOKEN', '')
+    if not token:
+        return jsonify({'error': 'BARK_TOKEN non configuré'}), 400
+    send_bark("🤖 Test Bark", "Si tu vois ce message, Bark fonctionne !")
+    return jsonify({'status': 'ok', 'token_prefix': token[:8] + '...'}), 200
 
 @app.route('/sentiment', methods=['POST', 'GET'])
 def sentiment_now():

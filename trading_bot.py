@@ -99,6 +99,7 @@ CONFIG = {
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
+    'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),
     'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
@@ -258,6 +259,24 @@ def escape_html(text):
     """Échappe les caractères HTML dans le texte (hors balises intentionnelles)."""
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+def send_bark(title: str, body: str, group: str = "TradingBot"):
+    """Envoie une notification via Bark (iOS, Chine-friendly)."""
+    token = CONFIG.get('BARK_TOKEN', '')
+    if not token:
+        return
+    try:
+        import re as _re
+        clean_title = _re.sub(r'<[^>]+>', '', title).strip()
+        clean_body  = _re.sub(r'<[^>]+>', '', body).strip()
+        requests.get(
+            f"https://api.day.app/{token}/{requests.utils.quote(clean_title)}/{requests.utils.quote(clean_body)}",
+            params={'group': group},
+            timeout=10
+        )
+        logger.debug("✅ Bark envoyé")
+    except Exception as e:
+        logger.debug(f"Bark error: {e}")
+
 def send_telegram(msg):
     if not CONFIG['TELEGRAM_BOT_TOKEN'] or not CONFIG['TELEGRAM_CHAT_ID']:
         logger.warning("⚠️ Telegram non configuré (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID manquants)")
@@ -278,6 +297,15 @@ def send_telegram(msg):
             logger.error(f"❌ Telegram erreur HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
         logger.error(f"❌ Erreur Telegram: {e}")
+    # Envoi parallèle via Bark
+    if CONFIG.get('BARK_TOKEN'):
+        try:
+            import re as _re
+            lines = [l.strip() for l in msg.split('\n') if l.strip()]
+            title = _re.sub(r'<[^>]+>', '', lines[0]).strip() if lines else "TradingBot"
+            threading.Thread(target=send_bark, args=(title, msg), daemon=True).start()
+        except Exception as e:
+            logger.debug(f"Bark dispatch: {e}")
 
 
 def send_start_notification():

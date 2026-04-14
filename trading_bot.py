@@ -779,8 +779,9 @@ def webhook():
         if alert_type == 'supertrend' and tf == '4h':
             prev_4h = m.get('st_4h')
             m['st_4h'] = parse_supertrend_value(val)
-            if m['st_4h'] and m['st_4h'] != prev_4h:
-                m['last_st_4h'] = m['st_4h']
+            m['st_4h_flipped'] = bool(prev_4h is not None and m['st_4h'] is not None and m['st_4h'] != prev_4h)
+            if m['st_4h_flipped']:
+                m['last_st_4h'] = prev_4h
             # Relai vers bot Tapbit
             tapbit_url = CONFIG.get('TAPBIT_BOT_URL', '')
             if tapbit_url and symbol in CONFIG['SYMBOLS']:
@@ -837,11 +838,12 @@ def webhook():
             ctx_4h       = m.get('st_context_4h')
             ctx_1h       = m.get('st_context_1h')
             st_val       = parse_supertrend_value(val)
+            st_1h_flip   = bool(m.get('st_1h_flipped', False))
             direction_v2 = "LONG" if st_val == 'buy' else "SHORT"
             expected     = st_val
             macd_3d_ok   = (macd_3d_v == 'bull' and direction_v2 == 'LONG') or (macd_3d_v == 'bear' and direction_v2 == 'SHORT')
             bias_1d_ok   = (bias_1d_v == 'bull' and direction_v2 == 'LONG') or (bias_1d_v == 'bear' and direction_v2 == 'SHORT')
-            if (macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected
+            if (st_1h_flip and macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected
                     and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 send_telegram(
@@ -863,6 +865,7 @@ def webhook():
         # Pyramiding CONTEXT V2 — flip ST AI 4H
         if alert_type == 'supertrend' and tf == '4h':
             st_4h_val   = parse_supertrend_value(val)
+            st_4h_flip  = bool(m.get('st_4h_flipped', False))
             macd_3d_v   = m.get('macd_3d')
             bias_1d_v   = m.get('bias_1d')
             ctx_4h      = m.get('st_context_4h')
@@ -873,7 +876,7 @@ def webhook():
             bias_1d_ok  = (bias_1d_v == 'bull' and direction_p == 'LONG') or (bias_1d_v == 'bear' and direction_p == 'SHORT')
             last_4h     = m.get('last_st_4h')
             opposite_4h = 'sell' if st_4h_val == 'buy' else 'buy'
-            pyra_4h_ok  = last_4h == opposite_4h
+            pyra_4h_ok  = st_4h_flip and last_4h == opposite_4h
             if (macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
                     and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
@@ -904,12 +907,13 @@ def webhook():
             bias_3d_v   = m.get('bias_3d')
             st_1d       = m.get('st_1d')
             st_val      = parse_supertrend_value(val)
+            st_4h_flip  = bool(m.get('st_4h_flipped', False))
             direction_t = "LONG" if st_val == 'buy' else "SHORT"
             expected    = st_val
             bias_3d_ok  = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
             st_1d_ok    = st_1d == expected
 
-            if (bias_3d_ok and st_1d_ok
+            if (st_4h_flip and bias_3d_ok and st_1d_ok
                     and should_send(symbol, f"trend_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_t == "LONG" else "🔴"
                 send_telegram(
@@ -938,11 +942,12 @@ def webhook():
             macd_2d_v   = m.get('macd_2d')
             bias_1d_v   = m.get('bias_1d')
             st_val      = parse_supertrend_value(val)
+            st_4h_flip  = bool(m.get('st_4h_flipped', False))
             direction_m = "LONG" if st_val == 'buy' else "SHORT"
             macd_2d_ok  = (macd_2d_v == 'bull' and direction_m == 'LONG') or (macd_2d_v == 'bear' and direction_m == 'SHORT')
             bias_1d_ok  = (bias_1d_v == 'bull' and direction_m == 'LONG') or (bias_1d_v == 'bear' and direction_m == 'SHORT')
 
-            if (macd_2d_ok and bias_1d_ok
+            if (st_4h_flip and macd_2d_ok and bias_1d_ok
                     and should_send(symbol, f"momentum_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_m == "LONG" else "🔴"
                 send_telegram(

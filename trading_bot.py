@@ -347,8 +347,9 @@ def send_start_notification():
         "3️⃣ <b>MOMENTUM</b>\n"
         "   • MACD 2D + Bias 1D + flip ST AI 4H\n\n"
         "4️⃣ <b>SWING</b>\n"
-        "   • ST AI 1D + MACD 1D (8/17/9)\n"
-        "   • Signal: Flip ST AI 1H — cooldown 4H\n"
+        "   • Bias 1D + Bias 4H\n"
+        "   • Signal: Flip ST AI 1H (même sens)\n"
+        "   • Protection add: flip ST AI 1H opposé requis entre deux adds\n"
         "   • 22 assets\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏰ {now}"
@@ -956,35 +957,48 @@ def webhook():
                 logger.info(f"[MOMENTUM] Alerte: {symbol} {direction_m}")
 
     # ========================================================================
-    # LOGIQUE SWING : ST AI 1D + MACD 1D → flip ST AI 1H
+    # LOGIQUE SWING : Bias 1D + Bias 4H → flip ST AI 1H
     # ========================================================================
     if strat in ['scalp', 'swing', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
         m = MOMENTUM_STATE[symbol]
 
         if alert_type == 'supertrend' and tf == '1h':
             st_1h_val   = parse_supertrend_value(val)
-            st_1d       = m.get('st_1d')
-            macd_1d_v   = m.get('macd_1d')
+            bias_1d_v   = m.get('bias_1d')
+            bias_4h_v   = m.get('bias_4h')
             direction_s = "LONG" if st_1h_val == 'buy' else "SHORT"
             emoji       = "🟢" if direction_s == "LONG" else "🔴"
+            expected_bias = 'bull' if direction_s == "LONG" else 'bear'
 
-            # ST AI 1D aligné dans le sens du trade
-            st_1d_ok   = st_1d == st_1h_val
-            # MACD 1D aligné dans le sens du trade
-            macd_1d_ok = (macd_1d_v == 'bull' and direction_s == "LONG") or (macd_1d_v == 'bear' and direction_s == "SHORT")
+            # Bias 1D + Bias 4H alignés dans le sens du trade
+            bias_1d_ok = bias_1d_v == expected_bias
+            bias_4h_ok = bias_4h_v == expected_bias
 
             pos_key = f"{symbol}_SWING"
             with STATE_LOCK:
                 pos = SCALP_POSITIONS.get(pos_key)
                 if pos and pos['direction'] != direction_s:
-                    del SCALP_POSITIONS[pos_key]
-                    pos = None
-                is_first_entry = (st_1d_ok and macd_1d_ok)
+                    opposite_st = 'sell' if pos['direction'] == 'LONG' else 'buy'
+                    if st_1h_val == opposite_st:
+                        pos['opposite_seen_since_last_add'] = True
+                    is_first_entry = False
+                    can_pyramid = False
+                else:
+                    is_first_entry = (bias_1d_ok and bias_4h_ok)
+                    can_pyramid = bool(
+                        pos
+                        and pos['direction'] == direction_s
+                        and pos.get('opposite_seen_since_last_add', False)
+                        and bias_1d_ok
+                        and bias_4h_ok
+                    )
+
                 if is_first_entry and pos is None and should_send(symbol, f"swing_entry_{st_1h_val}", event_id=event_id, cooldown=14400):
                     SCALP_POSITIONS[pos_key] = {
                         'direction': direction_s,
                         'entries': [{'price': price, 'ts': datetime.now(timezone.utc).isoformat()}],
                         'entry_count': 1,
+                        'opposite_seen_since_last_add': False,
                     }
                     pos = SCALP_POSITIONS[pos_key]
                     is_first_entry = True
@@ -999,36 +1013,35 @@ def webhook():
                     f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ ST AI 1D: {st_1d.upper()} (filtre)\n"
-                    f"✅ MACD 1D: {macd_1d_v.upper()} (filtre)\n"
+                    f"✅ Bias 1D: {bias_1d_v.upper()} (filtre)\n"
+                    f"✅ Bias 4H: {bias_4h_v.upper()} (filtre)\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'SWING')
                 logger.info(f"[SWING] Entrée: {symbol} {direction_s}")
 
-            # Pyramiding : flip ST AI 1H dans le même sens avec guard
-            elif pos and pos['direction'] == direction_s:
-                last_4h      = m.get('last_st_4h')
-                opposite_1h  = 'sell' if st_1h_val == 'buy' else 'buy'
-                pyra_ok      = m.get('last_st_4h') == opposite_1h or m.get('st_1h') == opposite_1h
-                if st_1d_ok and macd_1d_ok and pyra_ok and should_send(symbol, f"swing_pyra_{st_1h_val}", event_id=event_id, cooldown=14400):
-                    with STATE_LOCK:
-                        pos['entries'].append({'price': price, 'ts': datetime.now(timezone.utc).isoformat()})
-                        pos['entry_count'] += 1
-                    send_telegram(
-                        f"{emoji} <b>[SWING - PYRAMIDING #{pos['entry_count']}]</b> {symbol}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📈 Direction: {direction_s}\n"
-                        f"💰 Price: ${format_price(price)}\n"
-                        f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ ST AI 1D: {st_1d.upper()}\n"
-                        f"✅ MACD 1D: {macd_1d_v.upper()}\n"
-                        f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)"
-                    )
-                    m['last_st_4h'] = None
-                    track_alert(symbol, 'SWING')
-                    logger.info(f"[SWING] Pyramiding #{pos['entry_count']}: {symbol} {direction_s}")
+            # Pyramiding : flip ST AI 1H dans le même sens
+            # Protection : un flip ST AI 1H opposé doit avoir eu lieu depuis le dernier add.
+            elif can_pyramid and should_send(symbol, f"swing_pyra_{st_1h_val}", event_id=event_id, cooldown=14400):
+                with STATE_LOCK:
+                    pos['entries'].append({'price': price, 'ts': datetime.now(timezone.utc).isoformat()})
+                    pos['entry_count'] += 1
+                    pos['opposite_seen_since_last_add'] = False
+                    entry_count = pos['entry_count']
+                send_telegram(
+                    f"{emoji} <b>[SWING - PYRAMIDING #{entry_count}]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction_s}\n"
+                    f"💰 Price: ${format_price(price)}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ Bias 1D: {bias_1d_v.upper()}\n"
+                    f"✅ Bias 4H: {bias_4h_v.upper()}\n"
+                    f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)\n"
+                    f"🛡️ Protection add: flip opposé validé avant cet add"
+                )
+                track_alert(symbol, 'SWING')
+                logger.info(f"[SWING] Pyramiding #{entry_count}: {symbol} {direction_s}")
 
     persist_runtime_state()
     audit_log(data, status="traité")

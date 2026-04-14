@@ -769,7 +769,10 @@ def webhook():
     if strat in ['momentum', 'context', 'trend', 'scalp', 'swing', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        if alert_type == 'supertrend' and tf == '1h':  m['st_1h'] = parse_supertrend_value(val)
+        if alert_type == 'supertrend' and tf == '1h':
+            prev_1h = m.get('st_1h')
+            m['st_1h'] = parse_supertrend_value(val)
+            m['st_1h_flipped'] = bool(prev_1h is not None and m['st_1h'] is not None and m['st_1h'] != prev_1h)
         if alert_type == 'macd_1d':
             v = str(val_raw).strip().lower()
             if v in ('bull', 'bear'): m['macd_1d'] = v
@@ -964,6 +967,7 @@ def webhook():
 
         if alert_type == 'supertrend' and tf == '1h':
             st_1h_val   = parse_supertrend_value(val)
+            st_1h_flip  = bool(m.get('st_1h_flipped', False))
             bias_1d_v   = m.get('bias_1d')
             bias_4h_v   = m.get('bias_4h')
             direction_s = "LONG" if st_1h_val == 'buy' else "SHORT"
@@ -984,10 +988,11 @@ def webhook():
                     is_first_entry = False
                     can_pyramid = False
                 else:
-                    is_first_entry = (bias_1d_ok and bias_4h_ok)
+                    is_first_entry = (st_1h_flip and bias_1d_ok and bias_4h_ok)
                     can_pyramid = bool(
                         pos
                         and pos['direction'] == direction_s
+                        and st_1h_flip
                         and pos.get('opposite_seen_since_last_add', False)
                         and bias_1d_ok
                         and bias_4h_ok

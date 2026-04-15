@@ -670,6 +670,7 @@ def should_send(symbol, key, event_id=None, cooldown=None):
 # États SCALP — ST AI 15min + contexte 15min
 ST_AI_15M: dict = {}       # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_15M: dict = {}  # symbol -> 'buy' | 'sell' | None
+ST_CONTEXT_1D:  dict = {}  # symbol -> 'buy' | 'sell' | None
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
@@ -749,6 +750,9 @@ def webhook():
         elif tf == '15m':
             ST_CONTEXT_15M[symbol] = parsed_ctx
             m['st_context_15m_ts'] = now_ts
+        elif tf == '1d':
+            ST_CONTEXT_1D[symbol] = parsed_ctx
+            m['st_context_1d_ts'] = now_ts
 
     ema200_value = None
     if alert_type == 'ema200' and tf == '1h':
@@ -965,35 +969,52 @@ def webhook():
                 logger.info(f"[MOMENTUM] Alerte: {symbol} {direction_m}")
 
     # ========================================================================
-    # LOGIQUE SWING : Bias 1D + Bias 4H → flip ST AI 1H
     # ========================================================================
-    if strat in ['scalp', 'swing', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
+    # LOGIQUE SWING : Bias 1D + anti-chop (ST Context 1D + 4H) → flip ST AI 1H
+    # 1ère entrée : Bias 1D + ST Context 1H aligné
+    # Pyramiding  : Bias 1D + Bias 4H aligné + guard flip opposé
+    # Anti-chop   : ST Context 1D et ST Context 4H ne doivent pas être opposés au Bias 1D
+    # ========================================================================
+    if strat in ['scalp', 'swing', 'all']:
         m = MOMENTUM_STATE[symbol]
 
         if alert_type == 'supertrend' and tf == '1h':
-            st_1h_val   = parse_supertrend_value(val)
-            st_1h_flip  = bool(m.get('st_1h_flipped', False))
-            bias_1d_v   = m.get('bias_1d')
-            bias_4h_v   = m.get('bias_4h')
-            direction_s = "LONG" if st_1h_val == 'buy' else "SHORT"
-            emoji       = "🟢" if direction_s == "LONG" else "🔴"
+            st_1h_val     = parse_supertrend_value(val)
+            st_1h_flip    = bool(m.get('st_1h_flipped', False))
+            bias_1d_v     = m.get('bias_1d')
+            bias_4h_v     = m.get('bias_4h')
+            ctx_1h        = m.get('st_context_1h')
+            ctx_4h        = m.get('st_context_4h')
+            ctx_1d        = ST_CONTEXT_1D.get(symbol)
+            direction_s   = "LONG" if st_1h_val == 'buy' else "SHORT"
+            emoji         = "🟢" if direction_s == "LONG" else "🔴"
             expected_bias = 'bull' if direction_s == "LONG" else 'bear'
+            opposite_bias = 'bear' if direction_s == "LONG" else 'bull'
+            opposite_ctx  = 'sell' if direction_s == "LONG" else 'buy'
 
-            # Bias 1D + Bias 4H alignés dans le sens du trade
-            bias_1d_ok = bias_1d_v == expected_bias
-            bias_4h_ok = bias_4h_v == expected_bias
+            # Filtres de base
+            bias_1d_ok  = bias_1d_v == expected_bias
+            bias_4h_ok  = bias_4h_v == expected_bias
+            ctx_1h_ok   = ctx_1h == st_1h_val
+
+            # Anti-chop : ST Context 1D et 4H ne doivent PAS être opposés au Bias 1D
+            no_chop_1d  = ctx_1d != opposite_ctx   # None ou aligné = OK
+            no_chop_4h  = ctx_4h != opposite_ctx   # None ou aligné = OK
 
             pos_key = f"{symbol}_SWING"
             with STATE_LOCK:
                 pos = SCALP_POSITIONS.get(pos_key)
                 if pos and pos['direction'] != direction_s:
+                    # Flip opposé détecté — noter pour le guard pyramiding
                     opposite_st = 'sell' if pos['direction'] == 'LONG' else 'buy'
                     if st_1h_val == opposite_st:
                         pos['opposite_seen_since_last_add'] = True
                     is_first_entry = False
-                    can_pyramid = False
+                    can_pyramid    = False
                 else:
-                    is_first_entry = (st_1h_flip and bias_1d_ok and bias_4h_ok)
+                    # 1ère entrée : Bias 1D + ST Context 1H + anti-chop
+                    is_first_entry = (st_1h_flip and bias_1d_ok and ctx_1h_ok and no_chop_1d and no_chop_4h)
+                    # Pyramiding : Bias 1D + Bias 4H + guard + anti-chop
                     can_pyramid = bool(
                         pos
                         and pos['direction'] == direction_s
@@ -1001,12 +1022,14 @@ def webhook():
                         and pos.get('opposite_seen_since_last_add', False)
                         and bias_1d_ok
                         and bias_4h_ok
+                        and no_chop_1d
+                        and no_chop_4h
                     )
 
                 if is_first_entry and pos is None and should_send(symbol, f"swing_entry_{st_1h_val}", event_id=event_id, cooldown=14400):
                     SCALP_POSITIONS[pos_key] = {
                         'direction': direction_s,
-                        'entries': [{'price': price, 'ts': datetime.now(timezone.utc).isoformat()}],
+                        'entries':   [{'price': price, 'ts': datetime.now(timezone.utc).isoformat()}],
                         'entry_count': 1,
                         'opposite_seen_since_last_add': False,
                     }
@@ -1016,6 +1039,8 @@ def webhook():
                     is_first_entry = False
 
             if is_first_entry and pos is not None:
+                ctx_1d_txt = ctx_1d.upper() if ctx_1d else "NEUTRE"
+                ctx_4h_txt = ctx_4h.upper() if ctx_4h else "NEUTRE"
                 send_telegram(
                     f"{emoji} <b>[SWING - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1023,21 +1048,23 @@ def webhook():
                     f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ Bias 1D: {bias_1d_v.upper()} (filtre)\n"
-                    f"✅ Bias 4H: {bias_4h_v.upper()} (filtre)\n"
+                    f"✅ Bias 1D: {bias_1d_v.upper()}\n"
+                    f"✅ ST Context 1H: {ctx_1h.upper()}\n"
+                    f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
+                    f"✅ ST Context 4H: {ctx_4h_txt} (anti-chop)\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'SWING')
                 logger.info(f"[SWING] Entrée: {symbol} {direction_s}")
 
-            # Pyramiding : flip ST AI 1H dans le même sens
-            # Protection : un flip ST AI 1H opposé doit avoir eu lieu depuis le dernier add.
             elif can_pyramid and should_send(symbol, f"swing_pyra_{st_1h_val}", event_id=event_id, cooldown=14400):
                 with STATE_LOCK:
                     pos['entries'].append({'price': price, 'ts': datetime.now(timezone.utc).isoformat()})
                     pos['entry_count'] += 1
                     pos['opposite_seen_since_last_add'] = False
                     entry_count = pos['entry_count']
+                ctx_1d_txt = ctx_1d.upper() if ctx_1d else "NEUTRE"
+                ctx_4h_txt = ctx_4h.upper() if ctx_4h else "NEUTRE"
                 send_telegram(
                     f"{emoji} <b>[SWING - PYRAMIDING #{entry_count}]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1047,8 +1074,10 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ Bias 4H: {bias_4h_v.upper()}\n"
+                    f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
+                    f"✅ ST Context 4H: {ctx_4h_txt} (anti-chop)\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)\n"
-                    f"🛡️ Protection add: flip opposé validé avant cet add"
+                    f"🛡️ Guard: flip opposé validé"
                 )
                 track_alert(symbol, 'SWING')
                 logger.info(f"[SWING] Pyramiding #{entry_count}: {symbol} {direction_s}")

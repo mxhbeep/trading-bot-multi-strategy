@@ -1009,9 +1009,10 @@ def webhook():
                     is_first_entry = False
 
             if is_first_entry and pos is not None:
-                ctx_1d_txt = ctx_1d.upper() if ctx_1d else "NEUTRE"
-                chop_warn = "\n⚠️ ST Context 1D opposé — zone de chop possible" if not no_chop_1d else ""
-                ctx_4h_txt = ctx_4h.upper() if ctx_4h else "NEUTRE"
+                ctx_1d_txt  = ctx_1d.upper() if ctx_1d else "NEUTRE"
+                chop_warn   = "\n⚠️ ST Context 1D opposé — zone de chop possible" if not no_chop_1d else ""
+                opposite_ctx_s = "sell" if direction_s == "LONG" else "buy"
+                ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h == opposite_ctx_s else ""
                 send_telegram(
                     f"{emoji} <b>[SWING - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1021,22 +1022,21 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
-                    f"✅ ST Context 1D: {ctx_1d_txt}"
+                    f"✅ ST Context 1D: {ctx_1d_txt}\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
                     f"{chop_warn}"
+                    f"{ctx_4h_warn}"
                 )
-                track_alert(symbol, 'SWING')
-                logger.info(f"[SWING] Entrée: {symbol} {direction_s}")
-
             elif can_pyramid and should_send(symbol, f"swing_pyra_{st_1h_val}", event_id=event_id, cooldown=14400):
                 with STATE_LOCK:
                     pos['entries'].append({'price': price, 'ts': datetime.now(timezone.utc).isoformat()})
                     pos['entry_count'] += 1
                     pos['opposite_seen_since_last_add'] = False
                     entry_count = pos['entry_count']
-                ctx_1d_txt = ctx_1d.upper() if ctx_1d else "NEUTRE"
-                chop_warn = "\n⚠️ ST Context 1D opposé — zone de chop possible" if not no_chop_1d else ""
-                ctx_4h_txt = ctx_4h.upper() if ctx_4h else "NEUTRE"
+                ctx_1d_txt  = ctx_1d.upper() if ctx_1d else "NEUTRE"
+                chop_warn   = "\n⚠️ ST Context 1D opposé — zone de chop possible" if not no_chop_1d else ""
+                opposite_ctx_s = "sell" if direction_s == "LONG" else "buy"
+                ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h == opposite_ctx_s else ""
                 send_telegram(
                     f"{emoji} <b>[SWING - PYRAMIDING #{entry_count}]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1050,9 +1050,8 @@ def webhook():
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)\n"
                     f"🛡️ Guard: flip opposé validé"
                     f"{chop_warn}"
+                    f"{ctx_4h_warn}"
                 )
-                track_alert(symbol, 'SWING')
-                logger.info(f"[SWING] Pyramiding #{entry_count}: {symbol} {direction_s}")
 
     persist_runtime_state()
     audit_log(data, status="traité")

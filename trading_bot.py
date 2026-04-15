@@ -1012,7 +1012,7 @@ def webhook():
                     can_pyramid    = False
                 else:
                     # 1ère entrée : Bias 1D + ST Context 1H + anti-chop
-                    is_first_entry = (st_1h_flip and bias_1d_ok and ctx_1h_ok and no_chop_1d)
+                    is_first_entry = (st_1h_flip and bias_1d_ok and ctx_1h_ok )
                     # Pyramiding : Bias 1D + Bias 4H + guard + anti-chop
                     can_pyramid = bool(
                         pos
@@ -1021,7 +1021,6 @@ def webhook():
                         and pos.get('opposite_seen_since_last_add', False)
                         and bias_1d_ok
                         and bias_4h_ok
-                        and no_chop_1d
                     )
 
                 if is_first_entry and pos is None and should_send(symbol, f"swing_entry_{st_1h_val}", event_id=event_id, cooldown=14400):
@@ -1038,6 +1037,7 @@ def webhook():
 
             if is_first_entry and pos is not None:
                 ctx_1d_txt = ctx_1d.upper() if ctx_1d else "NEUTRE"
+                chop_warn = "\n⚠️ ST Context 1D opposé — zone de chop possible" if not no_chop_1d else ""
                 ctx_4h_txt = ctx_4h.upper() if ctx_4h else "NEUTRE"
                 send_telegram(
                     f"{emoji} <b>[SWING - ENTREE 1H]</b> {symbol}\n"
@@ -1048,8 +1048,9 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
-                    f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
+                    f"✅ ST Context 1D: {ctx_1d_txt}"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
+                    f"{chop_warn}"
                 )
                 track_alert(symbol, 'SWING')
                 logger.info(f"[SWING] Entrée: {symbol} {direction_s}")
@@ -1061,6 +1062,7 @@ def webhook():
                     pos['opposite_seen_since_last_add'] = False
                     entry_count = pos['entry_count']
                 ctx_1d_txt = ctx_1d.upper() if ctx_1d else "NEUTRE"
+                chop_warn = "\n⚠️ ST Context 1D opposé — zone de chop possible" if not no_chop_1d else ""
                 ctx_4h_txt = ctx_4h.upper() if ctx_4h else "NEUTRE"
                 send_telegram(
                     f"{emoji} <b>[SWING - PYRAMIDING #{entry_count}]</b> {symbol}\n"
@@ -1071,9 +1073,10 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ Bias 4H: {bias_4h_v.upper()}\n"
-                    f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
+                    f"✅ ST Context 1D: {ctx_1d_txt}\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)\n"
                     f"🛡️ Guard: flip opposé validé"
+                    f"{chop_warn}"
                 )
                 track_alert(symbol, 'SWING')
                 logger.info(f"[SWING] Pyramiding #{entry_count}: {symbol} {direction_s}")

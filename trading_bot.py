@@ -343,7 +343,7 @@ def send_start_notification():
         "   • MACD 3D + Bias 1D + ST Context 4H + ST Context 1H\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n\n"
         "2️⃣ <b>TREND</b>\n"
-        "   • Bias 3D + ST AI 1D + flip ST AI 4H\n\n"
+        "   • Bias 3D + ST Context 1H + flip ST AI 1H\n\n"
         "3️⃣ <b>SWING</b>\n"
         "   • Bias 1D + anti-chop ST Context 1D\n"
         "   • 1ère entrée: ST Context 1H + flip ST AI 1H\n"
@@ -845,9 +845,12 @@ def webhook():
             expected     = st_val
             macd_3d_ok   = (macd_3d_v == 'bull' and direction_v2 == 'LONG') or (macd_3d_v == 'bear' and direction_v2 == 'SHORT')
             bias_1d_ok   = (bias_1d_v == 'bull' and direction_v2 == 'LONG') or (bias_1d_v == 'bear' and direction_v2 == 'SHORT')
-            if (st_1h_flip and macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected
+            if (st_1h_flip and macd_3d_ok and bias_1d_ok and ctx_1h == expected
                     and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
+                emoji = "🟢" if direction_v2 == "LONG" else "🔴"
+                opposite_ctx_entry = "sell" if direction_v2 == "LONG" else "buy"
+                ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h == opposite_ctx_entry else ""
                 send_telegram(
                     f"{emoji} <b>[CONTEXT V2 - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -857,11 +860,10 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 3D: {macd_3d_v.upper()}\n"
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
-                    f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
+                    f"{ctx_4h_warn}"
                 )
-                track_alert(symbol, 'CONTEXT_V2')
                 logger.info(f"[CONTEXT V2] Alerte: {symbol} {direction_v2}")
 
         # Pyramiding CONTEXT V2 — flip ST AI 4H
@@ -879,9 +881,10 @@ def webhook():
             last_4h     = m.get('last_st_4h')
             opposite_4h = 'sell' if st_4h_val == 'buy' else 'buy'
             pyra_4h_ok  = st_4h_flip and last_4h == opposite_4h
-            if (macd_3d_ok and bias_1d_ok and ctx_4h == expected and ctx_1h == expected and pyra_4h_ok
+            if (macd_3d_ok and bias_1d_ok and ctx_1h == expected and pyra_4h_ok
                     and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
+                ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h != st_4h_val else ""
                 send_telegram(
                     f"{emoji} <b>[CONTEXT V2 - PYRAMIDING 4H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -891,47 +894,51 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ MACD 3D: {macd_3d_v.upper()}\n"
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
-                    f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (PYRAMIDING)"
+                    f"{ctx_4h_warn}"
                 )
                 m['last_st_4h'] = None  # reset guard après pyramiding
                 track_alert(symbol, 'CONTEXT_V2')
                 logger.info(f"[CONTEXT V2] Pyramiding 4H: {symbol} {direction_p}")
 
     # ========================================================================
-    # LOGIQUE TREND : Bias 3D + ST AI 1D → flip ST AI 4H
+    # ========================================================================
+    # LOGIQUE TREND : Bias 3D + ST Context 1H → flip ST AI 1H
     # ========================================================================
     if strat in ['trend', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        if alert_type == 'supertrend' and tf == '4h':
+        if alert_type == 'supertrend' and tf == '1h':
             bias_3d_v   = m.get('bias_3d')
-            st_1d       = m.get('st_1d')
+            ctx_1h      = m.get('st_context_1h')
+            ctx_4h      = m.get('st_context_4h')
             st_val      = parse_supertrend_value(val)
-            st_4h_flip  = bool(m.get('st_4h_flipped', False))
+            st_1h_flip  = bool(m.get('st_1h_flipped', False))
             direction_t = "LONG" if st_val == 'buy' else "SHORT"
             expected    = st_val
             bias_3d_ok  = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
-            st_1d_ok    = st_1d == expected
+            ctx_1h_ok   = ctx_1h == expected
 
-            if (st_4h_flip and bias_3d_ok and st_1d_ok
-                    and should_send(symbol, f"trend_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
+            if (st_1h_flip and bias_3d_ok and ctx_1h_ok
+                    and should_send(symbol, f"trend_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_t == "LONG" else "🔴"
+                opposite_ctx = "sell" if direction_t == "LONG" else "buy"
+                ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h == opposite_ctx else ""
                 send_telegram(
-                    f"{emoji} <b>[TREND - ENTREE 4H]</b> {symbol}\n"
+                    f"{emoji} <b>[TREND - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_t}\n"
                     f"💰 Price: ${format_price(price)}\n"
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 3D: {bias_3d_v.upper()}\n"
-                    f"✅ SuperTrend AI 1D: {st_1d.upper()} (filtre)\n"
-                    f"✅ SuperTrend AI 4H: {st_val.upper()} (SIGNAL)"
+                    f"✅ ST Context 1H: {ctx_1h.upper()}\n"
+                    f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
+                    f"{ctx_4h_warn}"
                 )
                 track_alert(symbol, 'TREND')
                 logger.info(f"[TREND] Alerte: {symbol} {direction_t}")
-
 
     # ========================================================================
     # ========================================================================

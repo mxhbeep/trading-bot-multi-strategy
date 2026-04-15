@@ -340,17 +340,15 @@ def send_start_notification():
         f"💾 {redis_status}\n\n"
         "📋 <b>STRATEGIES:</b>\n\n"
         "1️⃣ <b>CONTEXT V2</b>\n"
-        "   • MACD 3D (12/26/9) + ST Context 4H + ST Context 1H\n"
+        "   • MACD 3D + Bias 1D + ST Context 4H + ST Context 1H\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n\n"
         "2️⃣ <b>TREND</b>\n"
         "   • Bias 3D + ST AI 1D + flip ST AI 4H\n\n"
-        "3️⃣ <b>MOMENTUM</b>\n"
-        "   • MACD 2D + Bias 1D + flip ST AI 4H\n\n"
-        "4️⃣ <b>SWING</b>\n"
-        "   • Bias 1D + Bias 4H\n"
-        "   • Signal: Flip ST AI 1H (même sens)\n"
-        "   • Protection add: flip ST AI 1H opposé requis entre deux adds\n"
-        "   • 22 assets\n\n"
+        "3️⃣ <b>SWING</b>\n"
+        "   • Bias 1D + anti-chop ST Context 1D\n"
+        "   • 1ère entrée: ST Context 1H + flip ST AI 1H\n"
+        "   • Pyramiding: Bias 4H + flip ST AI 1H (guard)\n"
+        "   • 73 assets\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏰ {now}"
     )
@@ -934,39 +932,6 @@ def webhook():
                 track_alert(symbol, 'TREND')
                 logger.info(f"[TREND] Alerte: {symbol} {direction_t}")
 
-
-    # ========================================================================
-    # ========================================================================
-    # LOGIQUE MOMENTUM : MACD 2D + Bias 1D → flip ST AI 4H
-    # ========================================================================
-    if strat in ['momentum', 'all']:
-        m = MOMENTUM_STATE[symbol]
-
-        if alert_type == 'supertrend' and tf == '4h':
-            macd_2d_v   = m.get('macd_2d')
-            bias_1d_v   = m.get('bias_1d')
-            st_val      = parse_supertrend_value(val)
-            st_4h_flip  = bool(m.get('st_4h_flipped', False))
-            direction_m = "LONG" if st_val == 'buy' else "SHORT"
-            macd_2d_ok  = (macd_2d_v == 'bull' and direction_m == 'LONG') or (macd_2d_v == 'bear' and direction_m == 'SHORT')
-            bias_1d_ok  = (bias_1d_v == 'bull' and direction_m == 'LONG') or (bias_1d_v == 'bear' and direction_m == 'SHORT')
-
-            if (st_4h_flip and macd_2d_ok and bias_1d_ok
-                    and should_send(symbol, f"momentum_entry_4h_{st_val}", event_id=event_id, cooldown=14400)):
-                emoji = "🟢" if direction_m == "LONG" else "🔴"
-                send_telegram(
-                    f"{emoji} <b>[MOMENTUM - ENTREE 4H]</b> {symbol}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 Direction: {direction_m}\n"
-                    f"💰 Price: ${format_price(price)}\n"
-                    f"🏦 Exchange: {exchange_name.upper()}\n"
-                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                    f"✅ MACD 2D: {macd_2d_v.upper()} (filtre)\n"
-                    f"✅ Bias 1D: {bias_1d_v.upper()} (filtre)\n"
-                    f"✅ SuperTrend AI 4H: {st_val.upper()} (SIGNAL)"
-                )
-                track_alert(symbol, 'MOMENTUM')
-                logger.info(f"[MOMENTUM] Alerte: {symbol} {direction_m}")
 
     # ========================================================================
     # ========================================================================

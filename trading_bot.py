@@ -997,9 +997,8 @@ def webhook():
             bias_4h_ok  = bias_4h_v == expected_bias
             ctx_1h_ok   = ctx_1h == st_1h_val
 
-            # Anti-chop : ST Context 1D et 4H ne doivent PAS être opposés au Bias 1D
+            # Anti-chop : ST Context 1D ne doit PAS être opposé au Bias 1D
             no_chop_1d  = ctx_1d != opposite_ctx   # None ou aligné = OK
-            no_chop_4h  = ctx_4h != opposite_ctx   # None ou aligné = OK
 
             pos_key = f"{symbol}_SWING"
             with STATE_LOCK:
@@ -1013,7 +1012,7 @@ def webhook():
                     can_pyramid    = False
                 else:
                     # 1ère entrée : Bias 1D + ST Context 1H + anti-chop
-                    is_first_entry = (st_1h_flip and bias_1d_ok and ctx_1h_ok and no_chop_1d and no_chop_4h)
+                    is_first_entry = (st_1h_flip and bias_1d_ok and ctx_1h_ok and no_chop_1d)
                     # Pyramiding : Bias 1D + Bias 4H + guard + anti-chop
                     can_pyramid = bool(
                         pos
@@ -1023,7 +1022,6 @@ def webhook():
                         and bias_1d_ok
                         and bias_4h_ok
                         and no_chop_1d
-                        and no_chop_4h
                     )
 
                 if is_first_entry and pos is None and should_send(symbol, f"swing_entry_{st_1h_val}", event_id=event_id, cooldown=14400):
@@ -1051,7 +1049,6 @@ def webhook():
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
-                    f"✅ ST Context 4H: {ctx_4h_txt} (anti-chop)\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'SWING')
@@ -1075,7 +1072,6 @@ def webhook():
                     f"✅ Bias 1D: {bias_1d_v.upper()}\n"
                     f"✅ Bias 4H: {bias_4h_v.upper()}\n"
                     f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
-                    f"✅ ST Context 4H: {ctx_4h_txt} (anti-chop)\n"
                     f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)\n"
                     f"🛡️ Guard: flip opposé validé"
                 )

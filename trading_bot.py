@@ -683,7 +683,7 @@ def init_symbol_states(symbol):
             'bias_1d': None, 'bias_2d': None, 'bias_3d': None, 'macd_2d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None,
-            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None, 'macd_3d': None,
+            'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None, 'macd_4h': None, 'macd_3d': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             # Nouveaux états pour CONTEXT v2 et SCALP
@@ -914,14 +914,16 @@ def webhook():
             bias_3d_v   = m.get('bias_3d')
             ctx_1h      = m.get('st_context_1h')
             ctx_4h      = m.get('st_context_4h')
+            macd_4h_v   = m.get('macd_4h')
             st_val      = parse_supertrend_value(val)
             st_1h_flip  = bool(m.get('st_1h_flipped', False))
             direction_t = "LONG" if st_val == 'buy' else "SHORT"
             expected    = st_val
             bias_3d_ok  = (bias_3d_v == 'bull' and direction_t == 'LONG') or (bias_3d_v == 'bear' and direction_t == 'SHORT')
+            macd_4h_ok  = (macd_4h_v == 'bull' and direction_t == 'LONG') or (macd_4h_v == 'bear' and direction_t == 'SHORT')
             ctx_1h_ok   = ctx_1h == expected
 
-            if (st_1h_flip and bias_3d_ok and ctx_1h_ok
+            if (st_1h_flip and bias_3d_ok and macd_4h_ok and ctx_1h_ok
                     and should_send(symbol, f"trend_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_t == "LONG" else "🔴"
                 opposite_ctx = "sell" if direction_t == "LONG" else "buy"
@@ -934,6 +936,7 @@ def webhook():
                     f"🏦 Exchange: {exchange_name.upper()}\n"
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ Bias 3D: {bias_3d_v.upper()}\n"
+                    f"✅ MACD 4H: {macd_4h_v.upper()} (8/17/9)\n"
                     f"✅ ST Context 1H: {ctx_1h.upper()}\n"
                     f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
                     f"{ctx_4h_warn}"
@@ -1344,7 +1347,7 @@ def update_indicators_for_symbol(symbol):
         bias_1d  = calc_bias_okx(df_1d)
         macd_1h  = calc_macd_okx(df_1h, fast=8, slow=17, signal=9)
         macd_3d  = calc_macd_3d(symbol)
-        macd_4h  = calc_macd_okx(df_4h)
+        macd_4h  = calc_macd_okx(df_4h, fast=8, slow=17, signal=9)
         macd_1d  = calc_macd_okx(df_1d, fast=8, slow=17, signal=9)
         macd_2d  = calc_macd_2d(symbol)
         bias_2d  = calc_bias_2d(symbol)
@@ -1381,6 +1384,7 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 MOMENTUM_STATE[symbol]['macd_1h']  = macd_1h
+                MOMENTUM_STATE[symbol]['macd_4h']  = macd_4h
                 MOMENTUM_STATE[symbol]['macd_2d']  = macd_2d
                 MOMENTUM_STATE[symbol]['macd_3d']  = macd_3d
 

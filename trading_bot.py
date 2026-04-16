@@ -127,9 +127,9 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'MOMENTUM': 0, 'CONTEXT': 0, 'SWING': 0,
+            'SAFE': 0, 'MOMENTUM': 0, 'CONFLUENCE': 0, 'CONTEXT': 0, 'SWING': 0,
             'CONTEXT_A': 0, 'CONTEXT_B': 0, 'CONTEXT_B+': 0,
-            'CONTEXT_V2': 0, 'TREND': 0, 'SCALP': 0,
+            'CONFLUENCE': 0, 'TREND': 0, 'SCALP': 0,
         }
     if strategy in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] += 1
@@ -339,13 +339,16 @@ def send_start_notification():
         f"📊 Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"💾 {redis_status}\n\n"
         "📋 <b>STRATEGIES:</b>\n\n"
-        "1️⃣ <b>CONTEXT V2</b>\n"
+        "1️⃣ <b>CONFLUENCE</b>\n"
         "   • MACD 3D + Bias 1D + ST Context 1H\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n"
         "   • ⚠️ Warning si ST Context 4H opposé\n\n"
-        "2️⃣ <b>TREND</b>\n"
-        "   • Bias 3D + ST Context 1H + flip ST AI 1H\n\n"
-        "3️⃣ <b>SWING</b>\n"
+        "2️⃣ <b>CONTEXT</b>\n"
+        "   • ST Context 4H + MACD 4H (8/17/9)\n"
+        "   • Signal: Flip ST AI 1H\n\n"
+        "3️⃣ <b>TREND</b>\n"
+        "   • Bias 3D + MACD 4H + ST Context 1H + flip ST AI 1H\n\n"
+        "4️⃣ <b>SWING</b>\n"
         "   • Bias 1D + anti-chop ST Context 1D\n"
         "   • 1ère entrée: ST Context 1H + flip ST AI 1H\n"
         "   • Pyramiding: Bias 4H + flip ST AI 1H (guard)\n"
@@ -371,8 +374,9 @@ def send_weekly_report():
     )
 
     total_safe      = sum(s.get('SAFE', 0)        for s in WEEKLY_STATS.values())
+    total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
-    total_ctx_v2    = sum(s.get('CONTEXT_V2', 0)  for s in WEEKLY_STATS.values())
+    total_confluence    = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
     total_momentum  = sum(s.get('MOMENTUM', 0)    for s in WEEKLY_STATS.values())
     total_swing     = sum(s.get('SWING', 0)       for s in WEEKLY_STATS.values())
@@ -383,8 +387,9 @@ def send_weekly_report():
     msg += (
         "📋 <b>Par stratégie:</b>\n"
         f"  • SAFE: {total_safe}\n"
+        f"  • CONFLUENCE: {total_confluence}\n"
         f"  • CONTEXT: {total_context}\n"
-        f"  • CONTEXT V2: {total_ctx_v2}\n"
+        f"  • CONFLUENCE: {total_confluence}\n"
         f"  • TREND: {total_trend}\n"
         f"  • MOMENTUM: {total_momentum}\n"
         f"  • SWING: {total_swing}\n"
@@ -814,7 +819,7 @@ def webhook():
             old_val = m.get('st_context_4h')
             logger.info(f"[CONTEXT] {symbol} ST Context 4H: {old_val} → {m['st_context_4h']}")
 
-            # PREP CONTEXT V2 : ST Context 4H + ST Context 1H + Bias 3D tous alignés
+            # PREP CONFLUENCE : ST Context 4H + ST Context 1H + Bias 3D tous alignés
             if m['st_context_4h'] is not None:
                 _dir_prep    = "LONG" if m['st_context_4h'] == 'buy' else "SHORT"
                 _expected    = m['st_context_4h']  # 'buy' ou 'sell'
@@ -824,17 +829,17 @@ def webhook():
                 _ctx_1h_ok   = _ctx_1h == _expected
                 if _bias_3d_ok and _ctx_1h_ok and should_send(symbol, f"context_prep_{_expected}", event_id=event_id):
                     with STATE_LOCK:
-                        PREP_BUFFER.append({'strat': 'CONTEXT V2', 'dir': _dir_prep, 'sym': symbol, 'price': price})
-                    logger.info(f"[PREP] CONTEXT V2 {_dir_prep} {symbol} — Bias 3D + ST Context 4H + 1H alignés")
+                        PREP_BUFFER.append({'strat': 'CONFLUENCE', 'dir': _dir_prep, 'sym': symbol, 'price': price})
+                    logger.info(f"[PREP] CONFLUENCE {_dir_prep} {symbol} — Bias 3D + ST Context 4H + 1H alignés")
 
         # SIGNAL : ST AI 1H flip dans le sens du context 4H
     # ========================================================================
-    # LOGIQUE CONTEXT V2 : MACD 3D + ST Context 4H + ST Context 1H → ST AI 1H
+    # LOGIQUE CONFLUENCE : MACD 3D + ST Context 4H + ST Context 1H → ST AI 1H
     # ========================================================================
-    if strat in ['context', 'all']:
+    if strat in ['confluence', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        # Signal ST AI 1H — CONTEXT V2 (Bias 2D + ST Context 4H + ST Context 1H)
+        # Signal ST AI 1H — CONFLUENCE (Bias 2D + ST Context 4H + ST Context 1H)
         if alert_type == 'supertrend' and tf == '1h':
             macd_3d_v    = m.get('macd_3d')
             bias_1d_v    = m.get('bias_1d')
@@ -847,13 +852,13 @@ def webhook():
             macd_3d_ok   = (macd_3d_v == 'bull' and direction_v2 == 'LONG') or (macd_3d_v == 'bear' and direction_v2 == 'SHORT')
             bias_1d_ok   = (bias_1d_v == 'bull' and direction_v2 == 'LONG') or (bias_1d_v == 'bear' and direction_v2 == 'SHORT')
             if (st_1h_flip and macd_3d_ok and bias_1d_ok and ctx_1h == expected
-                    and should_send(symbol, f"context_v2_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
+                    and should_send(symbol, f"confluence_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 emoji = "🟢" if direction_v2 == "LONG" else "🔴"
                 opposite_ctx_entry = "sell" if direction_v2 == "LONG" else "buy"
                 ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h == opposite_ctx_entry else ""
                 send_telegram(
-                    f"{emoji} <b>[CONTEXT V2 - ENTREE 1H]</b> {symbol}\n"
+                    f"{emoji} <b>[CONFLUENCE - ENTREE 1H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_v2}\n"
                     f"💰 Price: ${format_price(price)}\n"
@@ -865,7 +870,7 @@ def webhook():
                     f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
                     f"{ctx_4h_warn}"
                 )
-                logger.info(f"[CONTEXT V2] Alerte: {symbol} {direction_v2}")
+                logger.info(f"[CONFLUENCE] Alerte: {symbol} {direction_v2}")
 
         # Pyramiding CONTEXT V2 — flip ST AI 4H
         if alert_type == 'supertrend' and tf == '4h':
@@ -883,11 +888,11 @@ def webhook():
             opposite_4h = 'sell' if st_4h_val == 'buy' else 'buy'
             pyra_4h_ok  = st_4h_flip and last_4h == opposite_4h
             if (macd_3d_ok and bias_1d_ok and ctx_1h == expected and pyra_4h_ok
-                    and should_send(symbol, f"context_v2_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
+                    and should_send(symbol, f"confluence_pyra_4h_{st_4h_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_p == "LONG" else "🔴"
                 ctx_4h_warn = f"\n⚠️ ST Context 4H opposé ({ctx_4h.upper()}) — retournement possible" if ctx_4h is not None and ctx_4h != st_4h_val else ""
                 send_telegram(
-                    f"{emoji} <b>[CONTEXT V2 - PYRAMIDING 4H]</b> {symbol}\n"
+                    f"{emoji} <b>[CONFLUENCE - PYRAMIDING 4H]</b> {symbol}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📈 Direction: {direction_p}\n"
                     f"💰 Price: ${format_price(price)}\n"
@@ -900,11 +905,44 @@ def webhook():
                     f"{ctx_4h_warn}"
                 )
                 m['last_st_4h'] = None  # reset guard après pyramiding
-                track_alert(symbol, 'CONTEXT_V2')
-                logger.info(f"[CONTEXT V2] Pyramiding 4H: {symbol} {direction_p}")
+                track_alert(symbol, 'CONFLUENCE')
+                logger.info(f"[CONFLUENCE] Pyramiding 4H: {symbol} {direction_p}")
 
     # ========================================================================
     # ========================================================================
+    # ========================================================================
+    # LOGIQUE CONTEXT : ST Context 4H + MACD 4H → flip ST AI 1H
+    # ========================================================================
+    if strat in ['context', 'all']:
+        m = MOMENTUM_STATE[symbol]
+
+        if alert_type == 'supertrend' and tf == '1h':
+            ctx_4h      = m.get('st_context_4h')
+            macd_4h_v   = m.get('macd_4h')
+            st_val      = parse_supertrend_value(val)
+            st_1h_flip  = bool(m.get('st_1h_flipped', False))
+            direction_c = "LONG" if st_val == 'buy' else "SHORT"
+            expected    = st_val
+            ctx_4h_ok   = ctx_4h == expected
+            macd_4h_ok  = (macd_4h_v == 'bull' and direction_c == 'LONG') or (macd_4h_v == 'bear' and direction_c == 'SHORT')
+
+            if (st_1h_flip and ctx_4h_ok and macd_4h_ok
+                    and should_send(symbol, f"context_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
+                emoji = "🟢" if direction_c == "LONG" else "🔴"
+                send_telegram(
+                    f"{emoji} <b>[CONTEXT - ENTREE 1H]</b> {symbol}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction_c}\n"
+                    f"💰 Price: ${format_price(price)}\n"
+                    f"🏦 Exchange: {exchange_name.upper()}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                    f"✅ ST Context 4H: {ctx_4h.upper()}\n"
+                    f"✅ MACD 4H: {macd_4h_v.upper()} (8/17/9)\n"
+                    f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
+                )
+                track_alert(symbol, 'CONTEXT')
+                logger.info(f"[CONTEXT] Alerte: {symbol} {direction_c}")
+
     # LOGIQUE TREND : Bias 3D + ST Context 1H → flip ST AI 1H
     # ========================================================================
     if strat in ['trend', 'all']:

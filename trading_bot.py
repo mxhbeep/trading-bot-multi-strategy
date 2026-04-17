@@ -22,14 +22,14 @@ CONFIG = {
     'TELEGRAM_CHAT_ID': os.environ.get('TELEGRAM_CHAT_ID', ''),
     
     'SYMBOLS': {
-        'AAVE/USDT': {'exchange': 'okx', 'scalp': False},
+        'AAVE/USDT': {'exchange': 'okx', 'scalp': True},
         'APT/USDT': {'exchange': 'okx', 'scalp': True},
         'ARB/USDT': {'exchange': 'okx', 'scalp': True},
         'ATOM/USDT': {'exchange': 'okx', 'scalp': False},
         'AVAX/USDT': {'exchange': 'okx', 'scalp': True},
         'AXS/USDT': {'exchange': 'okx', 'scalp': False},
-        'BNB/USDT': {'exchange': 'okx', 'scalp': True},
-        'BONK/USDT': {'exchange': 'okx', 'scalp': True},
+        'BNB/USDT': {'exchange': 'okx', 'scalp': False},
+        'BONK/USDT': {'exchange': 'okx', 'scalp': False},
         'BTC/USDT': {'exchange': 'okx', 'scalp': True},
         'CRV/USDT': {'exchange': 'okx', 'scalp': False},
         'CVX/USDT': {'exchange': 'okx', 'scalp': False},
@@ -42,7 +42,7 @@ CONFIG = {
         'ETH/USDT': {'exchange': 'okx', 'scalp': True},
         'FET/USDT': {'exchange': 'okx', 'scalp': False},
         'FIL/USDT': {'exchange': 'okx', 'scalp': False},
-        'FLOKI/USDT': {'exchange': 'okx', 'scalp': True},
+        'FLOKI/USDT': {'exchange': 'okx', 'scalp': False},
         'GALA/USDT': {'exchange': 'okx', 'scalp': False},
         'HBAR/USDT': {'exchange': 'okx', 'scalp': False},
         'HYPE/USDT': {'exchange': 'okx', 'scalp': False},
@@ -51,7 +51,7 @@ CONFIG = {
         'JTO/USDT': {'exchange': 'okx', 'scalp': False},
         'JUP/USDT': {'exchange': 'okx', 'scalp': False},
         'LINK/USDT': {'exchange': 'okx', 'scalp': True},
-        'LTC/USDT': {'exchange': 'okx', 'scalp': False},
+        'LTC/USDT': {'exchange': 'okx', 'scalp': True},
         'MANA/USDT': {'exchange': 'okx', 'scalp': False},
         'MOVE/USDT': {'exchange': 'okx', 'scalp': False},
         'NEAR/USDT': {'exchange': 'okx', 'scalp': True},
@@ -59,7 +59,7 @@ CONFIG = {
         'OP/USDT': {'exchange': 'okx', 'scalp': True},
         'PENDLE/USDT': {'exchange': 'okx', 'scalp': False},
         'PENGU/USDT': {'exchange': 'okx', 'scalp': False},
-        'PEPE/USDT': {'exchange': 'okx', 'scalp': True},
+        'PEPE/USDT': {'exchange': 'okx', 'scalp': False},
         'PYTH/USDT': {'exchange': 'okx', 'scalp': False},
         'RAY/USDT': {'exchange': 'okx', 'scalp': False},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False},
@@ -71,13 +71,13 @@ CONFIG = {
         'TIA/USDT': {'exchange': 'okx', 'scalp': False},
         'TON/USDT': {'exchange': 'okx', 'scalp': False},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False},
-        'WIF/USDT': {'exchange': 'okx', 'scalp': True},
+        'WIF/USDT': {'exchange': 'okx', 'scalp': False},
         'WLD/USDT': {'exchange': 'okx', 'scalp': False},
         'XRP/USDT': {'exchange': 'okx', 'scalp': True},
         'ZK/USDT': {'exchange': 'okx', 'scalp': False},
         'ZRO/USDT': {'exchange': 'okx', 'scalp': False},
-        'UNI/USDT': {'exchange': 'okx', 'scalp': False},
-        'SHIB/USDT': {'exchange': 'okx', 'scalp': True},
+        'UNI/USDT': {'exchange': 'okx', 'scalp': True},
+        'SHIB/USDT': {'exchange': 'okx', 'scalp': False},
         'ENJ/USDT': {'exchange': 'okx', 'scalp': False},
         'APE/USDT': {'exchange': 'okx', 'scalp': False},
         'CORE/USDT': {'exchange': 'okx', 'scalp': False},
@@ -92,7 +92,7 @@ CONFIG = {
         'ETC/USDT':   {'exchange': 'okx', 'scalp': True},
         'NEO/USDT':   {'exchange': 'okx', 'scalp': True},
         'POL/USDT':   {'exchange': 'okx', 'scalp': True},
-        'S/USDT':     {'exchange': 'okx', 'scalp': True},
+        'S/USDT':     {'exchange': 'okx', 'scalp': False},
         'THETA/USDT': {'exchange': 'okx', 'scalp': True},
         'XLM/USDT':   {'exchange': 'okx', 'scalp': True},
         'ZEC/USDT':   {'exchange': 'okx', 'scalp': True},
@@ -353,6 +353,10 @@ def send_start_notification():
         "   • 1ère entrée: ST Context 1H + flip ST AI 1H\n"
         "   • Pyramiding: Bias 4H + flip ST AI 1H (guard)\n"
         "   • 73 assets\n\n"
+        "5️⃣ <b>SCALP</b>\n"
+        "   • ST Context LT 1H (filtre) + ST Context ST 15m (signal)\n"
+        "   • Anti-chop: annulé si ST Context LT 15m en zone\n"
+        "   • 24 assets\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏰ {now}"
     )
@@ -675,6 +679,8 @@ def should_send(symbol, key, event_id=None, cooldown=None):
 ST_AI_15M: dict = {}       # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_15M: dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_1D:  dict = {}  # symbol -> 'buy' | 'sell' | None
+ST_CONTEXT_LT_1H:  dict = {}  # Long term context 1H
+ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
@@ -1093,6 +1099,53 @@ def webhook():
                     f"{chop_warn}"
                     f"{ctx_4h_warn}"
                 )
+
+    # ========================================================================
+    # LOGIQUE SCALP : ST Context LT 1H + ST Context ST 15m → anti-chop LT 15m
+    # ========================================================================
+    if strat in ['scalp', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
+        m = MOMENTUM_STATE[symbol]
+
+        if alert_type == 'st_context' and tf == '15m':
+            # Signal : zone ST Context short term 15m
+            parsed_ctx_st = parse_st_context_value(val)
+            ST_CONTEXT_15M[symbol] = parsed_ctx_st
+            m['st_context_15m_ts'] = now_ts
+
+            ctx_lt_1h  = ST_CONTEXT_LT_1H.get(symbol)   # filtre directionnel
+            ctx_lt_15m = ST_CONTEXT_LT_15M.get(symbol)  # anti-chop
+            direction_scalp = "LONG" if parsed_ctx_st == 'buy' else ("SHORT" if parsed_ctx_st == 'sell' else None)
+
+            if direction_scalp and ctx_lt_1h == parsed_ctx_st:
+                # Anti-chop : on n'entre PAS si zone LT 15m dans le même sens
+                if ctx_lt_15m == parsed_ctx_st:
+                    logger.debug(f"[SCALP] {symbol} — annulé : ST Context LT 15m déjà en zone {parsed_ctx_st}")
+                elif should_send(symbol, f"scalp_entry_{parsed_ctx_st}", event_id=event_id, cooldown=3600):
+                    emoji = "🟢" if direction_scalp == "LONG" else "🔴"
+                    ctx_lt_15m_txt = ctx_lt_15m.upper() if ctx_lt_15m else "NEUTRE"
+                    send_telegram(
+                        f"{emoji} <b>[SCALP - ENTREE 15M]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 Direction: {direction_scalp}\n"
+                        f"💰 Price: ${format_price(price)}\n"
+                        f"🏦 Exchange: {exchange_name.upper()}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"✅ ST Context LT 1H: {ctx_lt_1h.upper()} (filtre)\n"
+                        f"✅ ST Context ST 15m: {parsed_ctx_st.upper()} (signal)\n"
+                        f"✅ ST Context LT 15m: {ctx_lt_15m_txt} (anti-chop)"
+                    )
+                    track_alert(symbol, 'SCALP')
+                    logger.info(f"[SCALP] Entrée: {symbol} {direction_scalp}")
+
+        elif alert_type == 'st_context_lt' and tf == '15m':
+            parsed_lt = parse_st_context_value(val)
+            ST_CONTEXT_LT_15M[symbol] = parsed_lt
+            m['st_context_lt_15m_ts'] = now_ts
+
+        elif alert_type == 'st_context_lt' and tf == '1h':
+            parsed_lt = parse_st_context_value(val)
+            ST_CONTEXT_LT_1H[symbol] = parsed_lt
+            m['st_context_lt_1h_ts'] = now_ts
 
     persist_runtime_state()
     audit_log(data, status="traité")

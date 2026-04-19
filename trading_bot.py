@@ -1217,7 +1217,7 @@ def sentiment_now():
 @app.route('/force_context', methods=['POST'])
 def force_context():
     """Injecte manuellement un état ST Context.
-    Body: {"symbol": "BTC/USDT", "tf": "1h"|"4h"|"15m", "value": "buy"|"sell"|"none"}
+    Body: {"symbol": "BTC/USDT", "tf": "1h"|"4h"|"15m"|"1d"|"lt_1h"|"lt_15m", "value": "buy"|"sell"|"none"}
     Ou pour plusieurs: {"symbols": ["BTC/USDT", "ETH/USDT"], "tf": "4h", "value": "sell"}
     """
     data = request.get_json(silent=True)
@@ -1249,6 +1249,15 @@ def force_context():
             elif tf == '15m':
                 ST_CONTEXT_15M[symbol] = ctx
                 m['st_context_15m_ts'] = now_ts
+            elif tf == '1d':
+                ST_CONTEXT_1D[symbol] = ctx
+                m['st_context_1d_ts'] = now_ts
+            elif tf == 'lt_1h':
+                ST_CONTEXT_LT_1H[symbol] = ctx
+                m['st_context_lt_1h_ts'] = now_ts
+            elif tf == 'lt_15m':
+                ST_CONTEXT_LT_15M[symbol] = ctx
+                m['st_context_lt_15m_ts'] = now_ts
         updated.append(symbol)
         logger.info(f"[FORCE_CONTEXT] {symbol} st_context_{tf} = {ctx}")
 

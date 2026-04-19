@@ -346,7 +346,7 @@ def send_start_notification():
         "   • Signal: Flip ST AI 1H / Pyramiding: ST AI 4H\n"
         "   • ⚠️ Warning si ST Context 4H opposé\n\n"
         "2️⃣ <b>CONTEXT</b>\n"
-        "   • ST Context 4H + MACD 4H (8/17/9)\n"
+        "   • ST Context 4H + MACD 4H + MACD 1H + Bias 15m\n"
         "   • Signal: Flip ST AI 1H\n\n"
         "3️⃣ <b>TREND</b>\n"
         "   • Bias 3D + MACD 4H + ST Context 1H + flip ST AI 1H\n\n"
@@ -912,7 +912,8 @@ def webhook():
     # ========================================================================
     # ========================================================================
     # ========================================================================
-    # LOGIQUE CONTEXT : ST Context 4H + MACD 4H → flip ST AI 1H
+    # ========================================================================
+    # LOGIQUE CONTEXT : ST Context 4H + MACD 4H + MACD 1H + Bias 15m → flip ST AI 1H
     # ========================================================================
     if strat in ['context', 'all']:
         m = MOMENTUM_STATE[symbol]
@@ -920,14 +921,18 @@ def webhook():
         if alert_type == 'supertrend' and tf == '1h':
             ctx_4h      = m.get('st_context_4h')
             macd_4h_v   = m.get('macd_4h')
+            macd_1h_v   = m.get('macd_1h')
+            bias_15m_v  = m.get('bias_15m')
             st_val      = parse_supertrend_value(val)
             st_1h_flip  = bool(m.get('st_1h_flipped', False))
             direction_c = "LONG" if st_val == 'buy' else "SHORT"
             expected    = st_val
             ctx_4h_ok   = ctx_4h == expected
             macd_4h_ok  = (macd_4h_v == 'bull' and direction_c == 'LONG') or (macd_4h_v == 'bear' and direction_c == 'SHORT')
+            macd_1h_ok  = (macd_1h_v == 'bull' and direction_c == 'LONG') or (macd_1h_v == 'bear' and direction_c == 'SHORT')
+            bias_15m_ok = (bias_15m_v == 'bull' and direction_c == 'LONG') or (bias_15m_v == 'bear' and direction_c == 'SHORT')
 
-            if (st_1h_flip and ctx_4h_ok and macd_4h_ok
+            if (st_1h_flip and ctx_4h_ok and macd_4h_ok and macd_1h_ok and bias_15m_ok
                     and should_send(symbol, f"context_entry_1h_{st_val}", event_id=event_id, cooldown=14400)):
                 emoji = "🟢" if direction_c == "LONG" else "🔴"
                 send_telegram(
@@ -939,6 +944,8 @@ def webhook():
                     f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
                     f"✅ ST Context 4H: {ctx_4h.upper()}\n"
                     f"✅ MACD 4H: {macd_4h_v.upper()} (8/17/9)\n"
+                    f"✅ MACD 1H: {macd_1h_v.upper()} (8/17/9)\n"
+                    f"✅ Bias 15m: {bias_15m_v.upper()}\n"
                     f"✅ SuperTrend AI 1H: {st_val.upper()} (SIGNAL)"
                 )
                 track_alert(symbol, 'CONTEXT')

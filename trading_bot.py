@@ -127,9 +127,8 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'MOMENTUM': 0, 'CONFLUENCE': 0, 'CONTEXT': 0, 'SWING': 0,
-            'CONTEXT_A': 0, 'CONTEXT_B': 0, 'CONTEXT_B+': 0,
-            'CONFLUENCE': 0, 'TREND': 0, 'SCALP': 0,
+            'SAFE': 0, 'CONFLUENCE': 0, 'CONTEXT': 0, 'TREND': 0,
+            'SWING': 0, 'SCALP': 0, 'MOMENTUM': 0,
         }
     if strategy in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] += 1
@@ -313,8 +312,11 @@ def send_telegram(msg):
             retry_after = resp.json().get('parameters', {}).get('retry_after', 30)
             logger.warning(f"⚠️ Telegram rate limit — retry after {retry_after}s")
             time.sleep(retry_after)
-            requests.post(url, json=payload, timeout=10)
-            logger.info("✅ Message Telegram envoyé (après retry)")
+            resp2 = requests.post(url, json=payload, timeout=10)
+            if resp2.status_code == 200:
+                logger.info("✅ Message Telegram envoyé (après retry)")
+            else:
+                logger.error(f"❌ Telegram retry échoué: {resp2.status_code} {resp2.text}")
         else:
             logger.error(f"❌ Telegram erreur HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
@@ -380,26 +382,19 @@ def send_weekly_report():
     total_safe      = sum(s.get('SAFE', 0)        for s in WEEKLY_STATS.values())
     total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
-    total_confluence    = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
     total_momentum  = sum(s.get('MOMENTUM', 0)    for s in WEEKLY_STATS.values())
     total_swing     = sum(s.get('SWING', 0)       for s in WEEKLY_STATS.values())
-    total_ctx_a     = sum(s.get('CONTEXT_A', 0)  for s in WEEKLY_STATS.values())
-    total_ctx_b     = sum(s.get('CONTEXT_B', 0)  for s in WEEKLY_STATS.values())
-    total_ctx_bplus = sum(s.get('CONTEXT_B+', 0) for s in WEEKLY_STATS.values())
+    total_scalp     = sum(s.get('SCALP', 0)       for s in WEEKLY_STATS.values())
 
     msg += (
         "📋 <b>Par stratégie:</b>\n"
-        f"  • SAFE: {total_safe}\n"
         f"  • CONFLUENCE: {total_confluence}\n"
         f"  • CONTEXT: {total_context}\n"
-        f"  • CONFLUENCE: {total_confluence}\n"
         f"  • TREND: {total_trend}\n"
-        f"  • MOMENTUM: {total_momentum}\n"
         f"  • SWING: {total_swing}\n"
-        f"  • CONTEXT A: {total_ctx_a}\n"
-        f"  • CONTEXT B: {total_ctx_b}\n"
-        f"  • CONTEXT B+: {total_ctx_bplus}\n\n"
+        f"  • SCALP: {total_scalp}\n"
+        f"  • MOMENTUM: {total_momentum}\n\n"
     )
 
     assets_with_alerts = {

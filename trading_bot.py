@@ -748,9 +748,9 @@ def webhook():
 
     # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
     m = MOMENTUM_STATE[symbol]
+    now_ts = datetime.now(timezone.utc).timestamp()
     if alert_type == 'st_context':
         parsed_ctx = parse_st_context_value(val)
-        now_ts = datetime.now(timezone.utc).timestamp()
         if tf == '1h':
             m['st_context_1h'] = parsed_ctx
             m['st_context_1h_ts'] = now_ts

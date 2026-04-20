@@ -1508,7 +1508,7 @@ def calc_macd_okx(df, fast=12, slow=26, signal=9):
     macd_line   = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     histogram   = macd_line - signal_line
-    val = histogram.iloc[-2]
+    val = histogram.iloc[-1]
     return 'bull' if val > 0 else 'bear'
 
 def calc_ema200_okx(df):

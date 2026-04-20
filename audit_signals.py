@@ -2,7 +2,7 @@
 import argparse
 import json
 import os
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import datetime, timezone
 
 
@@ -58,7 +58,11 @@ def load_from_redis(client, limit):
 
 
 def load_from_jsonl(path, limit):
-    logs = []
+    """Charge les `limit` événements les plus récents depuis un fichier JSONL."""
+    if limit <= 0:
+        return []
+
+    logs = deque(maxlen=limit)
     with open(path, 'r', encoding='utf-8') as handle:
         for line in handle:
             line = line.strip()
@@ -69,8 +73,8 @@ def load_from_jsonl(path, limit):
             except json.JSONDecodeError:
                 continue
             logs.append(item)
-            if len(logs) >= limit:
-                break
+
+    # Ordre décroissant (plus récent en premier), cohérent avec l'affichage.
     return list(reversed(logs))
 
 

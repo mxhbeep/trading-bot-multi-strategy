@@ -101,6 +101,7 @@ CONFIG = {
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
     'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),  # legacy
+    'SCALP_BOT_TOKEN': os.environ.get('SCALP_BOT_TOKEN', ''),
     'NTFY_TOPIC': os.environ.get('NTFY_TOPIC', ''),
     'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
@@ -288,6 +289,28 @@ def get_market_context_info() -> str:
 def send_bark(title: str, body: str, group: str = "TradingBot"):
     """Legacy — remplacé par send_ntfy."""
     send_ntfy(title, body)
+
+def send_telegram_scalp(msg):
+    """Envoie une alerte sur le bot Telegram dédié SCALP."""
+    token = CONFIG.get('SCALP_BOT_TOKEN', '')
+    if not token:
+        send_telegram(msg)  # fallback sur le bot principal
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(url, json={
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': msg,
+            'parse_mode': 'HTML'
+        }, timeout=10)
+        if resp.status_code == 200:
+            logger.info("✅ Message Scalp Bot envoyé")
+        else:
+            logger.warning(f"⚠️ Scalp Bot erreur: {resp.status_code}")
+            send_telegram(msg)  # fallback
+    except Exception as e:
+        logger.error(f"Scalp Bot error: {e}")
+        send_telegram(msg)  # fallback
 
 def send_ntfy(title: str, body: str):
     """Envoie une notification via ntfy.sh (fonctionne sans VPN en Chine)."""
@@ -1258,7 +1281,7 @@ def webhook():
                 elif should_send(symbol, f"scalp_entry_{parsed_ctx_st}", event_id=event_id, cooldown=3600):
                     emoji = "🟢" if direction_scalp == "LONG" else "🔴"
                     ctx_lt_15m_txt = ctx_lt_15m.upper() if ctx_lt_15m else "NEUTRE"
-                    send_telegram(
+                    send_telegram_scalp(
                         f"{emoji} <b>[SCALP - ENTREE 15M]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_scalp}\n"

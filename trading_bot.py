@@ -390,7 +390,7 @@ def send_start_notification():
         "   • Entrée B: flip ST AI 1H (sans zone requise)\n"
         "   • Pyramiding: ST Context 15m + flip ST AI 15m (guard)\n\n"
         "4️⃣ <b>PULSE</b>\n"
-        "   • MACD 4H + Bias 1H (EMA9/SMA26)\n"
+        "   • MACD 1H + Bias 15m (EMA13/SMA30)\n"
         "   • Anti-chop: annulé si ST Context 15m opposé\n"
         "   • Signal: Flip ST AI 15m / Pyramiding: guard\n\n"
         "5️⃣ <b>SCALP</b>\n"
@@ -1207,8 +1207,9 @@ def webhook():
                     logger.info(f"[SWING] Entrée 1H: {symbol} {direction_s}")
 
     # ========================================================================
-    # LOGIQUE PULSE : MACD 4H + Bias 1H (EMA9/SMA26) → flip ST AI 15m
-    # Anti-chop : annulé si ST Context 15m opposé
+    # ========================================================================
+    # LOGIQUE PULSE : MACD 1H + Bias 15m (EMA13/SMA30) → flip ST AI 15m
+    # Anti-chop : ST Context 15m opposé → signal annulé
     # Pyramiding : flip ST AI 15m + guard
     # ========================================================================
     if strat in ['pulse', 'all']:
@@ -1220,16 +1221,16 @@ def webhook():
             flipped_15m = (st_15m_val is not None and prev_15m is not None and st_15m_val != prev_15m)
 
             if flipped_15m:
-                macd_4h_v   = m.get('macd_4h')
-                bias_1h_v   = m.get('bias_1h')
+                macd_1h_v   = m.get('macd_1h')
+                bias_15m_v  = m.get('bias_15m')
                 ctx_15m     = ST_CONTEXT_15M.get(symbol)
                 direction_p = "LONG" if st_15m_val == 'buy' else "SHORT"
                 exp_bias    = 'bull' if direction_p == 'LONG' else 'bear'
                 opp_ctx     = 'sell' if direction_p == 'LONG' else 'buy'
-                macd_4h_ok  = (macd_4h_v == 'bull' and direction_p == 'LONG') or (macd_4h_v == 'bear' and direction_p == 'SHORT')
-                bias_1h_ok  = bias_1h_v == exp_bias
-                # Anti-chop : annulé si ST Context 15m est OPPOSÉ au sens du trade
-                no_chop_ctx = ctx_15m != opp_ctx  # None ou aligné = OK
+                macd_1h_ok  = (macd_1h_v == 'bull' and direction_p == 'LONG') or (macd_1h_v == 'bear' and direction_p == 'SHORT')
+                bias_15m_ok = bias_15m_v == exp_bias
+                # Anti-chop : annulé si ST Context 15m est opposé
+                no_chop_ctx = ctx_15m != opp_ctx
 
                 pos_key = f"{symbol}_PULSE"
                 with STATE_LOCK:
@@ -1237,11 +1238,11 @@ def webhook():
                     if pos and pos['direction'] != direction_p:
                         pos = None; is_entry = False; is_pyra = False
                     else:
-                        is_entry = (macd_4h_ok and bias_1h_ok and no_chop_ctx and pos is None)
+                        is_entry = (macd_1h_ok and bias_15m_ok and no_chop_ctx and pos is None)
                         opp_15m  = 'sell' if st_15m_val == 'buy' else 'buy'
                         guard_ok = m.get('last_st_15m') == opp_15m
                         is_pyra  = bool(pos and pos['direction'] == direction_p and
-                                        macd_4h_ok and bias_1h_ok and no_chop_ctx and guard_ok)
+                                        macd_1h_ok and bias_15m_ok and no_chop_ctx and guard_ok)
                     if is_entry and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=3600):
                         SCALP_POSITIONS[pos_key] = {'direction': direction_p, 'entry_count': 1}
                         pos = SCALP_POSITIONS[pos_key]
@@ -1258,8 +1259,8 @@ def webhook():
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ MACD 4H: {macd_4h_v.upper()} (8/17/9)\n"
-                        f"✅ Bias 1H: {bias_1h_v.upper()} (EMA9/SMA26)\n"
+                        f"✅ MACD 1H: {macd_1h_v.upper()} (8/17/9)\n"
+                        f"✅ Bias 15m: {bias_15m_v.upper()} (EMA13/SMA30)\n"
                         f"✅ ST Context 15m: {ctx_15m_txt} (anti-chop)\n"
                         f"✅ SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
                         f"{get_market_context_info()}"
@@ -1280,8 +1281,8 @@ def webhook():
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ MACD 4H: {macd_4h_v.upper()} (8/17/9)\n"
-                        f"✅ Bias 1H: {bias_1h_v.upper()} (EMA9/SMA26)\n"
+                        f"✅ MACD 1H: {macd_1h_v.upper()} (8/17/9)\n"
+                        f"✅ Bias 15m: {bias_15m_v.upper()} (EMA13/SMA30)\n"
                         f"✅ SuperTrend AI 15m: {st_15m_val.upper()} (PYRAMIDING)\n"
                         f"🛡️ Guard: flip opposé validé"
                         f"{get_market_context_info()}"

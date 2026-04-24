@@ -1212,7 +1212,7 @@ def webhook():
     # Anti-chop : ST Context 15m opposé → signal annulé
     # Pyramiding : flip ST AI 15m + guard
     # ========================================================================
-    if strat in ['pulse', 'all']:
+    if strat in ['pulse', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
         m = MOMENTUM_STATE[symbol]
 
         if alert_type == 'supertrend' and tf == '15m':

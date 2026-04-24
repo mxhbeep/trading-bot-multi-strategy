@@ -1242,7 +1242,7 @@ def webhook():
                 if is_entry and pos:
                     emoji = "🟢" if direction_p == "LONG" else "🔴"
                     ctx_15m_txt = ctx_15m.upper() if ctx_15m else "NEUTRE"
-                    send_telegram(
+                    send_telegram_scalp(
                         f"{emoji} <b>[PULSE - ENTREE 15M]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_p}\n"
@@ -1264,7 +1264,7 @@ def webhook():
                         m['last_st_15m'] = None
                         entry_count = pos['entry_count']
                     emoji = "🟢" if direction_p == "LONG" else "🔴"
-                    send_telegram(
+                    send_telegram_scalp(
                         f"{emoji} <b>[PULSE - PYRAMIDING #{entry_count}]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_p}\n"

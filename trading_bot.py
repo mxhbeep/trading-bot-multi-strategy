@@ -1243,7 +1243,7 @@ def webhook():
                         guard_ok = m.get('last_st_15m') == opp_15m
                         is_pyra  = bool(pos and pos['direction'] == direction_p and
                                         macd_1h_ok and bias_15m_ok and no_chop_ctx and guard_ok)
-                    if is_entry and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=3600):
+                    if is_entry and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=1800):
                         SCALP_POSITIONS[pos_key] = {'direction': direction_p, 'entry_count': 1}
                         pos = SCALP_POSITIONS[pos_key]
                     else:
@@ -1268,7 +1268,7 @@ def webhook():
                     track_alert(symbol, 'PULSE')
                     logger.info(f"[PULSE] Entrée: {symbol} {direction_p}")
 
-                elif is_pyra and should_send(symbol, f"pulse_pyra_{st_15m_val}", event_id=event_id, cooldown=3600):
+                elif is_pyra and should_send(symbol, f"pulse_pyra_{st_15m_val}", event_id=event_id, cooldown=1800):
                     with STATE_LOCK:
                         pos['entry_count'] += 1
                         m['last_st_15m'] = None

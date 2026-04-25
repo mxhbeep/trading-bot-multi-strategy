@@ -25,16 +25,13 @@ CONFIG = {
         'AAVE/USDT': {'exchange': 'okx', 'scalp': True},
         'APT/USDT': {'exchange': 'okx', 'scalp': True},
         'ARB/USDT': {'exchange': 'okx', 'scalp': True},
-        'ATOM/USDT': {'exchange': 'okx', 'scalp': False},
         'AVAX/USDT': {'exchange': 'okx', 'scalp': True},
-        'AXS/USDT': {'exchange': 'okx', 'scalp': False},
         'BNB/USDT': {'exchange': 'okx', 'scalp': False},
         'BONK/USDT': {'exchange': 'okx', 'scalp': False},
         'BTC/USDT': {'exchange': 'okx', 'scalp': True},
         'CRV/USDT': {'exchange': 'okx', 'scalp': False},
         'CVX/USDT': {'exchange': 'okx', 'scalp': False},
         'DOGE/USDT': {'exchange': 'okx', 'scalp': True},
-        'ADA/USDT': {'exchange': 'okx', 'scalp': True},
         'DYDX/USDT': {'exchange': 'okx', 'scalp': False},
         'LDO/USDT': {'exchange': 'okx', 'scalp': False},
         'DOT/USDT': {'exchange': 'okx', 'scalp': False},
@@ -42,21 +39,16 @@ CONFIG = {
         'ETH/USDT': {'exchange': 'okx', 'scalp': True},
         'FET/USDT': {'exchange': 'okx', 'scalp': False},
         'FIL/USDT': {'exchange': 'okx', 'scalp': False},
-        'FLOKI/USDT': {'exchange': 'okx', 'scalp': False},
-        'GALA/USDT': {'exchange': 'okx', 'scalp': False},
         'HBAR/USDT': {'exchange': 'okx', 'scalp': False},
         'HYPE/USDT': {'exchange': 'okx', 'scalp': False},
-        'IMX/USDT': {'exchange': 'okx', 'scalp': False},
         'INJ/USDT': {'exchange': 'okx', 'scalp': True},
         'JTO/USDT': {'exchange': 'okx', 'scalp': False},
         'JUP/USDT': {'exchange': 'okx', 'scalp': False},
         'LINK/USDT': {'exchange': 'okx', 'scalp': True},
         'LTC/USDT': {'exchange': 'okx', 'scalp': True},
-        'MANA/USDT': {'exchange': 'okx', 'scalp': False},
         'MOVE/USDT': {'exchange': 'okx', 'scalp': False},
         'NEAR/USDT': {'exchange': 'okx', 'scalp': True},
         'ONDO/USDT': {'exchange': 'okx', 'scalp': False},
-        'OP/USDT': {'exchange': 'okx', 'scalp': True},
         'PENDLE/USDT': {'exchange': 'okx', 'scalp': False},
         'PENGU/USDT': {'exchange': 'okx', 'scalp': False},
         'PEPE/USDT': {'exchange': 'okx', 'scalp': False},
@@ -71,30 +63,21 @@ CONFIG = {
         'TIA/USDT': {'exchange': 'okx', 'scalp': False},
         'TON/USDT': {'exchange': 'okx', 'scalp': False},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False},
-        'WIF/USDT': {'exchange': 'okx', 'scalp': False},
         'WLD/USDT': {'exchange': 'okx', 'scalp': False},
         'XRP/USDT': {'exchange': 'okx', 'scalp': True},
         'ZK/USDT': {'exchange': 'okx', 'scalp': False},
         'ZRO/USDT': {'exchange': 'okx', 'scalp': False},
         'UNI/USDT': {'exchange': 'okx', 'scalp': True},
-        'SHIB/USDT': {'exchange': 'okx', 'scalp': False},
         'ENJ/USDT': {'exchange': 'okx', 'scalp': False},
-        'APE/USDT': {'exchange': 'okx', 'scalp': False},
         'CORE/USDT': {'exchange': 'okx', 'scalp': False},
-        'TURBO/USDT': {'exchange': 'okx', 'scalp': False},
         'MEW/USDT': {'exchange': 'okx', 'scalp': False},
         'NEIRO/USDT': {'exchange': 'okx', 'scalp': False},
-        'STRK/USDT': {'exchange': 'okx', 'scalp': False},
         'BERA/USDT': {'exchange': 'okx', 'scalp': False},
         'SONIC/USDT':   {'exchange': 'okx', 'scalp': False},
         'USELESS/USDT': {'exchange': 'okx', 'scalp': False},
         'BCH/USDT':   {'exchange': 'okx', 'scalp': True},
         'ETC/USDT':   {'exchange': 'okx', 'scalp': True},
-        'NEO/USDT':   {'exchange': 'okx', 'scalp': True},
-        'POL/USDT':   {'exchange': 'okx', 'scalp': True},
         'S/USDT':     {'exchange': 'okx', 'scalp': False},
-        'THETA/USDT': {'exchange': 'okx', 'scalp': True},
-        'XLM/USDT':   {'exchange': 'okx', 'scalp': True},
         'ZEC/USDT':   {'exchange': 'okx', 'scalp': True},
     },
     
@@ -185,6 +168,7 @@ def persist_runtime_state():
             'last_signal_events': LAST_SIGNAL_EVENTS,
             'st_ai_15m':          dict(ST_AI_15M),
             'st_context_15m':     dict(ST_CONTEXT_15M),
+            'adx_state':          dict(ADX_STATE),
             'scalp_positions':    dict(SCALP_POSITIONS),
         }
         try:
@@ -231,6 +215,7 @@ def load_runtime_state():
         LAST_SIGNAL_EVENTS  = payload.get('last_signal_events', {})
         ST_AI_15M.update(payload.get('st_ai_15m', {}))
         ST_CONTEXT_15M.update(payload.get('st_context_15m', {}))
+        ADX_STATE.update(payload.get('adx_state', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
 
         weekly_start_raw = payload.get('weekly_start')
@@ -390,9 +375,10 @@ def send_start_notification():
         "   • Entrée B: flip ST AI 1H (sans zone requise)\n"
         "   • Pyramiding: ST Context 15m + flip ST AI 15m (guard)\n\n"
         "4️⃣ <b>PULSE</b>\n"
-        "   • MACD 1H + Bias 15m (EMA9/SMA26) + ST Context 15m\n"
-        "   • Signal: Flip ST AI 15m / Pyramiding: guard\n"
-        "   • 24 assets / Cooldown: 30min\n\n"
+        "   • Bias 4H + Bias 15m + ADX 15m (≥20 en hausse)\n"
+        "   • Anti-chop: ST Context 5m opposé\n"
+        "   • Signal: Flip ST AI 5m / Pyramiding: guard\n"
+        "   • 18 assets / Cooldown: 15min\n\n"
         "5️⃣ <b>SCALP</b>\n"
         "   • ST Context LT 1H + MACD 1H (filtres)\n"
         "   • Signal: ST Context ST 15m\n"
@@ -722,6 +708,7 @@ ST_AI_15M: dict = {}       # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_15M: dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_1D:  dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_LT_1H:  dict = {}  # Long term context 1H
+ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
 ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
@@ -735,7 +722,8 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_1d': None, 'bias_2d': None, 'bias_3d': None, 'macd_2d': None,
             'st_context_1h': None, 'st_context_4h': None,
-            'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None, 'st_context_1d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_15m_ts': None,
+            'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None, 'st_context_1d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_15m_ts': None, 'st_context_5m_ts': None,
+            'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None,
             'st_1h': None, 'st_4h': None, 'st_1d': None, 'macd_1d': None, 'macd_1h': None, 'macd_4h': None, 'macd_3d': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
@@ -1209,27 +1197,49 @@ def webhook():
     # ========================================================================
     # ========================================================================
     # ========================================================================
-    # LOGIQUE PULSE : ST Context 15m + Bias 15m (EMA9/SMA26) + MACD 1H → flip ST AI 15m
-    # Pyramiding : flip ST AI 15m + guard
+    # ========================================================================
+    # LOGIQUE PULSE : Bias 4H + Bias 15m + ADX 15m + ST Context 5m → flip ST AI 5m
+    # Anti-chop : ST Context 5m opposé → signal annulé
+    # Pyramiding : flip ST AI 5m + guard
+    # ADX calculé par OKX toutes les heures sur 15m
     # ========================================================================
     if strat in ['pulse', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
         m = MOMENTUM_STATE[symbol]
 
-        if alert_type == 'supertrend' and tf == '15m':
-            st_15m_val  = m.get('st_ai_15m')
-            prev_15m    = m.get('last_st_15m')
-            flipped_15m = (st_15m_val is not None and prev_15m is not None and st_15m_val != prev_15m)
+        # Mise à jour ST Context 5m
+        if alert_type == 'st_context' and tf == '5m':
+            parsed_ctx_5m = parse_st_context_value(val)
+            ST_CONTEXT_15M[symbol + '_5m'] = parsed_ctx_5m  # stocker sous clé distincte
+            m['st_context_5m_ts'] = now_ts
 
-            if flipped_15m:
-                macd_1h_v   = m.get('macd_1h')
+        # Signal : flip ST AI 5m
+        if alert_type == 'supertrend' and tf == '5m':
+            prev_5m    = m.get('st_ai_5m')
+            st_5m_val  = parse_supertrend_value(val)
+            m['st_ai_5m'] = st_5m_val
+            flipped_5m = (st_5m_val is not None and prev_5m is not None and st_5m_val != prev_5m)
+            if flipped_5m and prev_5m:
+                m['last_st_5m'] = prev_5m
+
+            if flipped_5m:
+                bias_4h_v   = m.get('bias_4h')
                 bias_15m_v  = m.get('bias_15m')
-                ctx_15m     = ST_CONTEXT_15M.get(symbol)
-                direction_p = "LONG" if st_15m_val == 'buy' else "SHORT"
-                expected    = st_15m_val
+                ctx_5m      = m.get('st_context_5m') or ST_CONTEXT_15M.get(symbol + '_5m')
+                adx_data    = ADX_STATE.get(symbol, {})
+                adx_val     = adx_data.get('adx', 0)
+                di_plus     = adx_data.get('di_plus', 0)
+                di_minus    = adx_data.get('di_minus', 0)
+                adx_rising  = adx_data.get('adx_rising', False)
+                direction_p = "LONG" if st_5m_val == 'buy' else "SHORT"
+                expected    = st_5m_val
                 exp_bias    = 'bull' if direction_p == 'LONG' else 'bear'
-                macd_1h_ok  = (macd_1h_v == 'bull' and direction_p == 'LONG') or (macd_1h_v == 'bear' and direction_p == 'SHORT')
+                opp_ctx     = 'sell' if direction_p == 'LONG' else 'buy'
+
+                bias_4h_ok  = bias_4h_v == exp_bias
                 bias_15m_ok = bias_15m_v == exp_bias
-                ctx_15m_ok  = ctx_15m == expected
+                adx_ok      = adx_val >= 20 and adx_rising
+                di_ok       = (di_plus > di_minus and direction_p == 'LONG') or (di_minus > di_plus and direction_p == 'SHORT')
+                no_chop_5m  = ctx_5m != opp_ctx  # anti-chop
 
                 pos_key = f"{symbol}_PULSE"
                 with STATE_LOCK:
@@ -1237,12 +1247,12 @@ def webhook():
                     if pos and pos['direction'] != direction_p:
                         pos = None; is_entry = False; is_pyra = False
                     else:
-                        is_entry = (macd_1h_ok and bias_15m_ok and ctx_15m_ok and pos is None)
-                        opp_15m  = 'sell' if st_15m_val == 'buy' else 'buy'
-                        guard_ok = m.get('last_st_15m') == opp_15m
+                        is_entry = (bias_4h_ok and bias_15m_ok and adx_ok and di_ok and no_chop_5m and pos is None)
+                        opp_5m   = 'sell' if st_5m_val == 'buy' else 'buy'
+                        guard_ok = m.get('last_st_5m') == opp_5m
                         is_pyra  = bool(pos and pos['direction'] == direction_p and
-                                        macd_1h_ok and bias_15m_ok and ctx_15m_ok and guard_ok)
-                    if is_entry and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=1800):
+                                        bias_4h_ok and bias_15m_ok and adx_ok and di_ok and no_chop_5m and guard_ok)
+                    if is_entry and should_send(symbol, f"pulse_entry_{st_5m_val}", event_id=event_id, cooldown=900):
                         SCALP_POSITIONS[pos_key] = {'direction': direction_p, 'entry_count': 1}
                         pos = SCALP_POSITIONS[pos_key]
                     else:
@@ -1250,29 +1260,31 @@ def webhook():
 
                 if is_entry and pos:
                     emoji = "🟢" if direction_p == "LONG" else "🔴"
-                    ctx_15m_txt = ctx_15m.upper() if ctx_15m else "NEUTRE"
+                    ctx_5m_txt = ctx_5m.upper() if ctx_5m else "NEUTRE"
                     send_telegram_scalp(
-                        f"{emoji} <b>[PULSE - ENTREE 15M]</b> {symbol}\n"
+                        f"{emoji} <b>[PULSE - ENTREE 5M]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_p}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ MACD 1H: {macd_1h_v.upper()} (8/17/9)\n"
+                        f"✅ Bias 4H: {bias_4h_v.upper()} (EMA21/SMA55)\n"
                         f"✅ Bias 15m: {bias_15m_v.upper()} (EMA9/SMA26)\n"
-                        f"✅ ST Context 15m: {ctx_15m_txt}\n"
-                        f"✅ SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
+                        f"✅ ADX: {adx_val:.1f} {'↑' if adx_rising else '→'} | +DI: {di_plus:.1f} | -DI: {di_minus:.1f}\n"
+                        f"✅ ST Context 5m: {ctx_5m_txt} (anti-chop)\n"
+                        f"✅ SuperTrend AI 5m: {st_5m_val.upper()} (SIGNAL)"
                         f"{get_market_context_info()}"
                     )
                     track_alert(symbol, 'PULSE')
-                    logger.info(f"[PULSE] Entrée: {symbol} {direction_p}")
+                    logger.info(f"[PULSE] Entrée: {symbol} {direction_p} ADX={adx_val:.1f}")
 
-                elif is_pyra and should_send(symbol, f"pulse_pyra_{st_15m_val}", event_id=event_id, cooldown=1800):
+                elif is_pyra and should_send(symbol, f"pulse_pyra_{st_5m_val}", event_id=event_id, cooldown=900):
                     with STATE_LOCK:
                         pos['entry_count'] += 1
-                        m['last_st_15m'] = None
+                        m['last_st_5m'] = None
                         entry_count = pos['entry_count']
                     emoji = "🟢" if direction_p == "LONG" else "🔴"
+                    ctx_5m_txt = ctx_5m.upper() if ctx_5m else "NEUTRE"
                     send_telegram_scalp(
                         f"{emoji} <b>[PULSE - PYRAMIDING #{entry_count}]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1280,10 +1292,10 @@ def webhook():
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        f"✅ MACD 1H: {macd_1h_v.upper()} (8/17/9)\n"
+                        f"✅ Bias 4H: {bias_4h_v.upper()} (EMA21/SMA55)\n"
                         f"✅ Bias 15m: {bias_15m_v.upper()} (EMA9/SMA26)\n"
-                        f"✅ ST Context 15m: {ctx_15m_txt}\n"
-                        f"✅ SuperTrend AI 15m: {st_15m_val.upper()} (PYRAMIDING)\n"
+                        f"✅ ADX: {adx_val:.1f} | +DI: {di_plus:.1f} | -DI: {di_minus:.1f}\n"
+                        f"✅ SuperTrend AI 5m: {st_5m_val.upper()} (PYRAMIDING)\n"
                         f"🛡️ Guard: flip opposé validé"
                         f"{get_market_context_info()}"
                     )
@@ -1551,6 +1563,34 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
         return None
 
 
+def calc_adx_okx(df, length=11, threshold=20):
+    """Calcule ADX + DI sur les données OHLCV."""
+    try:
+        high  = df['high']
+        low   = df['low']
+        close = df['close']
+        # True Range
+        tr = (high - low).combine((high - close.shift(1)).abs(), max).combine((low - close.shift(1)).abs(), max)
+        # Directional Movement
+        dm_plus  = (high - high.shift(1)).clip(lower=0)
+        dm_minus = (low.shift(1) - low).clip(lower=0)
+        dm_plus[dm_plus < dm_minus]  = 0
+        dm_minus[dm_minus < dm_plus] = 0
+        # Smooth with Wilder EMA
+        atr     = tr.ewm(alpha=1/length, adjust=False).mean()
+        di_plus  = 100 * dm_plus.ewm(alpha=1/length, adjust=False).mean() / atr
+        di_minus = 100 * dm_minus.ewm(alpha=1/length, adjust=False).mean() / atr
+        dx      = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus)
+        adx     = dx.ewm(alpha=1/length, adjust=False).mean()
+        return {
+            'adx':       round(float(adx.iloc[-1]), 2),
+            'di_plus':   round(float(di_plus.iloc[-1]), 2),
+            'di_minus':  round(float(di_minus.iloc[-1]), 2),
+            'adx_rising': float(adx.iloc[-1]) > float(adx.iloc[-2]),
+        }
+    except Exception as e:
+        return None
+
 def calc_bias_okx(df, ema_len=13, sma_len=30):
     """EMA13 vs SMA30 — CarréBias."""
     close   = df['close']
@@ -1665,6 +1705,9 @@ def update_indicators_for_symbol(symbol):
             df_15m_bias = fetch_ohlcv_okx(symbol, '15m', limit=50)
             if df_15m_bias is not None and len(df_15m_bias) >= 30:
                 bias_15m = calc_bias_okx(df_15m_bias, ema_len=9, sma_len=26)
+                adx_data = calc_adx_okx(df_15m_bias)
+                if adx_data:
+                    ADX_STATE[symbol] = adx_data
                 with STATE_LOCK:
                     if symbol in MOMENTUM_STATE:
                         MOMENTUM_STATE[symbol]['bias_15m'] = bias_15m

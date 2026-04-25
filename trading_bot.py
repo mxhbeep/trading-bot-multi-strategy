@@ -6,7 +6,11 @@ import numpy as np
 import json
 import time
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo, timedelta
 import logging
 from flask import Flask, request, jsonify
 import os
@@ -94,8 +98,9 @@ def track_alert(symbol, strategy):
         WEEKLY_STATS[symbol] = {
             'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'PULSE': 0, 'MOMENTUM': 0,
         }
-    if strategy in WEEKLY_STATS[symbol]:
-        WEEKLY_STATS[symbol][strategy] += 1
+    if strategy not in WEEKLY_STATS[symbol]:
+        WEEKLY_STATS[symbol][strategy] = 0
+    WEEKLY_STATS[symbol][strategy] += 1
 
 exchanges = {}
 
@@ -516,7 +521,7 @@ def heartbeat_scheduler():
         redis_status = "✅" if REDIS_CLIENT else "⚠️ non dispo"
         msg = (
             "💓 <b>[BOT HEARTBEAT]</b>\n"
-            f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n"
             f"📊 Assets: {len(CONFIG['SYMBOLS'])}\n"
             f"🧠 State momentum: {len(MOMENTUM_STATE)}\n"
             f"💾 Redis: {redis_status}"
@@ -861,7 +866,7 @@ def webhook():
                         f"📈 Direction: {direction_c}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 3D: {bias_3d_v.upper()} (EMA21/SMA55)\n"
                         f"✅ ADX 4H: {adx_4h_val:.1f} ≥ 23 | +DI: {di_plus_4h:.1f} | -DI: {di_minus_4h:.1f}\n"
                         f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
@@ -885,7 +890,7 @@ def webhook():
                         f"📈 Direction: {direction_c}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 3D: {bias_3d_v.upper()} (EMA21/SMA55)\n"
                         f"✅ ADX 4H: {adx_4h_val:.1f} | +DI: {di_plus_4h:.1f} | -DI: {di_minus_4h:.1f}\n"
                         f"✅ ST Context 1D: {ctx_1d_txt} (anti-chop)\n"
@@ -952,7 +957,7 @@ def webhook():
                         f"📈 Direction: {direction_t}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 1D: {bias_1d_v.upper()} (EMA21/SMA55)\n"
                         f"✅ Bias 1H: {bias_1h_v.upper()} (EMA13/SMA30)\n"
                         f"✅ ADX 1H: {adx_1h_val:.1f} {'↑' if adx_1h_rise else '→'} ≥22 | +DI: {di_plus_1h:.1f} | -DI: {di_minus_1h:.1f}\n"
@@ -1012,7 +1017,7 @@ def webhook():
                         f"📈 Direction: {direction_t}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 1D: {bias_1d_v.upper()} (EMA21/SMA55)\n"
                         f"✅ Bias 1H: {bias_1h_v.upper()} (EMA13/SMA30)\n"
                         f"✅ ADX 1H: {adx_1h_val:.1f} | +DI: {di_plus_1h:.1f} | -DI: {di_minus_1h:.1f}\n"
@@ -1092,7 +1097,7 @@ def webhook():
                         f"📈 Direction: {direction_p}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 4H: {bias_4h_v.upper()} (EMA21/SMA55)\n"
                         f"✅ Bias 15m: {bias_15m_v.upper()} (EMA9/SMA26)\n"
                         f"✅ ADX: {adx_val:.1f} {'↑' if adx_rising else '→'} | +DI: {di_plus:.1f} | -DI: {di_minus:.1f}\n"
@@ -1116,7 +1121,7 @@ def webhook():
                         f"📈 Direction: {direction_p}\n"
                         f"💰 Price: ${format_price(price)}\n"
                         f"🏦 Exchange: {exchange_name.upper()}\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 4H: {bias_4h_v.upper()} (EMA21/SMA55)\n"
                         f"✅ Bias 15m: {bias_15m_v.upper()} (EMA9/SMA26)\n"
                         f"✅ ADX: {adx_val:.1f} | +DI: {di_plus:.1f} | -DI: {di_minus:.1f}\n"
@@ -1520,7 +1525,7 @@ def send_market_sentiment():
             f"⚡ <b>Court terme (4H)</b> : {label_4h}\n"
             f"   {bulls_4h} bulls / {bears_4h} bears — {pct_4h}%\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}"
         )
         send_telegram(msg)
         logger.info(f"[SENTIMENT] 2D: {pct_2d}% bull | 4H: {pct_4h}% bull")

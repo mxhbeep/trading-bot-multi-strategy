@@ -59,6 +59,7 @@ CONFIG = {
         'PENGU/USDT':       {'exchange': 'okx', 'scalp': False},
         'PEPE/USDT':        {'exchange': 'okx', 'scalp': False},
         'RENDER/USDT':      {'exchange': 'okx', 'scalp': False},
+        'SAND/USDT':        {'exchange': 'okx', 'scalp': False},
         'SKY/USDT':         {'exchange': 'okx', 'scalp': False},
         'STX/USDT':         {'exchange': 'okx', 'scalp': False},
         'TIA/USDT':         {'exchange': 'okx', 'scalp': False},

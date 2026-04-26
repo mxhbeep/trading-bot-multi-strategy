@@ -678,6 +678,7 @@ ST_CONTEXT_15M: dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_1D:  dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_LT_1H:  dict = {}  # Long term context 1H
 ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
+PREP_STATE: dict = {}  # strategy -> {'LONG': set(), 'SHORT': set()} — assets en préparation
 ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
@@ -1483,9 +1484,115 @@ def update_indicators_for_symbol(symbol):
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
 
+
+def check_prep_alerts():
+    """Vérifie les assets en préparation et envoie une alerte groupée si la liste change."""
+    global PREP_STATE
+
+    new_prep = {
+        'CONFLUENCE': {'LONG': set(), 'SHORT': set()},
+        'TREND':      {'LONG': set(), 'SHORT': set()},
+        'PULSE':      {'LONG': set(), 'SHORT': set()},
+    }
+
+    with STATE_LOCK:
+        state_copy    = dict(MOMENTUM_STATE)
+        adx_copy      = dict(ADX_STATE)
+        symbols_conf  = CONFIG['SYMBOLS']
+
+    for symbol, m in state_copy.items():
+        is_scalp = symbols_conf.get(symbol, {}).get('scalp', False)
+
+        # ── CONFLUENCE : Bias 3D + ADX 4H ≥23 + DI aligné ───────────
+        bias_3d_v  = m.get('bias_3d')
+        adx_4h     = adx_copy.get(f'{symbol}_4h', {})
+        adx_4h_val = adx_4h.get('adx', 0)
+        di_plus_4h = adx_4h.get('di_plus', 0)
+        di_minus_4h= adx_4h.get('di_minus', 0)
+
+        for direction in ('LONG', 'SHORT'):
+            exp = 'bull' if direction == 'LONG' else 'bear'
+            di_ok = (di_plus_4h > di_minus_4h and direction == 'LONG') or                     (di_minus_4h > di_plus_4h and direction == 'SHORT')
+            bias_ok = bias_3d_v == exp
+            adx_ok  = adx_4h_val >= 23
+            if bias_ok and adx_ok and di_ok:
+                new_prep['CONFLUENCE'][direction].add(symbol)
+
+        # ── TREND : Bias 1D + Bias 1H + ADX 1H ≥22 + DI aligné ──────
+        bias_1d_v  = m.get('bias_1d')
+        bias_1h_v  = m.get('bias_1h')
+        adx_1h     = adx_copy.get(f'{symbol}_1h', {})
+        adx_1h_val = adx_1h.get('adx', 0)
+        adx_1h_rise= adx_1h.get('adx_rising', False)
+        di_plus_1h = adx_1h.get('di_plus', 0)
+        di_minus_1h= adx_1h.get('di_minus', 0)
+
+        for direction in ('LONG', 'SHORT'):
+            exp = 'bull' if direction == 'LONG' else 'bear'
+            di_ok    = (di_plus_1h > di_minus_1h and direction == 'LONG') or                        (di_minus_1h > di_plus_1h and direction == 'SHORT')
+            bias_1d  = bias_1d_v == exp
+            bias_1h  = bias_1h_v == exp
+            adx_ok   = adx_1h_val >= 22 and adx_1h_rise
+            if bias_1d and bias_1h and adx_ok and di_ok:
+                new_prep['TREND'][direction].add(symbol)
+
+        # ── PULSE : Bias 4H + Bias 15m + ADX 15m ≥20 + DI ───────────
+        if is_scalp:
+            bias_4h_v  = m.get('bias_4h')
+            bias_15m_v = m.get('bias_15m')
+            adx_15m    = adx_copy.get(symbol, {})
+            adx_15m_val= adx_15m.get('adx', 0)
+            adx_15m_rise= adx_15m.get('adx_rising', False)
+            di_plus_15m = adx_15m.get('di_plus', 0)
+            di_minus_15m= adx_15m.get('di_minus', 0)
+
+            for direction in ('LONG', 'SHORT'):
+                exp = 'bull' if direction == 'LONG' else 'bear'
+                di_ok    = (di_plus_15m > di_minus_15m and direction == 'LONG') or                            (di_minus_15m > di_plus_15m and direction == 'SHORT')
+                bias_4h  = bias_4h_v == exp
+                bias_15m = bias_15m_v == exp
+                adx_ok   = adx_15m_val >= 20 and adx_15m_rise
+                if bias_4h and bias_15m and adx_ok and di_ok:
+                    new_prep['PULSE'][direction].add(symbol)
+
+    # ── Comparer avec l'état précédent et envoyer si changement ──────
+    changed_msgs = []
+
+    for strat in ('CONFLUENCE', 'TREND', 'PULSE'):
+        old_state = PREP_STATE.get(strat, {'LONG': set(), 'SHORT': set()})
+        new_long  = new_prep[strat]['LONG']
+        new_short = new_prep[strat]['SHORT']
+        old_long  = old_state.get('LONG', set())
+        old_short = old_state.get('SHORT', set())
+
+        if new_long != old_long or new_short != old_short:
+            lines = [f"⏳ <b>[PREP {strat}]</b>"]
+            if new_long:
+                symbols_str = "  ".join(sorted(s.replace('/USDT', '') for s in new_long))
+                lines.append(f"🟢 LONG  : {symbols_str}")
+            if new_short:
+                symbols_str = "  ".join(sorted(s.replace('/USDT', '') for s in new_short))
+                lines.append(f"🔴 SHORT : {symbols_str}")
+            if not new_long and not new_short:
+                lines.append("— Aucun asset en préparation")
+            lines.append(f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
+            changed_msgs.append("\n".join(lines))
+
+    PREP_STATE = {
+        'CONFLUENCE': {'LONG': new_prep['CONFLUENCE']['LONG'], 'SHORT': new_prep['CONFLUENCE']['SHORT']},
+        'TREND':      {'LONG': new_prep['TREND']['LONG'],      'SHORT': new_prep['TREND']['SHORT']},
+        'PULSE':      {'LONG': new_prep['PULSE']['LONG'],       'SHORT': new_prep['PULSE']['SHORT']},
+    }
+
+    if changed_msgs:
+        full_msg = "\n\n".join(changed_msgs)
+        send_telegram(full_msg)
+        logger.info(f"[PREP] Alerte envoyée: {len(changed_msgs)} stratégie(s) modifiée(s)")
+
+
 def indicators_scheduler():
     """Recalcule tous les indicateurs depuis OKX toutes les heures."""
-    logger.info("[OKX] Scheduler indicateurs démarré (toutes les heures)")
+    logger.info("[OKX] Scheduler indicateurs démarré (toutes les 15 minutes)")
     # Premier calcul au démarrage après 30s
     time.sleep(30)
     while True:
@@ -1494,13 +1601,16 @@ def indicators_scheduler():
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
         persist_runtime_state()
+        check_prep_alerts()
         logger.info("[OKX] Mise a jour indicateurs terminée")
-        # Attendre la prochaine heure pile
-        now  = datetime.now(timezone.utc)
-        next_hour = (now + timedelta(hours=1)).replace(minute=2, second=0, microsecond=0)
-        wait = (next_hour - now).total_seconds()
+        # Attendre la prochaine bougie 15m
+        now = datetime.now(timezone.utc)
+        minutes_to_next = 15 - (now.minute % 15)
+        next_15m = now + timedelta(minutes=minutes_to_next)
+        next_15m = next_15m.replace(second=10, microsecond=0)
+        wait = (next_15m - now).total_seconds()
         logger.info(f"[OKX] Prochain calcul dans {int(wait)}s")
-        time.sleep(wait)
+        time.sleep(max(60, wait))
 
 
 def send_market_sentiment():

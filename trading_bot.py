@@ -527,6 +527,17 @@ def heartbeat_scheduler():
             f"💾 Redis: {redis_status}"
         )
         send_telegram(msg)
+        # Envoyer aussi dans le bot Scalping avec info PULSE
+        with STATE_LOCK:
+            pulse_positions = sum(1 for k in SCALP_POSITIONS if k.endswith('_PULSE'))
+        scalp_msg = (
+            "💓 <b>[PULSE HEARTBEAT]</b>\n"
+            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n"
+            f"📊 Assets PULSE: 14\n"
+            f"📈 Positions PULSE ouvertes: {pulse_positions}\n"
+            f"💾 Redis: {redis_status}"
+        )
+        send_telegram_scalp(scalp_msg)
 
 # ============================================================================ #
 # UTILITAIRES

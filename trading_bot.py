@@ -97,7 +97,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'PULSE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'PULSE': 0, 'FLASH': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -283,6 +283,28 @@ def send_telegram_scalp(msg):
         logger.error(f"Scalp Bot error: {e}")
         send_telegram(msg)  # fallback
 
+def send_telegram_ttmtf(msg):
+    """Envoie une alerte sur le bot @TTMTF_bot (PULSE + CONFLUENCE + TREND)."""
+    token = CONFIG.get('TELEGRAM_BOT_TOKEN', '')
+    if not token:
+        send_telegram(msg)  # fallback
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(url, json={
+            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
+            'text': msg,
+            'parse_mode': 'HTML'
+        }, timeout=10)
+        if resp.status_code != 200:
+            logger.warning(f'⚠️ TTMTF Bot erreur: {resp.status_code}')
+            send_telegram(msg)  # fallback
+        else:
+            logger.info('✅ Message TTMTF Bot envoyé')
+    except Exception as e:
+        logger.error(f'TTMTF Bot error: {e}')
+        send_telegram(msg)  # fallback
+
 def send_ntfy(title: str, body: str):
     """Envoie une notification via ntfy.sh (fonctionne sans VPN en Chine)."""
     topic = CONFIG.get('NTFY_TOPIC', '')
@@ -360,7 +382,12 @@ def send_start_notification():
         "   • Bias 4H + Bias 15m + ADX 15m ≥20 en hausse + DI aligné\n"
         "   • Anti-chop: ST Context 5m opposé\n"
         "   • Signal: Flip ST AI 5m / Cooldown: 15min\n"
-        "   • 14 assets SCALP\n\n"
+        "   • 14 assets SCALP — Bot @TTMTF_bot\n\n"
+        "4️⃣ <b>FLASH</b>\n"
+        "   • ST Context 15m + Bias 15m + ADX 15m ≥20 en hausse + DI aligné\n"
+        "   • Anti-chop: ST Context 5m + ST Context LT 15m opposés\n"
+        "   • Signal: Flip ST AI 5m / Cooldown: 10min\n"
+        "   • 14 assets SCALP — Bot TradeToast Scalping\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏰ {now}"
     )
@@ -693,7 +720,7 @@ def init_symbol_states(symbol):
             'bias_1d': None, 'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None, 'st_context_1d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_15m_ts': None, 'st_context_5m_ts': None,
-            'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None,
+            'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None, 'st_ai_5m_flash': None, 'last_st_5m_flash': None,
             'st_1h': None, 'st_4h': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
@@ -763,6 +790,15 @@ def webhook():
         elif tf == '1d':
             ST_CONTEXT_1D[symbol] = parsed_ctx
             m['st_context_1d_ts'] = now_ts
+
+    if alert_type == 'st_context_lt':
+        parsed_ctx_lt = parse_st_context_value(val)
+        if tf == '1h':
+            ST_CONTEXT_LT_1H[symbol] = parsed_ctx_lt
+            m['st_context_lt_1h_ts'] = now_ts
+        elif tf == '15m':
+            ST_CONTEXT_LT_15M[symbol] = parsed_ctx_lt
+            m['st_context_lt_15m_ts'] = now_ts
 
     ema200_value = None
     if alert_type == 'ema200' and tf == '1h':
@@ -1125,7 +1161,7 @@ def webhook():
                 if is_entry and pos:
                     emoji = "🟢" if direction_p == "LONG" else "🔴"
                     ctx_5m_txt = ctx_5m.upper() if ctx_5m else "NEUTRE"
-                    send_telegram_scalp(
+                    send_telegram_ttmtf(
                         f"{emoji} <b>[PULSE - ENTREE 5M]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_p}\n"
@@ -1133,7 +1169,7 @@ def webhook():
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 4H: {bias_4h_v.upper()} (EMA21/SMA55)\n"
-                        f"✅ Bias 15m: {bias_15m_v.upper()} (EMA9/SMA26)\n"
+                        f"✅ Bias 15m: {bias_15m_v.upper()} (EMA8/SMA20)\n"
                         f"✅ ADX: {adx_val:.1f} {'↑' if adx_rising else '→'} | +DI: {di_plus:.1f} | -DI: {di_minus:.1f}\n"
                         f"✅ ST Context 5m: {ctx_5m_txt} (anti-chop)\n"
                         f"✅ SuperTrend AI 5m: {st_5m_val.upper()} (SIGNAL)"
@@ -1149,7 +1185,7 @@ def webhook():
                         entry_count = pos['entry_count']
                     emoji = "🟢" if direction_p == "LONG" else "🔴"
                     ctx_5m_txt = ctx_5m.upper() if ctx_5m else "NEUTRE"
-                    send_telegram_scalp(
+                    send_telegram_ttmtf(
                         f"{emoji} <b>[PULSE - PYRAMIDING #{entry_count}]</b> {symbol}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📈 Direction: {direction_p}\n"
@@ -1157,7 +1193,7 @@ def webhook():
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 4H: {bias_4h_v.upper()} (EMA21/SMA55)\n"
-                        f"✅ Bias 15m: {bias_15m_v.upper()} (EMA9/SMA26)\n"
+                        f"✅ Bias 15m: {bias_15m_v.upper()} (EMA8/SMA20)\n"
                         f"✅ ADX: {adx_val:.1f} | +DI: {di_plus:.1f} | -DI: {di_minus:.1f}\n"
                         f"✅ SuperTrend AI 5m: {st_5m_val.upper()} (PYRAMIDING)\n"
                         f"🛡️ Guard: flip opposé validé"
@@ -1167,6 +1203,117 @@ def webhook():
                     logger.info(f"[PULSE] Pyramiding #{entry_count}: {symbol} {direction_p}")
 
     persist_runtime_state()
+    # ========================================================================
+    # LOGIQUE FLASH : ST Context 15m + Bias 15m + ADX 15m → flip ST AI 5m
+    # Anti-chop : ST Context 5m opposé OU ST Context LT 15m opposé → annulé
+    # Pyramiding : Bias 15m + Bias 5m + ADX 15m + flip ST AI 5m + guard
+    # ========================================================================
+    if strat in ['flash', 'all'] and CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
+        m = MOMENTUM_STATE[symbol]
+
+        if alert_type == 'supertrend' and tf == '5m':
+            st_5m_val_f  = parse_supertrend_value(val)
+            prev_5m_f    = m.get('st_ai_5m_flash')
+            flipped_5m_f = (st_5m_val_f is not None and prev_5m_f is not None and st_5m_val_f != prev_5m_f)
+            m['st_ai_5m_flash'] = st_5m_val_f
+            if flipped_5m_f and prev_5m_f:
+                m['last_st_5m_flash'] = prev_5m_f
+
+            if flipped_5m_f:
+                # Recalculer Bias 15m en temps réel
+                try:
+                    df_15m_f     = fetch_ohlcv_okx(symbol, '15m', limit=50)
+                    bias_15m_v_f = calc_bias_okx(df_15m_f, ema_len=8, sma_len=20) if df_15m_f is not None else m.get('bias_15m')
+                except Exception:
+                    bias_15m_v_f = m.get('bias_15m')
+
+                bias_5m_v_f  = m.get('bias_5m')
+                ctx_15m_f    = ST_CONTEXT_15M.get(symbol)
+                ctx_5m_f     = m.get('st_context_5m') or ST_CONTEXT_15M.get(symbol + '_5m')
+                ctx_lt_15m_f = ST_CONTEXT_LT_15M.get(symbol)
+                adx_15m_f    = ADX_STATE.get(symbol, {})
+                adx_val_f    = adx_15m_f.get('adx', 0)
+                adx_rising_f = adx_15m_f.get('adx_rising', False)
+                di_plus_f    = adx_15m_f.get('di_plus', 0)
+                di_minus_f   = adx_15m_f.get('di_minus', 0)
+
+                direction_f  = "LONG" if st_5m_val_f == 'buy' else "SHORT"
+                exp_bias_f   = 'bull' if direction_f == 'LONG' else 'bear'
+                opp_ctx_f    = 'sell' if direction_f == 'LONG' else 'buy'
+
+                ctx_15m_ok_f  = ctx_15m_f == st_5m_val_f
+                bias_15m_ok_f = bias_15m_v_f == exp_bias_f
+                bias_5m_ok_f  = bias_5m_v_f == exp_bias_f
+                adx_ok_f      = adx_val_f >= 20 and adx_rising_f
+                di_ok_f       = (di_plus_f > di_minus_f and direction_f == 'LONG') or \
+                                (di_minus_f > di_plus_f and direction_f == 'SHORT')
+                no_chop_5m_f  = ctx_5m_f != opp_ctx_f
+                no_chop_lt_f  = ctx_lt_15m_f != opp_ctx_f
+
+                pos_key_f = f"{symbol}_FLASH"
+                with STATE_LOCK:
+                    pos_f = SCALP_POSITIONS.get(pos_key_f)
+                    if pos_f and pos_f['direction'] != direction_f:
+                        pos_f = None; is_entry_f = False; is_pyra_f = False
+                    else:
+                        is_entry_f = (ctx_15m_ok_f and bias_15m_ok_f and adx_ok_f and di_ok_f
+                                      and no_chop_5m_f and no_chop_lt_f and pos_f is None)
+                        opp_5m_f   = 'sell' if st_5m_val_f == 'buy' else 'buy'
+                        guard_ok_f = m.get('last_st_5m_flash') == opp_5m_f
+                        is_pyra_f  = bool(pos_f and pos_f['direction'] == direction_f
+                                          and bias_15m_ok_f and bias_5m_ok_f and adx_ok_f and di_ok_f
+                                          and no_chop_5m_f and no_chop_lt_f and guard_ok_f)
+                    if is_entry_f and should_send(symbol, f"flash_entry_{st_5m_val_f}", event_id=event_id, cooldown=600):
+                        SCALP_POSITIONS[pos_key_f] = {'direction': direction_f, 'entry_count': 1}
+                        pos_f = SCALP_POSITIONS[pos_key_f]
+                    else:
+                        is_entry_f = False
+
+                if is_entry_f and pos_f:
+                    emoji       = "🟢" if direction_f == "LONG" else "🔴"
+                    ctx_5m_txt  = ctx_5m_f.upper()    if ctx_5m_f    else "NEUTRE"
+                    ctx_lt_txt  = ctx_lt_15m_f.upper() if ctx_lt_15m_f else "NEUTRE"
+                    ctx_15m_txt = ctx_15m_f.upper()   if ctx_15m_f   else "NEUTRE"
+                    send_telegram_scalp(
+                        f"{emoji} <b>[FLASH - ENTREE 5M]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 Direction: {direction_f}\n"
+                        f"💰 Price: ${format_price(price)}\n"
+                        f"🏦 Exchange: {exchange_name.upper()}\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                        f"✅ ST Context 15m: {ctx_15m_txt}\n"
+                        f"✅ Bias 15m: {(bias_15m_v_f or '?').upper()} (EMA8/SMA20)\n"
+                        f"✅ ADX 15m: {adx_val_f:.1f} {'↑' if adx_rising_f else '→'} | +DI: {di_plus_f:.1f} | -DI: {di_minus_f:.1f}\n"
+                        f"✅ ST Context 5m: {ctx_5m_txt} (anti-chop)\n"
+                        f"✅ ST Context LT 15m: {ctx_lt_txt} (anti-chop)\n"
+                        f"✅ SuperTrend AI 5m: {st_5m_val_f.upper()} (SIGNAL)"
+                        f"{get_market_context_info()}"
+                    )
+                    track_alert(symbol, 'FLASH')
+                    logger.info(f"[FLASH] Entrée: {symbol} {direction_f} ADX={adx_val_f:.1f}")
+
+                elif is_pyra_f and should_send(symbol, f"flash_pyra_{st_5m_val_f}", event_id=event_id, cooldown=600):
+                    with STATE_LOCK:
+                        pos_f['entry_count'] += 1
+                        entry_count_f = pos_f['entry_count']
+                    emoji = "🟢" if direction_f == "LONG" else "🔴"
+                    send_telegram_scalp(
+                        f"{emoji} <b>[FLASH - PYRAMIDING #{entry_count_f}]</b> {symbol}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 Direction: {direction_f}\n"
+                        f"💰 Price: ${format_price(price)}\n"
+                        f"🏦 Exchange: {exchange_name.upper()}\n"
+                        f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                        f"✅ Bias 15m: {(bias_15m_v_f or '?').upper()} (EMA8/SMA20)\n"
+                        f"✅ Bias 5m: {(bias_5m_v_f or '?').upper()} (EMA8/SMA21)\n"
+                        f"✅ ADX 15m: {adx_val_f:.1f} | +DI: {di_plus_f:.1f} | -DI: {di_minus_f:.1f}\n"
+                        f"✅ SuperTrend AI 5m: {st_5m_val_f.upper()} (PYRAMIDING)\n"
+                        f"🛡️ Guard: flip opposé validé"
+                        f"{get_market_context_info()}"
+                    )
+                    track_alert(symbol, 'FLASH')
+                    logger.info(f"[FLASH] Pyramiding #{entry_count_f}: {symbol} {direction_f}")
+
     audit_log(data, status="traité")
     return jsonify({'status': 'success', 'symbol': symbol}), 200
 
@@ -1444,7 +1591,7 @@ def update_indicators_for_symbol(symbol):
             return
 
         # Calculs
-        bias_1h  = calc_bias_okx(df_1h, ema_len=9, sma_len=26)
+        bias_1h  = calc_bias_okx(df_1h, ema_len=8, sma_len=20)
         bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
         bias_1d  = calc_bias_okx(df_1d, ema_len=21, sma_len=55)
         bias_2d  = calc_bias_2d(symbol)
@@ -1464,7 +1611,7 @@ def update_indicators_for_symbol(symbol):
         try:
             df_15m_bias = fetch_ohlcv_okx(symbol, '15m', limit=50)
             if df_15m_bias is not None and len(df_15m_bias) >= 30:
-                bias_15m = calc_bias_okx(df_15m_bias, ema_len=9, sma_len=26)
+                bias_15m = calc_bias_okx(df_15m_bias, ema_len=8, sma_len=20)
                 adx_data = calc_adx_okx(df_15m_bias)
                 if adx_data:
                     ADX_STATE[symbol] = adx_data
@@ -1486,6 +1633,16 @@ def update_indicators_for_symbol(symbol):
                 ADX_STATE[f'{symbol}_4h'] = adx_4h_data
         except Exception as e:
             logger.debug(f'[OKX] ADX 4H {symbol}: {e}')
+        # Bias 5m (EMA8/SMA21) pour FLASH — assets scalp uniquement
+        if CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
+            try:
+                df_5m_bias = fetch_ohlcv_okx(symbol, '5m', limit=50)
+                if df_5m_bias is not None and len(df_5m_bias) >= 25:
+                    bias_5m_val = calc_bias_okx(df_5m_bias, ema_len=8, sma_len=21)
+                    if symbol in MOMENTUM_STATE:
+                        MOMENTUM_STATE[symbol]['bias_5m'] = bias_5m_val
+            except Exception as e:
+                logger.debug(f'[OKX] bias_5m {symbol}: {e}')
 
         price = float(df_1h['close'].iloc[-1])
 

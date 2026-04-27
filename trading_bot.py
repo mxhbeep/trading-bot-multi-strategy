@@ -930,7 +930,18 @@ def webhook():
 
             if flipped_15m:
                 bias_1d_v   = m.get('bias_1d')
-                bias_1h_v   = m.get('bias_1h')
+                # Recalculer bias_1h et ADX 1H en temps réel
+                try:
+                    df_1h_rt  = fetch_ohlcv_okx(symbol, '1h', limit=250)
+                    if df_1h_rt is not None:
+                        bias_1h_v = calc_bias_okx(df_1h_rt, ema_len=13, sma_len=30)
+                        adx_1h_rt = calc_adx_okx(df_1h_rt, length=12, threshold=22)
+                        m['bias_1h'] = bias_1h_v
+                        if adx_1h_rt: ADX_STATE[f'{symbol}_1h'] = adx_1h_rt
+                    else:
+                        bias_1h_v = m.get('bias_1h')
+                except Exception:
+                    bias_1h_v = m.get('bias_1h')
                 ctx_1h      = m.get('st_context_1h')
                 adx_1h      = ADX_STATE.get(f'{symbol}_1h', {})
                 adx_1h_val  = adx_1h.get('adx', 0)
@@ -1065,8 +1076,18 @@ def webhook():
                 m['last_st_5m'] = prev_5m
 
             if flipped_5m:
-                bias_4h_v   = m.get('bias_4h')
-                bias_15m_v  = m.get('bias_15m')
+                # Recalculer bias_4h et bias_15m en temps réel pour éviter le cache
+                try:
+                    df_15m_rt = fetch_ohlcv_okx(symbol, '15m', limit=50)
+                    df_4h_rt  = fetch_ohlcv_okx(symbol, '4h',  limit=100)
+                    bias_15m_v = calc_bias_okx(df_15m_rt, ema_len=9,  sma_len=26) if df_15m_rt is not None else m.get('bias_15m')
+                    bias_4h_v  = calc_bias_okx(df_4h_rt,  ema_len=21, sma_len=55) if df_4h_rt  is not None else m.get('bias_4h')
+                    # Mettre à jour le cache
+                    m['bias_15m'] = bias_15m_v
+                    m['bias_4h']  = bias_4h_v
+                except Exception:
+                    bias_4h_v  = m.get('bias_4h')
+                    bias_15m_v = m.get('bias_15m')
                 ctx_5m      = m.get('st_context_5m') or ST_CONTEXT_15M.get(symbol + '_5m')
                 adx_data    = ADX_STATE.get(symbol, {})
                 adx_val     = adx_data.get('adx', 0)

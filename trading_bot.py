@@ -1085,7 +1085,7 @@ def webhook():
                 ctx_4h_ok   = ctx_4h_p == st_15m_val
                 bias_4h_ok  = bias_4h_v == exp_bias
                 ctx_15m_ok  = ctx_15m_p == st_15m_val
-                no_chop_1h  = ctx_1h_p != opp_ctx
+                no_chop_1h  = (ctx_1h_p != opp_ctx) if ctx_1h_p is not None else True
 
                 close_msg_p = "\n\n📋 <b>Clôture :</b> Bias 4H inversé ou ST Context 4H inversé"
 
@@ -1414,57 +1414,58 @@ def check_prep_alerts():
     for symbol, m in state_copy.items():
         is_scalp = symbols_conf.get(symbol, {}).get('scalp', False)
 
-        # ── CONFLUENCE : Bias 3D + ADX 4H ≥23 + DI aligné ───────────
-        bias_3d_v  = m.get('bias_3d')
-        adx_4h     = adx_copy.get(f'{symbol}_4h', {})
-        adx_4h_val = adx_4h.get('adx', 0)
-        di_plus_4h = adx_4h.get('di_plus', 0)
-        di_minus_4h= adx_4h.get('di_minus', 0)
+        # ── CONFLUENCE : ST Context 3D + ST Context 4H aligné ───────
+        ctx_3d_c   = ST_CONTEXT_3D.get(symbol)
+        ctx_4h_c   = m.get('st_context_4h')
+        adx_1d_c   = adx_copy.get(f'{symbol}_1d', {})
+        di_plus_1d_c  = adx_1d_c.get('di_plus', 0)
+        di_minus_1d_c = adx_1d_c.get('di_minus', 0)
 
         for direction in ('LONG', 'SHORT'):
-            exp = 'bull' if direction == 'LONG' else 'bear'
-            di_ok = (di_plus_4h > di_minus_4h and direction == 'LONG') or                     (di_minus_4h > di_plus_4h and direction == 'SHORT')
-            bias_ok = bias_3d_v == exp
-            adx_ok  = adx_4h_val >= 23
-            if bias_ok and adx_ok and di_ok:
+            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+            opp_ctx = 'sell' if direction == 'LONG' else 'buy'
+            ctx_3d_ok = ctx_3d_c == exp_ctx
+            ctx_4h_ok = ctx_4h_c == exp_ctx
+            # Anti-chop ADX 1D : pas DI opposé dominant
+            adx_1d_ok = not ((di_minus_1d_c > di_plus_1d_c and direction == 'LONG') or
+                             (di_plus_1d_c > di_minus_1d_c and direction == 'SHORT'))
+            if ctx_3d_ok and ctx_4h_ok and adx_1d_ok:
                 new_prep['CONFLUENCE'][direction].add(symbol)
 
-        # ── TREND : Bias 1D + Bias 1H + ADX 1H ≥22 + DI aligné ──────
-        bias_1d_v  = m.get('bias_1d')
-        bias_1h_v  = m.get('bias_1h')
-        adx_1h     = adx_copy.get(f'{symbol}_1h', {})
-        adx_1h_val = adx_1h.get('adx', 0)
-        adx_1h_rise= adx_1h.get('adx_rising', False)
-        di_plus_1h = adx_1h.get('di_plus', 0)
-        di_minus_1h= adx_1h.get('di_minus', 0)
+        # ── TREND : ST Context 1D + Bias 1D + ST Context 4H ─────────
+        ctx_1d_t  = ST_CONTEXT_1D.get(symbol)
+        bias_1d_v = m.get('bias_1d')
+        ctx_4h_t  = m.get('st_context_4h')
+        ctx_1h_t  = m.get('st_context_1h')
 
         for direction in ('LONG', 'SHORT'):
-            exp = 'bull' if direction == 'LONG' else 'bear'
-            di_ok    = (di_plus_1h > di_minus_1h and direction == 'LONG') or                        (di_minus_1h > di_plus_1h and direction == 'SHORT')
-            bias_1d  = bias_1d_v == exp
-            bias_1h  = bias_1h_v == exp
-            adx_ok   = adx_1h_val >= 22 and adx_1h_rise
-            if bias_1d and bias_1h and adx_ok and di_ok:
+            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+            exp_bias = 'bull' if direction == 'LONG' else 'bear'
+            opp_ctx  = 'sell' if direction == 'LONG' else 'buy'
+            ctx_1d_ok  = ctx_1d_t == exp_ctx
+            bias_1d_ok = bias_1d_v == exp_bias
+            ctx_4h_ok  = ctx_4h_t == exp_ctx
+            no_chop_1h = ctx_1h_t != opp_ctx if ctx_1h_t is not None else True
+            if ctx_1d_ok and bias_1d_ok and ctx_4h_ok and no_chop_1h:
                 new_prep['TREND'][direction].add(symbol)
 
-        # ── PULSE : Bias 4H + Bias 15m + ADX 15m ≥20 + DI ───────────
-        if is_scalp:
-            bias_4h_v  = m.get('bias_4h')
-            bias_15m_v = m.get('bias_15m')
-            adx_15m    = adx_copy.get(symbol, {})
-            adx_15m_val= adx_15m.get('adx', 0)
-            adx_15m_rise= adx_15m.get('adx_rising', False)
-            di_plus_15m = adx_15m.get('di_plus', 0)
-            di_minus_15m= adx_15m.get('di_minus', 0)
+        # ── PULSE : ST Context 4H + Bias 4H + ST Context 15m ────────
+        ctx_4h_p  = m.get('st_context_4h')
+        bias_4h_v = m.get('bias_4h')
+        ctx_15m_p = ST_CONTEXT_15M.get(symbol)
+        ctx_1h_p  = m.get('st_context_1h')
 
-            for direction in ('LONG', 'SHORT'):
-                exp = 'bull' if direction == 'LONG' else 'bear'
-                di_ok    = (di_plus_15m > di_minus_15m and direction == 'LONG') or                            (di_minus_15m > di_plus_15m and direction == 'SHORT')
-                bias_4h  = bias_4h_v == exp
-                bias_15m = bias_15m_v == exp
-                adx_ok   = adx_15m_val >= 20 and adx_15m_rise
-                if bias_4h and bias_15m and adx_ok and di_ok:
-                    new_prep['PULSE'][direction].add(symbol)
+        for direction in ('LONG', 'SHORT'):
+            exp_ctx  = 'buy' if direction == 'LONG' else 'sell'
+            exp_bias = 'bull' if direction == 'LONG' else 'bear'
+            opp_ctx  = 'sell' if direction == 'LONG' else 'buy'
+            ctx_4h_ok  = ctx_4h_p == exp_ctx
+            bias_4h_ok = bias_4h_v == exp_bias
+            ctx_15m_ok = ctx_15m_p == exp_ctx
+            # None = neutre = ne bloque pas, mais opp_ctx = bloque
+            no_chop_1h = ctx_1h_p != opp_ctx if ctx_1h_p is not None else True
+            if ctx_4h_ok and bias_4h_ok and ctx_15m_ok and no_chop_1h:
+                new_prep['PULSE'][direction].add(symbol)
 
     # ── Comparer avec l'état précédent et envoyer si changement ──────
     changed_msgs = []

@@ -1086,6 +1086,12 @@ def webhook():
                 bias_4h_ok  = bias_4h_v == exp_bias
                 ctx_15m_ok  = ctx_15m_p == st_15m_val
                 no_chop_1h  = (ctx_1h_p != opp_ctx) if ctx_1h_p is not None else True
+                # Anti-chop ADX 1H : ok si neutre ou aligné, annulé si DI opposé dominant
+                adx_1h_p    = ADX_STATE.get(f'{symbol}_1h', {})
+                di_plus_1h  = adx_1h_p.get('di_plus', 0)
+                di_minus_1h = adx_1h_p.get('di_minus', 0)
+                adx_1h_ok_p = not ((di_minus_1h > di_plus_1h and direction_p == 'LONG') or
+                                   (di_plus_1h > di_minus_1h and direction_p == 'SHORT'))
 
                 close_msg_p = "\n\n📋 <b>Clôture :</b> Bias 4H inversé ou ST Context 4H inversé"
 
@@ -1097,9 +1103,9 @@ def webhook():
                     else:
                         opp_15m_p = 'sell' if st_15m_val == 'buy' else 'buy'
                         guard_ok   = m.get('last_st_15m') == opp_15m_p
-                        is_entry_p = (ctx_4h_ok and bias_4h_ok and ctx_15m_ok and no_chop_1h and pos_p is None)
+                        is_entry_p = (ctx_4h_ok and bias_4h_ok and ctx_15m_ok and no_chop_1h and adx_1h_ok_p and pos_p is None)
                         is_pyra_p  = bool(pos_p and pos_p['direction'] == direction_p
-                                          and ctx_4h_ok and bias_4h_ok and ctx_15m_ok and no_chop_1h and guard_ok)
+                                          and ctx_4h_ok and bias_4h_ok and ctx_15m_ok and no_chop_1h and adx_1h_ok_p and guard_ok)
                     if is_entry_p and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=3600):
                         SCALP_POSITIONS[pos_key_p] = {'direction': direction_p, 'entry_count': 1}
                         pos_p = SCALP_POSITIONS[pos_key_p]
@@ -1121,6 +1127,7 @@ def webhook():
                         f"✅ ST Context 4H: {ctx_4h_txt} (zone directrice)\n"
                         f"✅ Bias 4H: {(bias_4h_v or '?').upper()} (EMA21/SMA55)\n"
                         f"✅ ST Context 1H: {ctx_1h_txt} (anti-chop)\n"
+                        f"✅ ADX 1H: +DI={di_plus_1h:.1f} | -DI={di_minus_1h:.1f} (anti-chop)\n"
                         f"✅ ST Context 15m: {ctx_15m_txt} (signal)\n"
                         f"✅ SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
                         f"{close_msg_p}"
@@ -1502,6 +1509,51 @@ def check_prep_alerts():
         logger.info(f"[PREP] Alerte envoyée: {len(changed_msgs)} stratégie(s) modifiée(s)")
 
 
+
+def bias4h_report_scheduler():
+    """Envoie toutes les 4H un rapport des Bias 4H de tous les assets."""
+    logger.info("📊 Scheduler rapport Bias 4H démarré (toutes les 4H)")
+    # Attendre 10 minutes après démarrage pour que les données soient chargées
+    time.sleep(600)
+    while True:
+        try:
+            with STATE_LOCK:
+                bull_assets = sorted([
+                    s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
+                    if m.get('bias_4h') == 'bull'
+                ])
+                bear_assets = sorted([
+                    s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
+                    if m.get('bias_4h') == 'bear'
+                ])
+                none_assets = sorted([
+                    s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
+                    if m.get('bias_4h') is None
+                ])
+
+            bull_str = "  ".join(bull_assets) if bull_assets else "—"
+            bear_str = "  ".join(bear_assets) if bear_assets else "—"
+            none_str = "  ".join(none_assets) if none_assets else "—"
+
+            msg = (
+                f"📊 <b>[BIAS 4H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
+                f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
+                f"⬜ <b>N/A ({len(none_assets)})</b> : {none_str}"
+            )
+            send_telegram(msg)
+            logger.info(f"[BIAS4H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")
+        except Exception as e:
+            logger.error(f"[BIAS4H] Erreur rapport: {e}")
+
+        # Attendre la prochaine heure multiple de 4
+        now = datetime.now(timezone.utc)
+        hours_to_next = 4 - (now.hour % 4)
+        next_4h = now.replace(minute=5, second=0, microsecond=0) + timedelta(hours=hours_to_next)
+        wait = (next_4h - now).total_seconds()
+        time.sleep(max(300, wait))
+
 def indicators_scheduler():
     """Recalcule tous les indicateurs depuis OKX toutes les heures."""
     logger.info("[OKX] Scheduler indicateurs démarré (toutes les 15 minutes)")
@@ -1601,6 +1653,8 @@ def startup():
 
         heartbeat_thread = threading.Thread(target=heartbeat_scheduler, daemon=True)
         heartbeat_thread.start()
+        bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)
+        bias4h_thread.start()
 
         prep_thread = threading.Thread(target=prep_report_scheduler, daemon=True)
         prep_thread.start()

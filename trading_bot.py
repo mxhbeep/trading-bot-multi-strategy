@@ -1165,7 +1165,7 @@ def webhook():
                     logger.info(f"[PULSE] Pyramiding #{entry_count_p}: {symbol} {direction_p}")
 
     persist_runtime_state()
-    return jsonify({'status': 'ok', 'updated': updated, 'tf': tf, 'value': ctx}), 200
+    return jsonify({'status': 'ok'}), 200
 
 
 @app.route('/refresh', methods=['POST'])

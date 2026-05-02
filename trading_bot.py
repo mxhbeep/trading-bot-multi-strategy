@@ -1091,8 +1091,11 @@ def webhook():
                 # Filtre Bias 4H
                 bias_4h_ok  = bias_4h_v == exp_bias
 
-                # Anti-chop ST Context 15m
-                no_chop_ctx = ctx_15m_p != opp_ctx
+                # Filtre ST Context 15m : doit être aligné (None = bloqué)
+                ctx_15m_ok  = ctx_15m_p == st_15m_val
+                # Anti-chop ST Context 1H : bloqué si opposé (neutre = OK)
+                ctx_1h_p    = m.get('st_context_1h')
+                no_chop_1h  = ctx_1h_p != opp_ctx
 
                 # Anti-chop DMI : calculer l'écart opposé
                 if direction_p == 'LONG':
@@ -1119,7 +1122,7 @@ def webhook():
                     adx_status = f"➡️ ADX 1H neutre ({adx_val_1h:.1f} | +DI={di_plus_1h:.1f} | -DI={di_minus_1h:.1f})"
 
                 # Conditions bloquantes
-                all_ok = bias_4h_ok and no_chop_ctx and not dmi_blocked
+                all_ok = bias_4h_ok and ctx_15m_ok and no_chop_1h and not dmi_blocked
 
                 pos_key_p = f"{symbol}_PULSE"
                 with STATE_LOCK:
@@ -1131,7 +1134,7 @@ def webhook():
                         opp_15m_p  = 'sell' if st_15m_val == 'buy' else 'buy'
                         guard_ok_p = m.get('last_st_15m') == opp_15m_p
                         is_pyra_p  = bool(pos_p and pos_p['direction'] == direction_p
-                                          and bias_4h_ok and not dmi_blocked and guard_ok_p)
+                                          and bias_4h_ok and ctx_15m_ok and no_chop_1h and not dmi_blocked and guard_ok_p)
                     if is_entry_p and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=3600):
                         SCALP_POSITIONS[pos_key_p] = {'direction': direction_p, 'entry_count': 1}
                         pos_p = SCALP_POSITIONS[pos_key_p]
@@ -1149,7 +1152,8 @@ def webhook():
                         f"🏦 Exchange: {exchange_name.upper()}\n"
                         f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"✅ Bias 4H: {(bias_4h_v or '?').upper()} (EMA21/SMA55)\n"
-                        f"✅ ST Context 15m: {ctx_15m_txt} (anti-chop)\n"
+                        f"✅ ST Context 15m: {ctx_15m_txt} (filtre)\n"
+                        f"✅ ST Context 1H: {(ctx_1h_p or "NEUTRE").upper()} (anti-chop)\n"
                         f"{adx_status}\n"
                         f"✅ SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
                         f"{get_market_context_info()}"

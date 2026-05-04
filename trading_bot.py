@@ -203,6 +203,12 @@ def load_runtime_state():
         ST_CONTEXT_15M.update(payload.get('st_context_15m', {}))
         ADX_STATE.update(payload.get('adx_state', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
+        # Nettoyer les assets hors watchlist chargés depuis Redis
+        stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in CONFIG['SYMBOLS']]
+        for s in stale:
+            del MOMENTUM_STATE[s]
+        if stale:
+            logger.info(f'[REDIS] Supprimé {len(stale)} assets obsolètes: {stale}')
 
         weekly_start_raw = payload.get('weekly_start')
         if weekly_start_raw:
@@ -556,17 +562,6 @@ def heartbeat_scheduler():
             f"💾 Redis: {redis_status}"
         )
         send_telegram(msg)
-        # Envoyer aussi dans le bot Scalping avec info PULSE
-        with STATE_LOCK:
-            pulse_positions = sum(1 for k in SCALP_POSITIONS if k.endswith('_PULSE'))
-        scalp_msg = (
-            "💓 <b>[PULSE HEARTBEAT]</b>\n"
-            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n"
-            f"📊 Assets PULSE: 14\n"
-            f"📈 Positions PULSE ouvertes: {pulse_positions}\n"
-            f"💾 Redis: {redis_status}"
-        )
-        send_telegram_scalp(scalp_msg)
 
 # ============================================================================ #
 # UTILITAIRES
@@ -779,6 +774,22 @@ def webhook():
     # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
     m = MOMENTUM_STATE[symbol]
     now_ts = datetime.now(timezone.utc).timestamp()
+    if alert_type == 'bias':
+        bias_val = val.lower() if isinstance(val, str) else None
+        if bias_val in ('bull', 'bear', 'neutral'):
+            if tf == '4h':
+                m['bias_4h'] = bias_val if bias_val != 'neutral' else None
+                logger.info(f"[BIAS TV] {symbol} bias_4h = {bias_val}")
+            elif tf == '1d':
+                m['bias_1d'] = bias_val if bias_val != 'neutral' else None
+                logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
+            elif tf == '1h':
+                m['bias_1h'] = bias_val if bias_val != 'neutral' else None
+                logger.info(f"[BIAS TV] {symbol} bias_1h = {bias_val}")
+            elif tf == '15m':
+                m['bias_15m'] = bias_val if bias_val != 'neutral' else None
+                logger.info(f"[BIAS TV] {symbol} bias_15m = {bias_val}")
+
     if alert_type == 'st_context':
         parsed_ctx = parse_st_context_value(val)
         if tf == '1h':
@@ -976,7 +987,7 @@ def webhook():
                 try:
                     df_1d_rt  = fetch_ohlcv_okx(symbol, '1d', limit=100)
                     bias_1d_v = calc_bias_okx(df_1d_rt, ema_len=21, sma_len=55) if df_1d_rt is not None else m.get('bias_1d')
-                    m['bias_1d'] = bias_1d_v
+                    if df_1d_rt is not None: m['bias_1d'] = bias_1d_v  # ne pas écraser un bias TV si OKX indisponible
                 except Exception:
                     bias_1d_v = m.get('bias_1d')
 
@@ -1081,7 +1092,7 @@ def webhook():
                 try:
                     df_4h_rt  = fetch_ohlcv_okx(symbol, '4h', limit=100)
                     bias_4h_v = calc_bias_okx(df_4h_rt, ema_len=21, sma_len=55) if df_4h_rt is not None else m.get('bias_4h')
-                    m['bias_4h'] = bias_4h_v
+                    if df_4h_rt is not None: m['bias_4h'] = bias_4h_v  # ne pas écraser un bias TV si OKX indisponible
                 except Exception:
                     bias_4h_v = m.get('bias_4h')
 
@@ -1256,17 +1267,22 @@ def webhook():
 
                 is_secondary = ctx_4h_lt_aligned and ctx_1h_aligned and ctx_4h_ct_neutral and not dmi_blocked
 
+                # ── Alerte TRIPLE : CT 4H + 1H + 15m tous alignés ──────
+                ctx_15m_z    = ST_CONTEXT_15M.get(symbol)
+                ctx_15m_aligned = ctx_15m_z == st_1h_val
+                is_triple = ctx_4h_ct_aligned and ctx_1h_aligned and ctx_15m_aligned
+
                 pos_key_c4 = f"{symbol}_CONTEXT4H"
                 with STATE_LOCK:
                     pos_c4 = SCALP_POSITIONS.get(pos_key_c4)
                     if pos_c4 and pos_c4['direction'] != direction_c4:
                         pos_c4 = None; is_entry_c4 = False; is_pyra_c4 = False
                     else:
-                        is_entry_c4 = ((is_main or is_secondary) and pos_c4 is None)
+                        is_entry_c4 = ((is_main or is_secondary or is_triple) and pos_c4 is None)
                         opp_1h_c4   = 'sell' if st_1h_val == 'buy' else 'buy'
                         guard_ok_c4 = m.get('last_st_1h') == opp_1h_c4
                         is_pyra_c4  = bool(pos_c4 and pos_c4['direction'] == direction_c4
-                                           and (is_main or is_secondary) and guard_ok_c4)
+                                           and (is_main or is_secondary or is_triple) and guard_ok_c4)
                     if is_entry_c4 and should_send(symbol, f"c4h_entry_{st_1h_val}", event_id=event_id, cooldown=14400):
                         SCALP_POSITIONS[pos_key_c4] = {'direction': direction_c4, 'entry_count': 1}
                         pos_c4 = SCALP_POSITIONS[pos_key_c4]
@@ -1277,7 +1293,7 @@ def webhook():
 
                 if is_entry_c4 and pos_c4:
                     emoji    = "🟢" if direction_c4 == "LONG" else "🔴"
-                    tag      = "PRINCIPALE" if is_main else "SECONDAIRE"
+                    tag      = "PRINCIPALE" if is_main else "TRIPLE 4H+1H+15m" if is_triple else "SECONDAIRE"
                     ctx_ct_txt = ctx_4h_ct.upper() if ctx_4h_ct else "NEUTRE"
                     ctx_lt_txt = ctx_4h_lt.upper() if ctx_4h_lt else "NEUTRE"
                     ctx_1h_txt = ctx_1h.upper()    if ctx_1h    else "NEUTRE"
@@ -1291,6 +1307,7 @@ def webhook():
                         f"✅ ST Context 4H CT: {ctx_ct_txt}\n"
                         f"✅ ST Context 4H LT: {ctx_lt_txt}\n"
                         f"✅ ST Context 1H: {ctx_1h_txt}\n"
+                        f"✅ ST Context 15m: {(ctx_15m_z or 'NEUTRE').upper()}{" ✅" if is_triple else ""}\n"
                         f"{adx_status_c4}\n"
                         f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
                         f"{close_msg_c4}"
@@ -1317,6 +1334,7 @@ def webhook():
                         f"✅ ST Context 4H CT: {ctx_ct_txt}\n"
                         f"✅ ST Context 4H LT: {ctx_lt_txt}\n"
                         f"✅ ST Context 1H: {ctx_1h_txt}\n"
+                        f"✅ ST Context 15m: {(ctx_15m_z or 'NEUTRE').upper()}{" ✅" if is_triple else ""}\n"
                         f"{adx_status_c4}\n"
                         f"✅ SuperTrend AI 1H: {st_1h_val.upper()} (PYRAMIDING)\n"
                         f"🛡️ Guard: flip opposé validé"
@@ -1536,16 +1554,7 @@ def update_indicators_for_symbol(symbol):
                 ADX_STATE[f'{symbol}_1d'] = adx_1d_data
         except Exception as e:
             logger.debug(f'[OKX] ADX 1D {symbol}: {e}')
-        # Bias 5m (EMA8/SMA21) pour PULSE — assets scalp uniquement
-        if CONFIG['SYMBOLS'].get(symbol, {}).get('scalp', False):
-            try:
-                df_5m_bias = fetch_ohlcv_okx(symbol, '5m', limit=50)
-                if df_5m_bias is not None and len(df_5m_bias) >= 25:
-                    bias_5m_val = calc_bias_okx(df_5m_bias, ema_len=8, sma_len=21)
-                    if symbol in MOMENTUM_STATE:
-                        MOMENTUM_STATE[symbol]['bias_5m'] = bias_5m_val
-            except Exception as e:
-                logger.debug(f'[OKX] bias_5m {symbol}: {e}')
+
 
         price = float(df_1h['close'].iloc[-1])
 
@@ -1582,6 +1591,7 @@ def check_prep_alerts():
         symbols_conf  = CONFIG['SYMBOLS']
 
     for symbol, m in state_copy.items():
+        if symbol not in symbols_conf: continue  # ignorer les assets hors watchlist
         is_scalp = symbols_conf.get(symbol, {}).get('scalp', False)
 
         # ── CONFLUENCE : ST Context 3D + ST Context 4H aligné ───────

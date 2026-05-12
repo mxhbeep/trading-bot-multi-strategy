@@ -1328,7 +1328,7 @@ def webhook():
                         f"\u2705 ST Context 4H CT: {ctx_ct_txt}\n"
                         f"\u2705 ST Context 4H LT: {ctx_lt_txt}\n"
                         f"\u2705 ST Context 1H: {ctx_1h_txt}\n"
-                        f"\u2705 ST Context 15m: {ctx_15_txt}{' \u2705' if is_triple else ''}\n"
+                        f"\u2705 ST Context 15m: {ctx_15_txt}{'  ✅' if is_triple else ''}\n"
                         f"{adx_status_c4}\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val.upper()} (SIGNAL)"
                         f"{close_msg_c4}"

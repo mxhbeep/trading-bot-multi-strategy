@@ -93,7 +93,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'CONTEXT4H': 0, 'SCALP': 0, 'PULSE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'CONTEXT4H': 0, 'SWING': 0, 'PULSE': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -442,9 +442,9 @@ def send_start_notification():
         "4️⃣ <b>PULSE</b>\n"
         "   • Bias 4H + Bias 15m + ADX 1H DMI + ST Context 15m (anti-chop)\n"
         "   • Signal: Flip ST AI 15m / Pyramiding: guard (30min) — 38 assets\n\n"
-        "5️⃣ <b>SCALP</b>\n"
-        "   • ADX 4H DI aligné + ST AI 1H dans le sens du trade\n"
-        "   • Signal: Flip ST AI 15m / Pyramiding: guard (1H) — 38 assets\n\n"
+        "5️⃣ <b>SWING</b>\n"
+        "   • ADX 4H DI aligné + flip ST AI 1H\n"
+        "   • Pyramiding: guard (1H) — 38 assets\n\n"
 
 
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1397,83 +1397,90 @@ def webhook():
     # Anti-chop : ST Context 15m opposé → annulé
     # Pyramiding : flip ST AI 15m + guard — cooldown 1H
     # ========================================================================
-    if strat in ['scalp', 'all']:
+    # ========================================================================
+    # LOGIQUE SWING : ADX 4H DI aligné + ST AI 1H dans le sens → flip ST AI 1H
+    # Pas d'anti-chop — filtres suffisamment forts
+    # Pyramiding : flip ST AI 1H + guard — cooldown 1H
+    # ========================================================================
+    if strat in ['swing', 'all']:
         m = MOMENTUM_STATE[symbol]
 
-        if alert_type == 'supertrend' and tf == '15m':
-            st_15m_val  = m.get('st_ai_15m')
-            prev_15m    = m.get('last_st_15m')
-            flipped_15m = (st_15m_val is not None and prev_15m is not None and st_15m_val != prev_15m)
+        if alert_type == 'supertrend' and tf == '1h':
+            st_1h_val_sw  = parse_supertrend_value(val)
+            prev_1h_sw    = m.get('st_1h_swing')
+            flipped_1h_sw = (st_1h_val_sw is not None and prev_1h_sw is not None and st_1h_val_sw != prev_1h_sw)
+            m['st_1h_swing'] = st_1h_val_sw
+            if flipped_1h_sw and prev_1h_sw:
+                m['last_st_1h_swing'] = prev_1h_sw
 
-            if flipped_15m:
-                adx_4h_sc   = ADX_STATE.get(f'{symbol}_4h', {})
-                di_plus_4h  = adx_4h_sc.get('di_plus', 0)
-                di_minus_4h = adx_4h_sc.get('di_minus', 0)
+            if flipped_1h_sw:
+                adx_4h_sw   = ADX_STATE.get(f'{symbol}_4h', {})
+                di_plus_4h  = adx_4h_sw.get('di_plus', 0)
+                di_minus_4h = adx_4h_sw.get('di_minus', 0)
                 st_1h_cur   = m.get('st_1h')
 
-                direction_sc = "LONG" if st_15m_val == 'buy' else "SHORT"
+                direction_sw = "LONG" if st_1h_val_sw == 'buy' else "SHORT"
 
-                adx_4h_ok_sc = (di_plus_4h >= di_minus_4h and direction_sc == 'LONG') or \
-                               (di_minus_4h >= di_plus_4h and direction_sc == 'SHORT')
-                st_1h_ok_sc  = (st_1h_cur == 'buy'  and direction_sc == 'LONG') or \
-                               (st_1h_cur == 'sell' and direction_sc == 'SHORT')
+                # ADX 4H DI dans le bon sens
+                adx_4h_ok_sw = (di_plus_4h >= di_minus_4h and direction_sw == 'LONG') or \
+                               (di_minus_4h >= di_plus_4h and direction_sw == 'SHORT')
+                # ST AI 1H dans le bon sens (direction courante confirmée par le flip)
+                st_1h_ok_sw  = (st_1h_val_sw == 'buy'  and direction_sw == 'LONG') or \
+                               (st_1h_val_sw == 'sell' and direction_sw == 'SHORT')
 
-                pos_key_sc = f"{symbol}_SCALP"
+                pos_key_sw = f"{symbol}_SWING"
                 with STATE_LOCK:
-                    pos_sc = SCALP_POSITIONS.get(pos_key_sc)
-                    if pos_sc and pos_sc['direction'] != direction_sc:
-                        pos_sc = None; is_entry_sc = False; is_pyra_sc = False
+                    pos_sw = SCALP_POSITIONS.get(pos_key_sw)
+                    if pos_sw and pos_sw['direction'] != direction_sw:
+                        pos_sw = None; is_entry_sw = False; is_pyra_sw = False
                     else:
-                        is_entry_sc = (adx_4h_ok_sc and st_1h_ok_sc and pos_sc is None)
-                        opp_15m_sc  = 'sell' if st_15m_val == 'buy' else 'buy'
-                        guard_ok_sc = m.get('last_st_15m') == opp_15m_sc
-                        is_pyra_sc  = bool(pos_sc and pos_sc['direction'] == direction_sc
-                                           and adx_4h_ok_sc and st_1h_ok_sc and guard_ok_sc)
-                    if is_entry_sc and should_send(symbol, f"scalp_entry_{st_15m_val}", event_id=event_id, cooldown=3600):
-                        SCALP_POSITIONS[pos_key_sc] = {'direction': direction_sc, 'entry_count': 1}
-                        pos_sc = SCALP_POSITIONS[pos_key_sc]
+                        is_entry_sw = (adx_4h_ok_sw and st_1h_ok_sw and pos_sw is None)
+                        opp_1h_sw   = 'sell' if st_1h_val_sw == 'buy' else 'buy'
+                        guard_ok_sw = m.get('last_st_1h_swing') == opp_1h_sw
+                        is_pyra_sw  = bool(pos_sw and pos_sw['direction'] == direction_sw
+                                           and adx_4h_ok_sw and st_1h_ok_sw and guard_ok_sw)
+                    if is_entry_sw and should_send(symbol, f"swing_entry_{st_1h_val_sw}", event_id=event_id, cooldown=3600):
+                        SCALP_POSITIONS[pos_key_sw] = {'direction': direction_sw, 'entry_count': 1}
+                        pos_sw = SCALP_POSITIONS[pos_key_sw]
                     else:
-                        is_entry_sc = False
+                        is_entry_sw = False
 
-                if is_entry_sc and pos_sc:
-                    emoji = "\U0001f7e2" if direction_sc == "LONG" else "\U0001f534"
+                if is_entry_sw and pos_sw:
+                    emoji = "\U0001f7e2" if direction_sw == "LONG" else "\U0001f534"
                     send_telegram_with_buttons(
-                        f"{emoji} <b>[SCALP - ENTREE]</b> {symbol}\n"
+                        f"{emoji} <b>[SWING - ENTREE]</b> {symbol}\n"
                         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Direction: {direction_sc}\n"
+                        f"\U0001f4c8 Direction: {direction_sw}\n"
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
-                        f"\u2705 ST AI 1H: {(st_1h_cur or '?').upper()} (direction alignée)\n"
-                        f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
+                        f"\u2705 SuperTrend AI 1H: {st_1h_val_sw.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
-                        f"{symbol}_SCALP"
+                        f"{symbol}_SWING"
                     )
-                    track_alert(symbol, 'SCALP')
-                    logger.info(f"[SCALP] Entrée: {symbol} {direction_sc}")
+                    track_alert(symbol, 'SWING')
+                    logger.info(f"[SWING] Entrée: {symbol} {direction_sw}")
 
-                elif is_pyra_sc and PYRA_ENABLED.get(f"{symbol}_SCALP", False) and should_send(symbol, f"scalp_pyra_{st_15m_val}", event_id=event_id, cooldown=3600):
+                elif is_pyra_sw and PYRA_ENABLED.get(f"{symbol}_SWING", False) and should_send(symbol, f"swing_pyra_{st_1h_val_sw}", event_id=event_id, cooldown=3600):
                     with STATE_LOCK:
-                        pos_sc['entry_count'] += 1
-                        m['last_st_15m'] = None
-                        entry_count_sc = pos_sc['entry_count']
-                    emoji = "\U0001f7e2" if direction_sc == "LONG" else "\U0001f534"
+                        pos_sw['entry_count'] += 1
+                        entry_count_sw = pos_sw['entry_count']
+                    emoji = "\U0001f7e2" if direction_sw == "LONG" else "\U0001f534"
                     send_telegram_ttmtf(
-                        f"{emoji} <b>[SCALP - PYRAMIDING #{entry_count_sc}]</b> {symbol}\n"
+                        f"{emoji} <b>[SWING - PYRAMIDING #{entry_count_sw}]</b> {symbol}\n"
                         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Direction: {direction_sc}\n"
+                        f"\U0001f4c8 Direction: {direction_sw}\n"
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f}\n"
-                        f"\u2705 ST AI 1H: {(st_1h_cur or '?').upper()}\n"
-                        f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (PYRAMIDING)\n"
+                        f"\u2705 SuperTrend AI 1H: {st_1h_val_sw.upper()} (PYRAMIDING)\n"
                         f"\U0001f6e1\ufe0f Guard: flip opposé validé"
                         f"{get_market_context_info()}"
                     )
-                    track_alert(symbol, 'SCALP')
-                    logger.info(f"[SCALP] Pyramiding #{entry_count_sc}: {symbol} {direction_sc}")
+                    track_alert(symbol, 'SWING')
+                    logger.info(f"[SWING] Pyramiding #{entry_count_sw}: {symbol} {direction_sw}")
 
     persist_runtime_state()
     return jsonify({'status': 'ok'}), 200

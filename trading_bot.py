@@ -2,15 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
-import numpy as np
 import json
 import time
 import requests
 from datetime import datetime, timezone, timedelta
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 import logging
 from flask import Flask, request, jsonify
 import os
@@ -168,7 +164,22 @@ def persist_runtime_state():
 
 
 def audit_log(data, status="reçu"):
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "symbol": data.get("symbol"),
+        "tf": data.get("tf"),
+        "type": data.get("type"),
+        "status": status
+    }
     if not REDIS_CLIENT:
+        try:
+            import os as _os
+            _os.makedirs("logs", exist_ok=True)
+            with open("logs/alerts.jsonl", "a", encoding="utf-8") as f:
+                import json as _json
+                f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
         return
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -443,8 +454,6 @@ def send_weekly_report():
         f"📅 Semaine du {week_start.strftime('%d/%m')} au {now.strftime('%d/%m/%Y')}\n"
         f"🔔 Total alertes: <b>{total_alerts}</b>\n\n"
     )
-
-    total_safe      = sum(s.get('SAFE', 0)        for s in WEEKLY_STATS.values())
     total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
     total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
@@ -968,7 +977,7 @@ def webhook():
                         f"✅ ADX 1D: +DI={di_plus_1d:.1f} | -DI={di_minus_1d:.1f} (anti-chop)\n"
                         f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (SIGNAL)"
                         f"{close_msg_c}"
-                        f"{get_market_context_info()}"
+                        f"{get_market_context_info()}",
                         f"{symbol}_CONFLUENCE"
                     )
                     track_alert(symbol, 'CONFLUENCE')
@@ -1072,7 +1081,8 @@ def webhook():
                         f"✅ ST Context 1H: {ctx_1h_txt} (anti-chop)\n"
                         f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (SIGNAL)"
                         f"{close_msg_t}"
-                        f"{get_market_context_info()}"
+                        f"{get_market_context_info()}",
+                        f"{symbol}_TREND"
                     )
                     track_alert(symbol, 'TREND')
                     logger.info(f"[TREND] Entrée: {symbol} {direction_t}")
@@ -1201,7 +1211,8 @@ def webhook():
                         f"\u2705 ST Context 15m: {ctx_txt} (anti-chop)\n"
                         f"{adx_status}\n"
                         f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
-                        f"{get_market_context_info()}"
+                        f"{get_market_context_info()}",
+                        f"{symbol}_PULSE"
                     )
                     track_alert(symbol, 'PULSE')
                     logger.info(f"[PULSE] Entrée: {symbol} {direction_p}")
@@ -1618,7 +1629,7 @@ def calc_adx_okx(df, length=11, threshold=20):
             'di_minus':  round(float(di_minus.iloc[-1]), 2),
             'adx_rising': float(adx.iloc[-1]) > float(adx.iloc[-2]),
         }
-    except Exception as e:
+    except Exception:
         return None
 
 def calc_bias_okx(df, ema_len=13, sma_len=30):
@@ -2011,8 +2022,10 @@ def startup():
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")
 
-startup_thread = threading.Thread(target=startup, daemon=True)
-startup_thread.start()
+# Démarrer les schedulers seulement dans le worker principal
+if os.environ.get('ENABLE_SCHEDULERS', '1') == '1':
+    startup_thread = threading.Thread(target=startup, daemon=True)
+    startup_thread.start()
 
 if __name__ == '__main__':
     logger.info(f"✅ Bot démarré sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")

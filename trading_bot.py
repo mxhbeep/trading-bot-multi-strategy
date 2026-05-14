@@ -1402,6 +1402,89 @@ def webhook():
     # Pas d'anti-chop — filtres suffisamment forts
     # Pyramiding : flip ST AI 1H + guard — cooldown 1H
     # ========================================================================
+        # ── Entrée secondaire : Bias 4H + flip ST AI 1H ────────────────
+        if alert_type == 'supertrend' and tf == '1h':
+            st_1h_val_p2  = parse_supertrend_value(val)
+            prev_1h_p2    = m.get('st_1h_pulse2')
+            flipped_1h_p2 = (st_1h_val_p2 is not None and prev_1h_p2 is not None and st_1h_val_p2 != prev_1h_p2)
+            m['st_1h_pulse2'] = st_1h_val_p2
+            if flipped_1h_p2 and prev_1h_p2:
+                m['last_st_1h_pulse2'] = prev_1h_p2
+
+            if flipped_1h_p2:
+                # Recalculer Bias 4H en temps réel
+                try:
+                    df_4h_p2  = fetch_ohlcv_okx(symbol, '4h', limit=100)
+                    bias_4h_p2 = calc_bias_okx(df_4h_p2, ema_len=21, sma_len=55) if df_4h_p2 is not None else m.get('bias_4h')
+                    if df_4h_p2 is not None: m['bias_4h'] = bias_4h_p2
+                except Exception:
+                    bias_4h_p2 = m.get('bias_4h')
+
+                ctx_15m_p2  = ST_CONTEXT_15M.get(symbol)
+                direction_p2 = "LONG" if st_1h_val_p2 == 'buy' else "SHORT"
+                exp_bias_p2  = 'bull' if direction_p2 == 'LONG' else 'bear'
+                opp_ctx_p2   = 'sell' if direction_p2 == 'LONG' else 'buy'
+
+                bias_4h_ok_p2 = bias_4h_p2 == exp_bias_p2
+                # Anti-chop : ST Context 15m opposé → bloqué (neutre = OK)
+                no_chop_p2    = ctx_15m_p2 != opp_ctx_p2
+
+                pos_key_p2 = f"{symbol}_PULSE"
+                with STATE_LOCK:
+                    pos_p2 = SCALP_POSITIONS.get(pos_key_p2)
+                    if pos_p2 and pos_p2['direction'] != direction_p2:
+                        pos_p2 = None; is_entry_p2 = False; is_pyra_p2 = False
+                    else:
+                        is_entry_p2 = (bias_4h_ok_p2 and no_chop_p2 and pos_p2 is None)
+                        opp_1h_p2   = 'sell' if st_1h_val_p2 == 'buy' else 'buy'
+                        guard_ok_p2 = m.get('last_st_1h_pulse2') == opp_1h_p2
+                        is_pyra_p2  = bool(pos_p2 and pos_p2['direction'] == direction_p2
+                                           and bias_4h_ok_p2 and no_chop_p2 and guard_ok_p2)
+                    if is_entry_p2 and should_send(symbol, f"pulse2_entry_{st_1h_val_p2}", event_id=event_id, cooldown=3600):
+                        SCALP_POSITIONS[pos_key_p2] = {'direction': direction_p2, 'entry_count': 1}
+                        pos_p2 = SCALP_POSITIONS[pos_key_p2]
+                    else:
+                        is_entry_p2 = False
+
+                if is_entry_p2 and pos_p2:
+                    emoji = "\U0001f7e2" if direction_p2 == "LONG" else "\U0001f534"
+                    ctx_txt_p2 = ctx_15m_p2.upper() if ctx_15m_p2 else "NEUTRE"
+                    send_telegram_with_buttons(
+                        f"{emoji} <b>[PULSE - ENTREE 1H]</b> {symbol}\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"\U0001f4c8 Direction: {direction_p2}\n"
+                        f"\U0001f4b0 Price: ${format_price(price)}\n"
+                        f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
+                        f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                        f"\u2705 Bias 4H: {(bias_4h_p2 or '?').upper()} (EMA21/SMA55)\n"
+                        f"\u2705 ST Context 15m: {ctx_txt_p2} (anti-chop)\n"
+                        f"\u2705 SuperTrend AI 1H: {st_1h_val_p2.upper()} (SIGNAL)"
+                        f"{get_market_context_info()}",
+                        f"{symbol}_PULSE"
+                    )
+                    track_alert(symbol, 'PULSE')
+                    logger.info(f"[PULSE] Entrée 1H: {symbol} {direction_p2}")
+
+                elif is_pyra_p2 and PYRA_ENABLED.get(f"{symbol}_PULSE", False) and should_send(symbol, f"pulse2_pyra_{st_1h_val_p2}", event_id=event_id, cooldown=3600):
+                    with STATE_LOCK:
+                        pos_p2['entry_count'] += 1
+                        entry_count_p2 = pos_p2['entry_count']
+                    emoji = "\U0001f7e2" if direction_p2 == "LONG" else "\U0001f534"
+                    send_telegram_ttmtf(
+                        f"{emoji} <b>[PULSE - PYRAMIDING 1H #{entry_count_p2}]</b> {symbol}\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"\U0001f4c8 Direction: {direction_p2}\n"
+                        f"\U0001f4b0 Price: ${format_price(price)}\n"
+                        f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
+                        f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                        f"\u2705 Bias 4H: {(bias_4h_p2 or '?').upper()} (EMA21/SMA55)\n"
+                        f"\u2705 SuperTrend AI 1H: {st_1h_val_p2.upper()} (PYRAMIDING)\n"
+                        f"\U0001f6e1\ufe0f Guard: flip opposé validé"
+                        f"{get_market_context_info()}"
+                    )
+                    track_alert(symbol, 'PULSE')
+                    logger.info(f"[PULSE] Pyramiding 1H #{entry_count_p2}: {symbol} {direction_p2}")
+
     if strat in ['swing', 'all']:
         m = MOMENTUM_STATE[symbol]
 

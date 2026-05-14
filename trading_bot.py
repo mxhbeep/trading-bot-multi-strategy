@@ -1793,6 +1793,7 @@ def check_prep_alerts():
         'CONFLUENCE': {'LONG': set(), 'SHORT': set()},
         'TREND':      {'LONG': set(), 'SHORT': set()},
         'PULSE':      {'LONG': set(), 'SHORT': set()},
+        'SWING':      {'LONG': set(), 'SHORT': set()},
     }
 
     with STATE_LOCK:
@@ -1858,10 +1859,21 @@ def check_prep_alerts():
             if bias_4h_ok and ctx_15m_ok:
                 new_prep['PULSE'][direction].add(symbol)
 
+        # ── SWING : ADX 4H DI aligné ─────────────────────────────
+        adx_4h_sw   = adx_copy.get(f'{symbol}_4h', {})
+        di_plus_4h  = adx_4h_sw.get('di_plus', 0)
+        di_minus_4h = adx_4h_sw.get('di_minus', 0)
+
+        for direction in ('LONG', 'SHORT'):
+            di_aligned = (di_plus_4h >= di_minus_4h and direction == 'LONG') or \
+                         (di_minus_4h >= di_plus_4h and direction == 'SHORT')
+            if di_aligned:
+                new_prep['SWING'][direction].add(symbol)
+
     # ── Comparer avec l'état précédent et envoyer si changement ──────
     changed_msgs = []
 
-    for strat in ('CONFLUENCE', 'TREND', 'PULSE'):
+    for strat in ('CONFLUENCE', 'TREND', 'PULSE', 'SWING'):
         old_state = PREP_STATE.get(strat, {'LONG': set(), 'SHORT': set()})
         new_long  = new_prep[strat]['LONG']
         new_short = new_prep[strat]['SHORT']
@@ -1885,6 +1897,7 @@ def check_prep_alerts():
         'CONFLUENCE': {'LONG': new_prep['CONFLUENCE']['LONG'], 'SHORT': new_prep['CONFLUENCE']['SHORT']},
         'TREND':      {'LONG': new_prep['TREND']['LONG'],      'SHORT': new_prep['TREND']['SHORT']},
         'PULSE':      {'LONG': new_prep['PULSE']['LONG'],       'SHORT': new_prep['PULSE']['SHORT']},
+        'SWING':      {'LONG': new_prep['SWING']['LONG'],       'SHORT': new_prep['SWING']['SHORT']},
     }
 
     if changed_msgs:

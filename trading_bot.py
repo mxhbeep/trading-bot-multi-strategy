@@ -156,6 +156,12 @@ def persist_runtime_state():
             'st_context_15m':     dict(ST_CONTEXT_15M),
             'adx_state':          dict(ADX_STATE),
             'scalp_positions':    dict(SCALP_POSITIONS),
+            'st_context_1d':      dict(ST_CONTEXT_1D),
+            'st_context_3d':      dict(ST_CONTEXT_3D),
+            'st_context_lt_1h':   dict(ST_CONTEXT_LT_1H),
+            'st_context_lt_4h':   dict(ST_CONTEXT_LT_4H),
+            'st_context_lt_15m':  dict(ST_CONTEXT_LT_15M),
+            'pyra_enabled':       dict(PYRA_ENABLED),
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -218,6 +224,12 @@ def load_runtime_state():
         ST_CONTEXT_15M.update(payload.get('st_context_15m', {}))
         ADX_STATE.update(payload.get('adx_state', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
+        ST_CONTEXT_1D.update(payload.get('st_context_1d', {}))
+        ST_CONTEXT_3D.update(payload.get('st_context_3d', {}))
+        ST_CONTEXT_LT_1H.update(payload.get('st_context_lt_1h', {}))
+        ST_CONTEXT_LT_4H.update(payload.get('st_context_lt_4h', {}))
+        ST_CONTEXT_LT_15M.update(payload.get('st_context_lt_15m', {}))
+        PYRA_ENABLED.update(payload.get('pyra_enabled', {}))
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in CONFIG['SYMBOLS']]
         for s in stale:
@@ -675,7 +687,7 @@ def parse_ema200_value(val):
 def normalize_tf(tf_raw):
     tf = str(tf_raw or '').strip().lower()
     tf_aliases = {
-        '60': '1h', '1hr': '1h', '1hour': '1h',
+        '15': '15m', '60': '1h', '1hr': '1h', '1hour': '1h',
         '240': '4h', '4hr': '4h', '4hour': '4h',
         'd': '1d', '1day': '1d',
         '2day': '2d', '3day': '3d',
@@ -855,7 +867,7 @@ def webhook():
         elif tf == '15m':
             ST_CONTEXT_LT_15M[symbol] = parsed_ctx_lt
             m['st_context_lt_15m_ts'] = now_ts
-        elif tf == 'lt_4h':
+        elif tf in ('4h', 'lt_4h'):
             ST_CONTEXT_LT_4H[symbol] = parsed_ctx_lt
             m['st_context_lt_4h_ts'] = now_ts
 
@@ -1469,6 +1481,9 @@ def webhook():
 
 @app.route('/telegram_callback', methods=['POST'])
 def telegram_callback():
+    secret_path = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+    if secret_path and request.args.get('secret') != secret_path:
+        return jsonify({'ok': False}), 403
     """Reçoit les callbacks des boutons inline Telegram."""
     data = request.get_json(silent=True)
     if not data:
@@ -1517,6 +1532,8 @@ def telegram_callback():
 
 @app.route('/refresh', methods=['POST'])
 def refresh_indicators():
+    if not require_admin_secret():
+        return jsonify({'error': 'unauthorized'}), 401
     """Relance immédiatement le calcul des indicateurs OKX (Bias, ADX).
     Body optionnel: {"symbol": "BTC/USDT"} pour un seul asset.
     Sans body: relance pour tous les assets.
@@ -1547,6 +1564,8 @@ def refresh_indicators():
 
 @app.route('/reset_state', methods=['POST'])
 def reset_state_all():
+    if not require_admin_secret():
+        return jsonify({'error': 'unauthorized'}), 401
     """Remet tout le state à zéro."""
     MOMENTUM_STATE.clear()
     LAST_SIGNALS.clear()
@@ -1559,17 +1578,34 @@ def reset_state_all():
     ST_CONTEXT_LT_4H.clear()
     ST_CONTEXT_3D.clear()
     ST_CONTEXT_LT_15M.clear()
+    ADX_STATE.clear()
+    PREP_STATE.clear()
+    PYRA_ENABLED.clear()
     persist_runtime_state()
     logger.info("🔄 State complet remis à zéro")
     return jsonify({'status': 'reset', 'message': 'État complet remis à zéro'}), 200
 
 @app.route('/reset_state/<path:symbol>', methods=['POST'])
 def reset_state_symbol(symbol):
+    if not require_admin_secret():
+        return jsonify({'error': 'unauthorized'}), 401
     """Remet à zéro l'état d'un seul asset. Ex: /reset_state/CVX/USDT"""
     symbol = symbol.upper().replace('-', '/')
     if symbol not in CONFIG['SYMBOLS']:
         return jsonify({'status': 'error', 'message': f'{symbol} non trouvé dans la watchlist'}), 404
     MOMENTUM_STATE.pop(symbol, None)
+    ST_AI_15M.pop(symbol, None)
+    ST_CONTEXT_15M.pop(symbol, None)
+    ST_CONTEXT_1D.pop(symbol, None)
+    ST_CONTEXT_3D.pop(symbol, None)
+    ST_CONTEXT_LT_1H.pop(symbol, None)
+    ST_CONTEXT_LT_4H.pop(symbol, None)
+    ST_CONTEXT_LT_15M.pop(symbol, None)
+    for k in ['', '_1h', '_4h', '_1d']:
+        ADX_STATE.pop(f'{symbol}{k}', None)
+    for strat in ['CONFLUENCE', 'TREND', 'PULSE', 'SCALP', 'CONTEXT4H']:
+        PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
+        SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
    
     keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
     for k in keys_to_remove:
@@ -1615,8 +1651,8 @@ def calc_adx_okx(df, length=11, threshold=20):
         # Directional Movement
         dm_plus  = (high - high.shift(1)).clip(lower=0)
         dm_minus = (low.shift(1) - low).clip(lower=0)
-        dm_plus[dm_plus < dm_minus]  = 0
-        dm_minus[dm_minus < dm_plus] = 0
+        dm_plus  = dm_plus.where(dm_plus >= dm_minus, 0)
+        dm_minus = dm_minus.where(dm_minus >= dm_plus, 0)
         # Smooth with Wilder EMA
         atr     = tr.ewm(alpha=1/length, adjust=False).mean()
         di_plus  = 100 * dm_plus.ewm(alpha=1/length, adjust=False).mean() / atr

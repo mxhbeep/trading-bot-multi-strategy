@@ -1537,6 +1537,15 @@ def telegram_callback():
     return jsonify({'ok': True}), 200
 
 
+@app.route('/prep_report', methods=['GET', 'POST'])
+def force_prep_report():
+    """Force l'envoi immédiat des listes PREP pour toutes les stratégies."""
+    global PREP_STATE
+    PREP_STATE = {}  # Reset pour forcer le renvoi
+    check_prep_alerts()
+    return jsonify({'status': 'ok', 'message': 'Rapport PREP envoyé'}), 200
+
+
 @app.route('/refresh', methods=['POST'])
 def refresh_indicators():
     if not require_admin_secret():

@@ -485,17 +485,17 @@ def send_weekly_report():
         f"🔔 Total alertes: <b>{total_alerts}</b>\n\n"
     )
     total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
-    total_context   = sum(s.get('CONTEXT', 0)     for s in WEEKLY_STATS.values())
-    total_trend     = sum(s.get('TREND', 0)       for s in WEEKLY_STATS.values())
-    total_momentum  = sum(s.get('MOMENTUM', 0)    for s in WEEKLY_STATS.values())
-    total_swing     = sum(s.get('SWING', 0)       for s in WEEKLY_STATS.values())
-    total_pulse     = sum(s.get('PULSE', 0)       for s in WEEKLY_STATS.values())
-    total_scalp     = sum(s.get('SCALP', 0)       for s in WEEKLY_STATS.values())
+    total_context4h  = sum(s.get('CONTEXT4H', 0)   for s in WEEKLY_STATS.values())
+    total_trend      = sum(s.get('TREND', 0)        for s in WEEKLY_STATS.values())
+    total_momentum   = sum(s.get('MOMENTUM', 0)     for s in WEEKLY_STATS.values())
+    total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
+    total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
+    total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
     msg += (
         "📋 <b>Par stratégie:</b>\n"
         f"  • CONFLUENCE: {total_confluence}\n"
-        f"  • CONTEXT: {total_context}\n"
+        f"  • CONTEXT4H: {total_context4h}\n"
         f"  • TREND: {total_trend}\n"
         f"  • SWING: {total_swing}\n"
         f"  • PULSE: {total_pulse}\n"
@@ -513,12 +513,14 @@ def send_weekly_report():
         for symbol, stats in sorted(assets_with_alerts.items(), key=lambda x: sum(x[1].values()), reverse=True):
             base = symbol.replace('/USDT', '')
             details = []
-            if stats.get('SAFE', 0):       details.append(f"S:{stats['SAFE']}")
-            if stats.get('MOMENTUM', 0):   details.append(f"M:{stats['MOMENTUM']}")
-            if stats.get('CONTEXT', 0):    details.append(f"C:{stats['CONTEXT']}")
-            if stats.get('CONTEXT_A', 0):  details.append(f"CA:{stats['CONTEXT_A']}")
-            if stats.get('CONTEXT_B', 0):  details.append(f"CB:{stats['CONTEXT_B']}")
-            if stats.get('CONTEXT_B+', 0): details.append(f"CB+:{stats['CONTEXT_B+']}")
+            if stats.get('SAFE', 0):        details.append(f"S:{stats['SAFE']}")
+            if stats.get('MOMENTUM', 0):    details.append(f"M:{stats['MOMENTUM']}")
+            if stats.get('CONFLUENCE', 0):  details.append(f"CONF:{stats['CONFLUENCE']}")
+            if stats.get('CONTEXT4H', 0):   details.append(f"C4H:{stats['CONTEXT4H']}")
+            if stats.get('TREND', 0):       details.append(f"TR:{stats['TREND']}")
+            if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
+            if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
+            if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
             msg += f"  • {base}: {sum(stats.values())} ({', '.join(details)})\n"
     else:
         msg += "📈 <b>Par asset:</b> Aucune alerte cette semaine\n"
@@ -634,6 +636,14 @@ def heartbeat_scheduler():
 # ============================================================================ #
 # UTILITAIRES
 # ============================================================================ #
+
+def require_admin_secret():
+    """Vérifie le header X-Admin-Secret pour les endpoints d'administration."""
+    expected = os.environ.get('ADMIN_SECRET', '')
+    if not expected:
+        logger.warning("⚠️ ADMIN_SECRET non défini — endpoints admin non protégés")
+        return True  # permissif si non configuré (compatibilité)
+    return request.headers.get('X-Admin-Secret') == expected
 
 def format_tv_symbol(s):
     if ':' in s:
@@ -2232,10 +2242,13 @@ def startup():
         # Configurer le webhook Telegram pour les boutons inline
         try:
             tok = CONFIG.get('TELEGRAM_BOT_TOKEN', '')
-            if tok:
-                wh_url = 'https://trading-bot-multi-strategy-production.up.railway.app/telegram_callback'
+            base_url = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
+            if tok and base_url:
+                wh_url = f'{base_url}/telegram_callback'
                 requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json={'url': wh_url}, timeout=10)
                 logger.info(f'✅ Telegram webhook configuré: {wh_url}')
+            elif tok and not base_url:
+                logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')
         except Exception as e:
             logger.warning(f'⚠️ Telegram webhook setup: {e}')
         bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)

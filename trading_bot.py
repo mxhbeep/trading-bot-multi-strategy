@@ -59,8 +59,11 @@ CONFIG = {
         'SKY/USDT':         {'exchange': 'okx', 'scalp': False},
         'STX/USDT':         {'exchange': 'okx', 'scalp': False},
         'TIA/USDT':         {'exchange': 'okx', 'scalp': False},
+        'CHZ/USDT':         {'exchange': 'okx', 'scalp': False},
+        'FARTCOIN/USDT':    {'exchange': 'okx', 'scalp': False},
         'USELESS/USDT':     {'exchange': 'okx', 'scalp': False},
         'ZEC/USDT':         {'exchange': 'okx', 'scalp': False},
+        'ZEN/USDT':         {'exchange': 'okx', 'scalp': False},
     },
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
@@ -459,10 +462,10 @@ def send_start_notification():
         "   • Anti-chop DMI ADX 1H / Signal: Flip ST AI 1H / Cooldown 4H\n\n"
         "4️⃣ <b>PULSE</b>\n"
         "   • Bias 4H + Bias 15m + ADX 1H DMI + ST Context 15m (anti-chop)\n"
-        "   • Signal: Flip ST AI 15m / Pyramiding: guard (30min) — 38 assets\n\n"
+        "   • Signal: Flip ST AI 15m / Pyramiding: guard (30min) — 42 assets\n\n"
         "5️⃣ <b>SWING</b>\n"
         "   • ADX 4H DI aligné + flip ST AI 1H\n"
-        "   • Pyramiding: guard (1H) — 38 assets\n\n"
+        "   • Pyramiding: guard (1H) — 42 assets\n\n"
 
 
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -900,6 +903,9 @@ def webhook():
                     if bias_val != exp_bias:
                         send_close_alert(symbol, 'TREND', dir_t, price, 'Bias 1D inversé')
                 logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
+            elif tf == '2d':
+                m['bias_2d'] = bias_val if bias_val != 'neutral' else None
+                logger.info(f"[BIAS TV] {symbol} bias_2d = {bias_val}")
             elif tf == '1h':
                 m['bias_1h'] = bias_val if bias_val != 'neutral' else None
                 logger.info(f"[BIAS TV] {symbol} bias_1h = {bias_val}")
@@ -1951,7 +1957,7 @@ def calc_bias_2d(symbol):
 def update_indicators_for_symbol(symbol):
     """Met a jour tous les indicateurs calculables pour un asset."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
-    OKX_SKIP = {'USELESS/USDT'}
+    OKX_SKIP = {'USELESS/USDT', 'FARTCOIN/USDT'}
     if symbol in OKX_SKIP:
         return
     try:

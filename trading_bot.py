@@ -1879,6 +1879,10 @@ def calc_bias_2d(symbol):
 
 def update_indicators_for_symbol(symbol):
     """Met a jour tous les indicateurs calculables pour un asset."""
+    # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
+    OKX_SKIP = {'USELESS/USDT'}
+    if symbol in OKX_SKIP:
+        return
     try:
         # Fetch bougies
         df_1h  = fetch_ohlcv_okx(symbol, '1h',  limit=250)

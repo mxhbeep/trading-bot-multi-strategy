@@ -69,6 +69,7 @@ CONFIG = {
     'SCALP_BOT_TOKEN': os.environ.get('SCALP_BOT_TOKEN', ''),
     'NTFY_TOPIC': os.environ.get('NTFY_TOPIC', ''),
     'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
+    'JOURNAL_BOT_URL': os.environ.get('JOURNAL_BOT_URL', ''),  # ex: https://journal-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
 }
@@ -316,17 +317,34 @@ def send_telegram_scalp(msg):
         logger.error(f"Scalp Bot error: {e}")
         send_telegram(msg)  # fallback
 
-def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None):
-    """Envoie un message Telegram avec boutons Pyramiding / Ignorer."""
+def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None,
+                               journal_symbol=None, journal_strategy=None,
+                               journal_direction=None, journal_price=None):
+    """Envoie un message Telegram avec boutons Pyramiding / Ignorer / Journal."""
     tok  = token   or CONFIG.get('TELEGRAM_BOT_TOKEN', '')
     chat = chat_id or CONFIG.get('TELEGRAM_CHAT_ID', '')
     if not tok or not chat:
         return
     try:
-        keyboard = {"inline_keyboard": [[
+        # Ligne 1 : Pyramiding + Ignorer
+        row1 = [
             {"text": "📈 Activer pyramiding", "callback_data": f"pyra_on:{callback_key}"},
-            {"text": "❌ Ignorer",             "callback_data": f"pyra_off:{callback_key}"}
-        ]]}
+            {"text": "❌ Ignorer",             "callback_data": f"pyra_off:{callback_key}"},
+        ]
+        # Ligne 2 : bouton Journal (si les infos sont disponibles)
+        rows = [row1]
+        if journal_symbol and journal_strategy and journal_direction and journal_price is not None:
+            # Encode les données du trade dans le callback_data
+            # Format : "journal_log:{symbol}|{strategy}|{direction}|{price}"
+            sym_safe = str(journal_symbol).replace('|', '')
+            jdata = f"journal_log:{sym_safe}|{journal_strategy}|{journal_direction}|{journal_price}"
+            # Telegram limite callback_data à 64 octets — on tronque si nécessaire
+            if len(jdata.encode()) <= 64:
+                rows.append([{"text": "📓 Logger ce trade", "callback_data": jdata}])
+            else:
+                logger.warning(f"[JOURNAL] callback_data trop long ({len(jdata.encode())} octets), bouton ignoré")
+
+        keyboard = {"inline_keyboard": rows}
         requests.post(
             f"https://api.telegram.org/bot{tok}/sendMessage",
             json={"chat_id": chat, "text": msg, "parse_mode": "HTML", "reply_markup": keyboard},
@@ -990,7 +1008,9 @@ def webhook():
                         f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (SIGNAL)"
                         f"{close_msg_c}"
                         f"{get_market_context_info()}",
-                        f"{symbol}_CONFLUENCE"
+                        f"{symbol}_CONFLUENCE",
+                        journal_symbol=symbol, journal_strategy='CONFLUENCE',
+                        journal_direction=direction_c, journal_price=price
                     )
                     track_alert(symbol, 'CONFLUENCE')
                     logger.info(f"[CONFLUENCE] Entrée: {symbol} {direction_c}")
@@ -1094,7 +1114,9 @@ def webhook():
                         f"✅ SuperTrend AI 4H: {st_4h_val.upper()} (SIGNAL)"
                         f"{close_msg_t}"
                         f"{get_market_context_info()}",
-                        f"{symbol}_TREND"
+                        f"{symbol}_TREND",
+                        journal_symbol=symbol, journal_strategy='TREND',
+                        journal_direction=direction_t, journal_price=price
                     )
                     track_alert(symbol, 'TREND')
                     logger.info(f"[TREND] Entrée: {symbol} {direction_t}")
@@ -1224,7 +1246,9 @@ def webhook():
                         f"{adx_status}\n"
                         f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
-                        f"{symbol}_PULSE"
+                        f"{symbol}_PULSE",
+                        journal_symbol=symbol, journal_strategy='PULSE',
+                        journal_direction=direction_p, journal_price=price
                     )
                     track_alert(symbol, 'PULSE')
                     logger.info(f"[PULSE] Entrée: {symbol} {direction_p}")
@@ -1362,7 +1386,11 @@ def webhook():
                         f"{close_msg_c4}"
                         f"{get_market_context_info()}"
                     )
-                    send_telegram_with_buttons(msg, f"{symbol}_CONTEXT4H")
+                    send_telegram_with_buttons(
+                        msg, f"{symbol}_CONTEXT4H",
+                        journal_symbol=symbol, journal_strategy='CONTEXT4H',
+                        journal_direction=direction_c4, journal_price=price
+                    )
                     track_alert(symbol, 'CONTEXT4H')
                     logger.info(f"[CONTEXT4H] Entrée {tag}: {symbol} {direction_c4}")
 
@@ -1460,7 +1488,9 @@ def webhook():
                         f"\u2705 ST Context 15m: {ctx_txt_p2} (anti-chop)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_p2.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
-                        f"{symbol}_PULSE"
+                        f"{symbol}_PULSE",
+                        journal_symbol=symbol, journal_strategy='PULSE',
+                        journal_direction=direction_p2, journal_price=price
                     )
                     track_alert(symbol, 'PULSE')
                     logger.info(f"[PULSE] Entrée 1H: {symbol} {direction_p2}")
@@ -1540,7 +1570,9 @@ def webhook():
                         f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_sw.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
-                        f"{symbol}_SWING"
+                        f"{symbol}_SWING",
+                        journal_symbol=symbol, journal_strategy='SWING',
+                        journal_direction=direction_sw, journal_price=price
                     )
                     track_alert(symbol, 'SWING')
                     logger.info(f"[SWING] Entrée: {symbol} {direction_sw}")
@@ -1614,6 +1646,57 @@ def telegram_callback():
                                    "reply_markup": {"inline_keyboard": [[
                                        {"text": "❌ Pyramiding ignoré", "callback_data": "noop"}
                                    ]]}}, timeout=5)
+
+        elif callback_data.startswith('journal_log:'):
+            # Relai vers le Journal Bot
+            payload_str = callback_data[len('journal_log:'):]
+            parts = payload_str.split('|')
+            if len(parts) == 4:
+                j_symbol, j_strategy, j_direction, j_price_str = parts
+                journal_url = CONFIG.get('JOURNAL_BOT_URL', '').rstrip('/')
+                user_id_str = str(callback.get('from', {}).get('id', ''))
+                if journal_url:
+                    def _relay_journal(url, sym, strat, direc, price_s, uid, cid):
+                        try:
+                            resp = requests.post(
+                                f"{url}/log_entry",
+                                json={
+                                    'symbol':    sym,
+                                    'strategy':  strat,
+                                    'direction': direc,
+                                    'price':     price_s,
+                                    'user_id':   uid,
+                                    'chat_id':   cid,
+                                },
+                                timeout=8
+                            )
+                            logger.info(f"[JOURNAL] Relai log_entry → {resp.status_code}")
+                        except Exception as e:
+                            logger.error(f"[JOURNAL] Relai erreur: {e}")
+                    threading.Thread(
+                        target=_relay_journal,
+                        args=(journal_url, j_symbol, j_strategy, j_direction,
+                              j_price_str, user_id_str, str(chat_id)),
+                        daemon=True
+                    ).start()
+                    # Mettre à jour le bouton pour confirmer le clic
+                    if tok and chat_id and msg_id:
+                        try:
+                            # Reconstruire le keyboard sans le bouton Journal (remplacé)
+                            requests.post(
+                                f"https://api.telegram.org/bot{tok}/editMessageReplyMarkup",
+                                json={"chat_id": chat_id, "message_id": msg_id,
+                                      "reply_markup": {"inline_keyboard": [[
+                                          {"text": "📓 ✅ Envoyé au journal", "callback_data": "noop"}
+                                      ]]}},
+                                timeout=5
+                            )
+                        except Exception:
+                            pass
+                else:
+                    logger.warning("[JOURNAL] JOURNAL_BOT_URL non configuré — callback ignoré")
+            else:
+                logger.warning(f"[JOURNAL] callback_data mal formé: {payload_str}")
 
     except Exception as e:
         logger.error(f"[CALLBACK] Erreur: {e}")

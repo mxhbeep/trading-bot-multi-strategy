@@ -959,11 +959,8 @@ def webhook():
 
         if alert_type == 'supertrend' and tf == '4h':
             st_4h_val  = parse_supertrend_value(val)
-            prev_4h    = m.get('st_4h')
-            flipped_4h = (st_4h_val is not None and prev_4h is not None and st_4h_val != prev_4h)
-            m['st_4h'] = st_4h_val
-            if flipped_4h and prev_4h:
-                m['last_st_4h'] = prev_4h
+            # Utiliser le flag calculé avant mutation dans le bloc momentum
+            flipped_4h = bool(m.get('st_4h_flipped'))
 
             if flipped_4h:
                 ctx_3d     = ST_CONTEXT_3D.get(symbol)
@@ -1059,11 +1056,8 @@ def webhook():
 
         if alert_type == 'supertrend' and tf == '4h':
             st_4h_val  = parse_supertrend_value(val)
-            prev_4h    = m.get('st_4h')
-            flipped_4h = (st_4h_val is not None and prev_4h is not None and st_4h_val != prev_4h)
-            m['st_4h'] = st_4h_val
-            if flipped_4h and prev_4h:
-                m['last_st_4h'] = prev_4h
+            # Utiliser le flag calculé avant mutation dans le bloc momentum
+            flipped_4h = bool(m.get('st_4h_flipped'))
 
             if flipped_4h:
                 # Recalculer Bias 1D en temps réel
@@ -1304,11 +1298,7 @@ def webhook():
 
         if alert_type == 'supertrend' and tf == '1h':
             st_1h_val  = parse_supertrend_value(val)
-            prev_1h    = m.get('st_1h')
-            flipped_1h = (st_1h_val is not None and prev_1h is not None and st_1h_val != prev_1h)
-            m['st_1h'] = st_1h_val
-            if flipped_1h and prev_1h:
-                m['last_st_1h'] = prev_1h
+            flipped_1h = bool(m.get('st_1h_flipped'))
 
             if flipped_1h:
                 ctx_4h_ct  = m.get('st_context_4h')
@@ -1622,9 +1612,11 @@ def webhook():
 
 @app.route('/telegram_callback', methods=['POST'])
 def telegram_callback():
-    secret_path = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
-    if secret_path and request.args.get('secret') != secret_path:
-        return jsonify({'ok': False}), 403
+    tg_secret = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+    if tg_secret:
+        provided = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+        if provided != tg_secret:
+            return jsonify({'ok': False}), 403
     """Reçoit les callbacks des boutons inline Telegram."""
     data = request.get_json(silent=True)
     if not data:
@@ -2254,7 +2246,11 @@ def startup():
             base_url = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
             if tok and base_url:
                 wh_url = f'{base_url}/telegram_callback'
-                requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json={'url': wh_url}, timeout=10)
+                wh_payload = {'url': wh_url}
+                tg_secret = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+                if tg_secret:
+                    wh_payload['secret_token'] = tg_secret
+                requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json=wh_payload, timeout=10)
                 logger.info(f'✅ Telegram webhook configuré: {wh_url}')
             elif tok and not base_url:
                 logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')

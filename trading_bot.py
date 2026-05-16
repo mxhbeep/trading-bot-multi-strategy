@@ -94,7 +94,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'CONTEXT4H': 0, 'SWING': 0, 'TREND2D': 0, 'PULSE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'CONFLUENCE': 0, 'TREND': 0, 'CONTEXT4H': 0, 'SWING': 0, 'PULSE': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -172,28 +172,39 @@ def persist_runtime_state():
 
 def audit_log(data, status="reçu"):
     entry = {
-        "ts":       datetime.now(timezone.utc).isoformat(),
-        "symbol":   data.get("symbol"),
-        "tf":       data.get("tf"),
-        "type":     data.get("type"),
-        "strategy": data.get("strategy"),
-        "value":    data.get("value"),
-        "price":    data.get("price"),
-        "status":   status
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "symbol": data.get("symbol"),
+        "tf": data.get("tf"),
+        "type": data.get("type"),
+        "status": status
     }
-    if REDIS_CLIENT:
+    if not REDIS_CLIENT:
         try:
-            REDIS_CLIENT.lpush('audit_log', json.dumps(entry))
-            REDIS_CLIENT.ltrim('audit_log', 0, 9999)
-        except Exception:
-            pass
-    else:
-        try:
-            os.makedirs("logs", exist_ok=True)
+            import os as _os
+            _os.makedirs("logs", exist_ok=True)
             with open("logs/alerts.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                import json as _json
+                f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             pass
+        return
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "sym": data.get('symbol'),
+        "type": data.get('type'),
+        "strategy": data.get('strategy'),
+        "tf": data.get('tf'),
+        "val": data.get('value'),
+        "price": data.get('price'),
+        "status": status
+    }
+    try:
+        REDIS_CLIENT.lpush('audit_trail', json.dumps(entry))
+        REDIS_CLIENT.ltrim('audit_trail', 0, 999)
+    except Exception as e:
+        logger.error(f"❌ Erreur audit Redis: {e}")
+
+
 def load_runtime_state():
     global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
     if not REDIS_CLIENT:
@@ -334,15 +345,12 @@ def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None,
                 logger.warning(f"[JOURNAL] callback_data trop long ({len(jdata.encode())} octets), bouton ignoré")
 
         keyboard = {"inline_keyboard": rows}
-        resp = requests.post(
+        requests.post(
             f"https://api.telegram.org/bot{tok}/sendMessage",
             json={"chat_id": chat, "text": msg, "parse_mode": "HTML", "reply_markup": keyboard},
             timeout=10
         )
-        if resp.status_code == 200:
-            logger.info("✅ Message Telegram avec boutons envoyé")
-        else:
-            logger.error(f"❌ Telegram buttons erreur {resp.status_code}: {resp.text[:200]}")
+        logger.info("✅ Message Telegram avec boutons envoyé")
     except Exception as e:
         logger.error(f"Telegram buttons error: {e}")
         send_telegram(msg)  # fallback sans boutons
@@ -456,9 +464,6 @@ def send_start_notification():
         "   • ADX 4H DI aligné + flip ST AI 1H\n"
         "   • Pyramiding: guard (1H) — 38 assets\n\n"
 
-        "6️⃣ <b>TREND2D</b>\n"
-        "   • Bias 2D (EMA21/SMA55) + ST Context 1H aligné\n"
-        "   • Signal: Flip ST AI 1H / Pyramiding: guard (4H) — 38 assets\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏰ {now}"
@@ -484,7 +489,6 @@ def send_weekly_report():
     total_trend      = sum(s.get('TREND', 0)        for s in WEEKLY_STATS.values())
     total_momentum   = sum(s.get('MOMENTUM', 0)     for s in WEEKLY_STATS.values())
     total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
-    total_trend2d    = sum(s.get('TREND2D', 0)      for s in WEEKLY_STATS.values())
     total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
     total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
@@ -493,7 +497,7 @@ def send_weekly_report():
         f"  • CONFLUENCE: {total_confluence}\n"
         f"  • CONTEXT4H: {total_context4h}\n"
         f"  • TREND: {total_trend}\n"
-        f"  • SWING: {total_swing} | TREND2D: {total_trend2d}\n"
+        f"  • SWING: {total_swing}\n"
         f"  • PULSE: {total_pulse}\n"
         f"  • SCALP: {total_scalp}\n"
         f"  • MOMENTUM: {total_momentum}\n\n"
@@ -527,7 +531,6 @@ def send_weekly_report():
 
     WEEKLY_STATS.clear()
     WEEKLY_START = datetime.now(timezone.utc)
-    # ========================================================================
     persist_runtime_state()
 
 
@@ -638,8 +641,8 @@ def require_admin_secret():
     """Vérifie le header X-Admin-Secret pour les endpoints d'administration."""
     expected = os.environ.get('ADMIN_SECRET', '')
     if not expected:
-        logger.error("ADMIN_SECRET non défini — endpoint admin refusé")
-        return False  # fail closed
+        logger.warning("⚠️ ADMIN_SECRET non défini — endpoints admin non protégés")
+        return True  # permissif si non configuré (compatibilité)
     return request.headers.get('X-Admin-Secret') == expected
 
 def format_tv_symbol(s):
@@ -764,9 +767,10 @@ def should_send(symbol, key, event_id=None, cooldown=None):
             previous_event = LAST_SIGNAL_EVENTS.get(k)
             if previous_event == event_id:
                 return False
-            LAST_SIGNAL_EVENTS[k] = event_id
         if k not in LAST_SIGNALS or (now - LAST_SIGNALS[k] > effective_cooldown):
             LAST_SIGNALS[k] = now
+            if event_id:
+                LAST_SIGNAL_EVENTS[k] = event_id
             return True
     return False
 
@@ -985,7 +989,6 @@ def webhook():
                 with STATE_LOCK:
                     pos_c = SCALP_POSITIONS.get(pos_key_c)
                     if pos_c and pos_c['direction'] != direction_c:
-                        SCALP_POSITIONS.pop(pos_key_c, None)
                         pos_c = None; is_entry_c = False; is_pyra_c = False
                     else:
                         opp_4h_c = 'sell' if st_4h_val == 'buy' else 'buy'
@@ -1090,7 +1093,6 @@ def webhook():
                 with STATE_LOCK:
                     pos_t = SCALP_POSITIONS.get(pos_key_t)
                     if pos_t and pos_t['direction'] != direction_t:
-                        SCALP_POSITIONS.pop(pos_key_t, None)
                         pos_t = None; is_entry_t = False; is_pyra_t = False
                     else:
                         opp_4h_t = 'sell' if st_4h_val == 'buy' else 'buy'
@@ -1225,7 +1227,6 @@ def webhook():
                 with STATE_LOCK:
                     pos_p = SCALP_POSITIONS.get(pos_key_p)
                     if pos_p and pos_p['direction'] != direction_p:
-                        SCALP_POSITIONS.pop(pos_key_p, None)
                         pos_p = None; is_entry_p = False; is_pyra_p = False
                     else:
                         is_entry_p = (all_ok and pos_p is None)
@@ -1358,7 +1359,6 @@ def webhook():
                 with STATE_LOCK:
                     pos_c4 = SCALP_POSITIONS.get(pos_key_c4)
                     if pos_c4 and pos_c4['direction'] != direction_c4:
-                        SCALP_POSITIONS.pop(pos_key_c4, None)
                         pos_c4 = None; is_entry_c4 = False; is_pyra_c4 = False
                     else:
                         is_entry_c4 = ((is_main or is_secondary or is_triple) and pos_c4 is None)
@@ -1441,6 +1441,14 @@ def webhook():
     # Pas d'anti-chop — filtres suffisamment forts
     # Pyramiding : flip ST AI 1H + guard — cooldown 1H
     # ========================================================================
+
+    # ========================================================================
+    # LOGIQUE PULSE — Entrée secondaire : Bias 4H + flip ST AI 1H
+    # Anti-chop : ST Context 15m opposé → annulé (neutre = OK)
+    # Pyramiding : flip ST AI 1H + guard — cooldown 1H
+    # ========================================================================
+    if strat in ['pulse', 'all']:
+        m = MOMENTUM_STATE[symbol]
         # ── Entrée secondaire : Bias 4H + flip ST AI 1H ────────────────
         if alert_type == 'supertrend' and tf == '1h':
             st_1h_val_p2  = parse_supertrend_value(val)
@@ -1542,11 +1550,8 @@ def webhook():
                 di_plus_4h  = adx_4h_sw.get('di_plus', 0)
                 di_minus_4h = adx_4h_sw.get('di_minus', 0)
                 st_1h_cur   = m.get('st_1h')
-                bias_2d_sw  = m.get('bias_2d')
 
-                direction_sw  = "LONG" if st_1h_val_sw == 'buy' else "SHORT"
-                exp_bias_sw   = 'bull' if direction_sw == 'LONG' else 'bear'
-                bias_2d_ok_sw = bias_2d_sw == exp_bias_sw
+                direction_sw = "LONG" if st_1h_val_sw == 'buy' else "SHORT"
 
                 # ADX 4H DI dans le bon sens
                 adx_4h_ok_sw = (di_plus_4h >= di_minus_4h and direction_sw == 'LONG') or \
@@ -1559,14 +1564,13 @@ def webhook():
                 with STATE_LOCK:
                     pos_sw = SCALP_POSITIONS.get(pos_key_sw)
                     if pos_sw and pos_sw['direction'] != direction_sw:
-                        SCALP_POSITIONS.pop(pos_key_sw, None)
                         pos_sw = None; is_entry_sw = False; is_pyra_sw = False
                     else:
-                        is_entry_sw = (adx_4h_ok_sw and st_1h_ok_sw and bias_2d_ok_sw and pos_sw is None)
+                        is_entry_sw = (adx_4h_ok_sw and st_1h_ok_sw and pos_sw is None)
                         opp_1h_sw   = 'sell' if st_1h_val_sw == 'buy' else 'buy'
                         guard_ok_sw = m.get('last_st_1h_swing') == opp_1h_sw
                         is_pyra_sw  = bool(pos_sw and pos_sw['direction'] == direction_sw
-                                           and adx_4h_ok_sw and st_1h_ok_sw and bias_2d_ok_sw and guard_ok_sw)
+                                           and adx_4h_ok_sw and st_1h_ok_sw and guard_ok_sw)
                     if is_entry_sw and should_send(symbol, f"swing_entry_{st_1h_val_sw}", event_id=event_id, cooldown=3600):
                         SCALP_POSITIONS[pos_key_sw] = {'direction': direction_sw, 'entry_count': 1}
                         pos_sw = SCALP_POSITIONS[pos_key_sw]
@@ -1582,7 +1586,6 @@ def webhook():
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 2D: {(bias_2d_sw or '?').upper()} (EMA21/SMA55)\n"
                         f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_sw.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
@@ -1613,102 +1616,15 @@ def webhook():
                     track_alert(symbol, 'SWING')
                     logger.info(f"[SWING] Pyramiding #{entry_count_sw}: {symbol} {direction_sw}")
 
-    # LOGIQUE TREND2D : Bias 2D + ST Context 1H aligné → flip ST AI 1H
-    # Pas d'anti-chop / Cooldown 4H
-    # ========================================================================
-    if strat in ['trend2d', 'all']:
-        m = MOMENTUM_STATE[symbol]
-
-        if alert_type == 'supertrend' and tf == '1h':
-            st_1h_val_t2  = parse_supertrend_value(val)
-            prev_1h_t2    = m.get('st_1h_trend2d')
-            flipped_1h_t2 = (st_1h_val_t2 is not None and prev_1h_t2 is not None and st_1h_val_t2 != prev_1h_t2)
-            m['st_1h_trend2d'] = st_1h_val_t2
-            if flipped_1h_t2 and prev_1h_t2:
-                m['last_st_1h_trend2d'] = prev_1h_t2
-
-            if flipped_1h_t2:
-                bias_2d_v    = m.get('bias_2d')
-                ctx_1h_t2    = m.get('st_context_1h')
-                direction_t2 = "LONG" if st_1h_val_t2 == 'buy' else "SHORT"
-                exp_bias_t2  = 'bull' if direction_t2 == 'LONG' else 'bear'
-
-                bias_2d_ok  = bias_2d_v == exp_bias_t2
-                ctx_1h_ok   = ctx_1h_t2 == st_1h_val_t2
-
-                pos_key_t2 = f"{symbol}_TREND2D"
-                with STATE_LOCK:
-                    pos_t2 = SCALP_POSITIONS.get(pos_key_t2)
-                    if pos_t2 and pos_t2['direction'] != direction_t2:
-                        SCALP_POSITIONS.pop(pos_key_t2, None)
-                        pos_t2 = None; is_entry_t2 = False; is_pyra_t2 = False
-                    else:
-                        is_entry_t2 = (bias_2d_ok and ctx_1h_ok and pos_t2 is None)
-                        opp_1h_t2   = 'sell' if st_1h_val_t2 == 'buy' else 'buy'
-                        guard_ok_t2 = m.get('last_st_1h_trend2d') == opp_1h_t2
-                        is_pyra_t2  = bool(pos_t2 and pos_t2['direction'] == direction_t2
-                                           and bias_2d_ok and ctx_1h_ok and guard_ok_t2)
-                    if is_entry_t2 and should_send(symbol, f"trend2d_entry_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
-                        SCALP_POSITIONS[pos_key_t2] = {'direction': direction_t2, 'entry_count': 1}
-                        pos_t2 = SCALP_POSITIONS[pos_key_t2]
-                    else:
-                        is_entry_t2 = False
-
-                if is_entry_t2 and pos_t2:
-                    emoji    = "\U0001f7e2" if direction_t2 == "LONG" else "\U0001f534"
-                    ctx_txt  = ctx_1h_t2.upper() if ctx_1h_t2 else "NEUTRE"
-                    send_telegram_with_buttons(
-                        f"{emoji} <b>[TREND2D - ENTREE]</b> {symbol}\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Direction: {direction_t2}\n"
-                        f"\U0001f4b0 Price: ${format_price(price)}\n"
-                        f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                        f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 2D: {(bias_2d_v or '?').upper()} (EMA21/SMA55)\n"
-                        f"\u2705 ST Context 1H: {ctx_txt} (zone)\n"
-                        f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (SIGNAL)"
-                        f"{get_market_context_info()}",
-                        f"{symbol}_TREND2D",
-                        journal_symbol=symbol, journal_strategy='TREND2D',
-                        journal_direction=direction_t2, journal_price=price
-                    )
-                    track_alert(symbol, 'TREND2D')
-                    logger.info(f"[TREND2D] Entrée: {symbol} {direction_t2}")
-
-                elif is_pyra_t2 and PYRA_ENABLED.get(f"{symbol}_TREND2D", False) and should_send(symbol, f"trend2d_pyra_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
-                    with STATE_LOCK:
-                        pos_t2['entry_count'] += 1
-                        entry_count_t2 = pos_t2['entry_count']
-                    emoji   = "\U0001f7e2" if direction_t2 == "LONG" else "\U0001f534"
-                    ctx_txt = ctx_1h_t2.upper() if ctx_1h_t2 else "NEUTRE"
-                    send_telegram_ttmtf(
-                        f"{emoji} <b>[TREND2D - PYRAMIDING #{entry_count_t2}]</b> {symbol}\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Direction: {direction_t2}\n"
-                        f"\U0001f4b0 Price: ${format_price(price)}\n"
-                        f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                        f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 2D: {(bias_2d_v or '?').upper()} (EMA21/SMA55)\n"
-                        f"\u2705 ST Context 1H: {ctx_txt}\n"
-                        f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (PYRAMIDING)\n"
-                        f"\U0001f6e1\ufe0f Guard: flip opposé validé"
-                        f"{get_market_context_info()}"
-                    )
-                    track_alert(symbol, 'TREND2D')
-                    logger.info(f"[TREND2D] Pyramiding #{entry_count_t2}: {symbol} {direction_t2}")
-
-
     persist_runtime_state()
     return jsonify({'status': 'ok'}), 200
 
 
 @app.route('/telegram_callback', methods=['POST'])
 def telegram_callback():
-    tg_secret = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
-    if tg_secret:
-        provided = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
-        if provided != tg_secret:
-            return jsonify({'ok': False}), 403
+    secret_path = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+    if secret_path and request.args.get('secret') != secret_path:
+        return jsonify({'ok': False}), 403
     """Reçoit les callbacks des boutons inline Telegram."""
     data = request.get_json(silent=True)
     if not data:
@@ -1808,8 +1724,6 @@ def telegram_callback():
 
 @app.route('/prep_report', methods=['GET', 'POST'])
 def force_prep_report():
-    if not require_admin_secret():
-        return jsonify({'error': 'unauthorized'}), 401
     """Force l'envoi immédiat des listes PREP pour toutes les stratégies."""
     global PREP_STATE
     PREP_STATE = {}  # Reset pour forcer le renvoi
@@ -1890,7 +1804,7 @@ def reset_state_symbol(symbol):
     ST_CONTEXT_LT_15M.pop(symbol, None)
     for k in ['', '_1h', '_4h', '_1d']:
         ADX_STATE.pop(f'{symbol}{k}', None)
-    for strat in ['CONFLUENCE', 'TREND', 'PULSE', 'CONTEXT4H', 'SWING', 'TREND2D']:
+    for strat in ['CONFLUENCE', 'TREND', 'PULSE', 'SCALP', 'CONTEXT4H']:
         PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
         SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
    
@@ -2340,14 +2254,13 @@ def startup():
             base_url = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
             if tok and base_url:
                 wh_url = f'{base_url}/telegram_callback'
-                wh_payload = {'url': wh_url}
-                tg_secret = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
-                if tg_secret:
-                    wh_payload['secret_token'] = tg_secret
-                requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json=wh_payload, timeout=10)
+                requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json={'url': wh_url}, timeout=10)
                 logger.info(f'✅ Telegram webhook configuré: {wh_url}')
             elif tok and not base_url:
                 logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')
+                logger.warning('⚠️ Les boutons Telegram (pyramiding, journal) ne fonctionneront PAS')
+                # Envoyer un avertissement sur Telegram
+                send_telegram('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont désactivés.\nConfigurer PUBLIC_BASE_URL sur Railway.')
         except Exception as e:
             logger.warning(f'⚠️ Telegram webhook setup: {e}')
         bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)

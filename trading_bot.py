@@ -969,13 +969,15 @@ def webhook():
     # ========================================================================
     # MISE À JOUR DES ÉTATS (ST AI, relai Tapbit, guards)
     # ========================================================================
-    if strat in ['momentum', 'context', 'trend', 'scalp', 'swing', 'all']:
+    if strat in ['momentum', 'context', 'trend', 'scalp', 'swing', 'confluence', 'all']:
         m = MOMENTUM_STATE[symbol]
 
         if alert_type == 'supertrend' and tf == '1h':
             prev_1h = m.get('st_1h')
             m['st_1h'] = parse_supertrend_value(val)
             m['st_1h_flipped'] = bool(prev_1h is not None and m['st_1h'] is not None and m['st_1h'] != prev_1h)
+            if m['st_1h_flipped'] and prev_1h:
+                m['last_st_1h'] = prev_1h  # guard pyramiding CONTEXT4H
         if alert_type == 'supertrend' and tf == '4h':
             prev_4h = m.get('st_4h')
             m['st_4h'] = parse_supertrend_value(val)
@@ -1039,6 +1041,7 @@ def webhook():
                 with STATE_LOCK:
                     pos_c = SCALP_POSITIONS.get(pos_key_c)
                     if pos_c and pos_c['direction'] != direction_c:
+                        SCALP_POSITIONS.pop(pos_key_c, None)
                         pos_c = None; is_entry_c = False; is_pyra_c = False
                     else:
                         opp_4h_c = 'sell' if st_4h_val == 'buy' else 'buy'
@@ -1140,6 +1143,7 @@ def webhook():
                 with STATE_LOCK:
                     pos_t = SCALP_POSITIONS.get(pos_key_t)
                     if pos_t and pos_t['direction'] != direction_t:
+                        SCALP_POSITIONS.pop(pos_key_t, None)
                         pos_t = None; is_entry_t = False; is_pyra_t = False
                     else:
                         opp_4h_t = 'sell' if st_4h_val == 'buy' else 'buy'
@@ -1274,6 +1278,7 @@ def webhook():
                 with STATE_LOCK:
                     pos_p = SCALP_POSITIONS.get(pos_key_p)
                     if pos_p and pos_p['direction'] != direction_p:
+                        SCALP_POSITIONS.pop(pos_key_p, None)
                         pos_p = None; is_entry_p = False; is_pyra_p = False
                     else:
                         is_entry_p = (all_ok and pos_p is None)
@@ -1402,6 +1407,7 @@ def webhook():
                 with STATE_LOCK:
                     pos_c4 = SCALP_POSITIONS.get(pos_key_c4)
                     if pos_c4 and pos_c4['direction'] != direction_c4:
+                        SCALP_POSITIONS.pop(pos_key_c4, None)
                         pos_c4 = None; is_entry_c4 = False; is_pyra_c4 = False
                     else:
                         is_entry_c4 = ((is_main or is_secondary or is_triple) and pos_c4 is None)
@@ -1607,6 +1613,7 @@ def webhook():
                 with STATE_LOCK:
                     pos_sw = SCALP_POSITIONS.get(pos_key_sw)
                     if pos_sw and pos_sw['direction'] != direction_sw:
+                        SCALP_POSITIONS.pop(pos_key_sw, None)
                         pos_sw = None; is_entry_sw = False; is_pyra_sw = False
                     else:
                         is_entry_sw = (adx_4h_ok_sw and st_1h_ok_sw and pos_sw is None)

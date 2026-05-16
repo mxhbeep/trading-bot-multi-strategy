@@ -641,8 +641,8 @@ def require_admin_secret():
     """Vérifie le header X-Admin-Secret pour les endpoints d'administration."""
     expected = os.environ.get('ADMIN_SECRET', '')
     if not expected:
-        logger.warning("⚠️ ADMIN_SECRET non défini — endpoints admin non protégés")
-        return True  # permissif si non configuré (compatibilité)
+        logger.error("ADMIN_SECRET non défini — endpoint admin refusé")
+        return False  # fail closed
     return request.headers.get('X-Admin-Secret') == expected
 
 def format_tv_symbol(s):
@@ -811,6 +811,26 @@ def init_symbol_states(symbol):
 # WEBHOOK HANDLER
 # ============================================================================ #
 
+def send_close_alert(symbol, strategy, direction, price, reason):
+    """Envoie une alerte de clôture, supprime la position et persiste l'état."""
+    pos_key = f"{symbol}_{strategy}"
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.pop(pos_key, None)
+        PYRA_ENABLED.pop(pos_key, None)
+    if pos:
+        emoji = "🔴" if direction == "LONG" else "🟢"
+        send_telegram(
+            f"{emoji} <b>[{strategy} - CLÔTURE RAPPEL]</b> {symbol}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 Direction était: {direction}\n"
+            f"💰 Price: ${format_price(price)}\n"
+            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+            f"📋 Raison: {reason}"
+        )
+        persist_runtime_state()
+        logger.info(f"[{strategy}] Position clôturée: {symbol} {direction} — {reason}")
+
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json(silent=True)
@@ -858,10 +878,27 @@ def webhook():
         bias_val = val.lower() if isinstance(val, str) else None
         if bias_val in ('bull', 'bear', 'neutral'):
             if tf == '4h':
+                prev_bias_4h = m.get('bias_4h')
                 m['bias_4h'] = bias_val if bias_val != 'neutral' else None
                 logger.info(f"[BIAS TV] {symbol} bias_4h = {bias_val}")
+                # Clôture PULSE si Bias 4H inversé (via alerte TV)
+                pos_pulse = SCALP_POSITIONS.get(f'{symbol}_PULSE')
+                if pos_pulse and prev_bias_4h and bias_val != prev_bias_4h and bias_val != 'neutral':
+                    dir_p = pos_pulse['direction']
+                    exp_bias = 'bull' if dir_p == 'LONG' else 'bear'
+                    if bias_val != exp_bias:
+                        send_close_alert(symbol, 'PULSE', dir_p, price, 'Bias 4H inversé')
             elif tf == '1d':
+                prev_bias_1d = m.get('bias_1d')
                 m['bias_1d'] = bias_val if bias_val != 'neutral' else None
+                logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
+                # Clôture TREND si Bias 1D inversé (via alerte TV)
+                pos_trend = SCALP_POSITIONS.get(f'{symbol}_TREND')
+                if pos_trend and prev_bias_1d and bias_val != prev_bias_1d and bias_val != 'neutral':
+                    dir_t = pos_trend['direction']
+                    exp_bias = 'bull' if dir_t == 'LONG' else 'bear'
+                    if bias_val != exp_bias:
+                        send_close_alert(symbol, 'TREND', dir_t, price, 'Bias 1D inversé')
                 logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
             elif tf == '1h':
                 m['bias_1h'] = bias_val if bias_val != 'neutral' else None
@@ -876,8 +913,16 @@ def webhook():
             m['st_context_1h'] = parsed_ctx
             m['st_context_1h_ts'] = now_ts
         elif tf == '4h':
+            prev_ctx_4h = m.get('st_context_4h')
             m['st_context_4h'] = parsed_ctx
             m['st_context_4h_ts'] = now_ts
+            # Clôture CONTEXT4H si ST Context 4H opposé
+            pos_c4h = SCALP_POSITIONS.get(f'{symbol}_CONTEXT4H')
+            if pos_c4h and parsed_ctx and parsed_ctx != prev_ctx_4h:
+                dir_c4h = pos_c4h['direction']
+                exp_ctx = 'buy' if dir_c4h == 'LONG' else 'sell'
+                if parsed_ctx != exp_ctx:
+                    send_close_alert(symbol, 'CONTEXT4H', dir_c4h, price, 'ST Context 4H opposé')
         elif tf == '15m':
             ST_CONTEXT_15M[symbol] = parsed_ctx
             m['st_context_15m_ts'] = now_ts
@@ -885,8 +930,16 @@ def webhook():
             ST_CONTEXT_1D[symbol] = parsed_ctx
             m['st_context_1d_ts'] = now_ts
         elif tf == '3d':
+            prev_ctx_3d = ST_CONTEXT_3D.get(symbol)
             ST_CONTEXT_3D[symbol] = parsed_ctx
             m['st_context_3d_ts'] = now_ts
+            # Clôture CONFLUENCE si ST Context 3D inversé
+            pos_conf = SCALP_POSITIONS.get(f'{symbol}_CONFLUENCE')
+            if pos_conf and parsed_ctx and parsed_ctx != prev_ctx_3d:
+                dir_conf = pos_conf['direction']
+                exp_ctx = 'buy' if dir_conf == 'LONG' else 'sell'
+                if parsed_ctx != exp_ctx:
+                    send_close_alert(symbol, 'CONFLUENCE', dir_conf, price, 'ST Context 3D inversé')
 
     if alert_type == 'st_context_lt':
         parsed_ctx_lt = parse_st_context_value(val)
@@ -1796,7 +1849,7 @@ def reset_state_symbol(symbol):
     ST_CONTEXT_LT_15M.pop(symbol, None)
     for k in ['', '_1h', '_4h', '_1d']:
         ADX_STATE.pop(f'{symbol}{k}', None)
-    for strat in ['CONFLUENCE', 'TREND', 'PULSE', 'SCALP', 'CONTEXT4H']:
+    for strat in ['CONFLUENCE', 'TREND', 'PULSE', 'CONTEXT4H', 'SWING', 'TREND2D']:
         PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
         SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
    

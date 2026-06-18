@@ -2053,122 +2053,8 @@ def update_indicators_for_symbol(symbol):
 
 
 def check_prep_alerts():
-    """Vérifie les assets en préparation et envoie une alerte groupée si la liste change."""
-    global PREP_STATE
-
-    new_prep = {
-        'CONFLUENCE': {'LONG': set(), 'SHORT': set()},
-        'TREND':      {'LONG': set(), 'SHORT': set()},
-        'PULSE':      {'LONG': set(), 'SHORT': set()},
-        'TREND2D':    {'LONG': set(), 'SHORT': set()},
-    }
-
-    with STATE_LOCK:
-        state_copy    = dict(MOMENTUM_STATE)
-        adx_copy      = dict(ADX_STATE)
-        symbols_conf  = CONFIG['SYMBOLS']
-
-    for symbol, m in state_copy.items():
-        if symbol not in symbols_conf: continue  # ignorer les assets hors watchlist
-        is_scalp = symbols_conf.get(symbol, {}).get('scalp', False)
-
-        # ── CONFLUENCE : ST Context 3D + ST Context 4H aligné ───────
-        ctx_3d_c   = ST_CONTEXT_3D.get(symbol)
-        ctx_4h_c   = m.get('st_context_4h')
-        adx_1d_c   = adx_copy.get(f'{symbol}_1d', {})
-        di_plus_1d_c  = adx_1d_c.get('di_plus', 0)
-        di_minus_1d_c = adx_1d_c.get('di_minus', 0)
-
-        for direction in ('LONG', 'SHORT'):
-            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-            opp_ctx = 'sell' if direction == 'LONG' else 'buy'
-            ctx_3d_ok = ctx_3d_c == exp_ctx
-            ctx_4h_ok = ctx_4h_c == exp_ctx
-            # Anti-chop ADX 1D : pas DI opposé dominant
-            adx_1d_ok = not ((di_minus_1d_c > di_plus_1d_c and direction == 'LONG') or
-                             (di_plus_1d_c > di_minus_1d_c and direction == 'SHORT'))
-            if ctx_3d_ok and ctx_4h_ok and adx_1d_ok:
-                new_prep['CONFLUENCE'][direction].add(symbol)
-
-        # ── TREND : ST Context 1D + Bias 1D + ST Context 4H ─────────
-        ctx_1d_t  = ST_CONTEXT_1D.get(symbol)
-        bias_1d_v = m.get('bias_1d')
-        ctx_4h_t  = m.get('st_context_4h')
-        ctx_1h_t  = m.get('st_context_1h')
-
-        for direction in ('LONG', 'SHORT'):
-            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-            exp_bias = 'bull' if direction == 'LONG' else 'bear'
-            opp_ctx  = 'sell' if direction == 'LONG' else 'buy'
-            ctx_1d_ok  = ctx_1d_t == exp_ctx
-            bias_1d_ok = bias_1d_v == exp_bias
-            ctx_4h_ok  = ctx_4h_t == exp_ctx
-            no_chop_1h = ctx_1h_t != opp_ctx if ctx_1h_t is not None else True
-            if ctx_1d_ok and bias_1d_ok and ctx_4h_ok and no_chop_1h:
-                new_prep['TREND'][direction].add(symbol)
-
-        # ── PULSE : ST Context 4H + Bias 4H + ST Context 15m ────────
-        ctx_4h_p  = m.get('st_context_4h')
-        bias_4h_v = m.get('bias_4h')
-        ctx_15m_p = ST_CONTEXT_15M.get(symbol)
-        ctx_1h_p  = m.get('st_context_1h')
-
-        for direction in ('LONG', 'SHORT'):
-            exp_ctx  = 'buy' if direction == 'LONG' else 'sell'
-            exp_bias = 'bull' if direction == 'LONG' else 'bear'
-            opp_ctx  = 'sell' if direction == 'LONG' else 'buy'
-            ctx_4h_ok  = ctx_4h_p == exp_ctx
-            bias_4h_ok = bias_4h_v == exp_bias
-            ctx_15m_ok = ctx_15m_p == exp_ctx
-            # None = neutre = ne bloque pas, mais opp_ctx = bloque
-            no_chop_1h = ctx_1h_p != opp_ctx if ctx_1h_p is not None else True
-            # PULSE v3 : Bias 4H + ST Context 15m (anti-chop DMI calculé au signal)
-            if bias_4h_ok and ctx_15m_ok:
-                new_prep['PULSE'][direction].add(symbol)
-
-        # ── TREND2D : Bias 2D aligné ─────────────────────────────
-        bias_2d_prep = m.get('bias_2d')
-        if bias_2d_prep == 'bull':
-            new_prep['TREND2D']['LONG'].add(symbol)
-        elif bias_2d_prep == 'bear':
-            new_prep['TREND2D']['SHORT'].add(symbol)
-
-    # ── Comparer avec l'état précédent et envoyer si changement ──────
-    changed_msgs = []
-
-    for strat in ('CONFLUENCE', 'TREND', 'PULSE', 'TREND2D'):
-        old_state = PREP_STATE.get(strat, {'LONG': set(), 'SHORT': set()})
-        new_long  = new_prep[strat]['LONG']
-        new_short = new_prep[strat]['SHORT']
-        old_long  = old_state.get('LONG', set())
-        old_short = old_state.get('SHORT', set())
-
-        if new_long != old_long or new_short != old_short:
-            lines = [f"⏳ <b>[PREP {strat}]</b>"]
-            if new_long:
-                symbols_str = "  ".join(sorted(s.replace('/USDT', '') for s in new_long))
-                lines.append(f"🟢 LONG  : {symbols_str}")
-            if new_short:
-                symbols_str = "  ".join(sorted(s.replace('/USDT', '') for s in new_short))
-                lines.append(f"🔴 SHORT : {symbols_str}")
-            if not new_long and not new_short:
-                lines.append("— Aucun asset en préparation")
-            lines.append(f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
-            changed_msgs.append("\n".join(lines))
-
-    PREP_STATE = {
-        'CONFLUENCE': {'LONG': new_prep['CONFLUENCE']['LONG'], 'SHORT': new_prep['CONFLUENCE']['SHORT']},
-        'TREND':      {'LONG': new_prep['TREND']['LONG'],      'SHORT': new_prep['TREND']['SHORT']},
-        'PULSE':      {'LONG': new_prep['PULSE']['LONG'],       'SHORT': new_prep['PULSE']['SHORT']},
-        'TREND2D':    {'LONG': new_prep['TREND2D']['LONG'],     'SHORT': new_prep['TREND2D']['SHORT']},
-    }
-
-    if changed_msgs:
-        full_msg = "\n\n".join(changed_msgs)
-        send_telegram(full_msg)
-        logger.info(f"[PREP] Alerte envoyée: {len(changed_msgs)} stratégie(s) modifiée(s)")
-
-
+    """Alertes PREP désactivées."""
+    return
 
 def bias4h_report_scheduler():
     """Envoie toutes les 4H un rapport des Bias 4H de tous les assets."""
@@ -2180,15 +2066,16 @@ def bias4h_report_scheduler():
             with STATE_LOCK:
                 bull_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') == 'bull'
+                    if m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull'
                 ])
                 bear_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') == 'bear'
+                    if m.get('bias_4h') == 'bear' and m.get('bias_1h') == 'bear'
                 ])
                 none_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') is None
+                    if not (m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull')
+                    and not (m.get('bias_4h') == 'bear' and m.get('bias_1h') == 'bear')
                 ])
 
             bull_str = "  ".join(bull_assets) if bull_assets else "—"
@@ -2196,7 +2083,7 @@ def bias4h_report_scheduler():
             none_str = "  ".join(none_assets) if none_assets else "—"
 
             msg = (
-                f"📊 <b>[BIAS 4H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
+                f"📊 <b>[BIAS 4H+1H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
                 f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"

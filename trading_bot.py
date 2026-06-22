@@ -35,6 +35,8 @@ CONFIG = {
         'SOL/USDT':         {'exchange': 'okx', 'scalp': True},
         'SUI/USDT':         {'exchange': 'okx', 'scalp': True},
         'UNI/USDT':         {'exchange': 'okx', 'scalp': True},
+        'EIGEN/USDT':       {'exchange': 'okx', 'scalp': False},
+        'VIRTUAL/USDT':     {'exchange': 'okx', 'scalp': False},
         'XRP/USDT':         {'exchange': 'okx', 'scalp': True},
         'BCH/USDT':         {'exchange': 'okx', 'scalp': False},
         'BNB/USDT':         {'exchange': 'okx', 'scalp': False},
@@ -453,10 +455,10 @@ def send_start_notification():
         "   • Anti-chop DMI ADX 1H / Signal: Flip ST AI 1H / Cooldown 4H\n\n"
         "2️⃣ <b>PULSE</b>\n"
         "   • Bias 4H + Bias 15m + ADX 1H DMI + ST Context 15m (anti-chop)\n"
-        "   • Signal: Flip ST AI 15m / Pyramiding: guard (30min) — 42 assets\n\n"
+        "   • Signal: Flip ST AI 15m / Pyramiding: guard (30min) — 44 assets\n\n"
         "3️⃣ <b>TREND2D</b>\n"
         "   • Bias 2D (EMA21/SMA55) + ST Context 1H aligné\n"
-        "   • Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) — 42 assets\n\n"
+        "   • Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) — 44 assets\n\n"
 
 
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1852,8 +1854,8 @@ def bias4h_report_scheduler():
             ctx4h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_4h') == 'sell'])
             ctx4h_long_str  = "  ".join(ctx4h_long)  if ctx4h_long  else "—"
             ctx4h_short_str = "  ".join(ctx4h_short) if ctx4h_short else "—"
-            ctx1h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'buy'  and m.get('bias_4h') == 'bull'])
-            ctx1h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'sell' and m.get('bias_4h') == 'bear'])
+            ctx1h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'buy'])
+            ctx1h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'sell'])
             ctx1h_long_str  = "  ".join(ctx1h_long)  if ctx1h_long  else "—"
             ctx1h_short_str = "  ".join(ctx1h_short) if ctx1h_short else "—"
 

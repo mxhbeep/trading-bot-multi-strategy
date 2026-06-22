@@ -1852,6 +1852,10 @@ def bias4h_report_scheduler():
             ctx4h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_4h') == 'sell'])
             ctx4h_long_str  = "  ".join(ctx4h_long)  if ctx4h_long  else "—"
             ctx4h_short_str = "  ".join(ctx4h_short) if ctx4h_short else "—"
+            ctx1h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'buy'  and m.get('bias_4h') == 'bull'])
+            ctx1h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'sell' and m.get('bias_4h') == 'bear'])
+            ctx1h_long_str  = "  ".join(ctx1h_long)  if ctx1h_long  else "—"
+            ctx1h_short_str = "  ".join(ctx1h_short) if ctx1h_short else "—"
 
             msg = (
                 f"📊 <b>[BIAS 4H+1H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
@@ -1861,7 +1865,10 @@ def bias4h_report_scheduler():
                 f"⬜ <b>N/A ({len(none_assets)})</b> : {none_str}\n\n"
                 f"📈 <b>[ST CONTEXT 4H CT]</b>\n"
                 f"🟢 <b>LONG ({len(ctx4h_long)})</b> : {ctx4h_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ctx4h_short)})</b> : {ctx4h_short_str}"
+                f"🔴 <b>SHORT ({len(ctx4h_short)})</b> : {ctx4h_short_str}\n\n"
+                f"📈 <b>[ST CONTEXT 1H CT]</b>\n"
+                f"🟢 <b>LONG ({len(ctx1h_long)})</b> : {ctx1h_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(ctx1h_short)})</b> : {ctx1h_short_str}"
             )
             send_telegram(msg)
             logger.info(f"[BIAS4H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")

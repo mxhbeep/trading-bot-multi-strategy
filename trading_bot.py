@@ -1853,6 +1853,7 @@ def bias4h_report_scheduler():
     while True:
         try:
             with STATE_LOCK:
+                state_copy  = dict(MOMENTUM_STATE)
                 bull_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
                     if m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull'

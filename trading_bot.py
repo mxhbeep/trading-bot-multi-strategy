@@ -1407,6 +1407,28 @@ def webhook():
                     logger.info(f"[PULSE] Pyramiding 1H #{entry_count_p2}: {symbol} {direction_p2}")
 
     persist_runtime_state()
+
+    # ── Relay vers le Scalping Bot ────────────────────────────────────
+    scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
+    if scalp_url and alert_type in ('supertrend', 'bias') and tf in ('15m', '3h', '1h'):
+        scalp_symbols = {
+            'AAVE/USDT', 'APT/USDT', 'ARB/USDT', 'AVAX/USDT', 'BCH/USDT',
+            'BTC/USDT', 'DOGE/USDT', 'ETC/USDT', 'ETH/USDT', 'FIL/USDT',
+            'HBAR/USDT', 'INJ/USDT', 'LINK/USDT', 'LTC/USDT', 'NEAR/USDT',
+            'ONDO/USDT', 'RENDER/USDT', 'SAND/USDT', 'SOL/USDT', 'SUI/USDT',
+            'UNI/USDT', 'VIRTUAL/USDT', 'XRP/USDT', 'ZEC/USDT',
+        }
+        if symbol in scalp_symbols:
+            try:
+                requests.post(
+                    f"{scalp_url}/webhook",
+                    json=data,
+                    timeout=3
+                )
+                logger.debug(f"[RELAY] {symbol} {tf} → scalpbot")
+            except Exception as e:
+                logger.debug(f"[RELAY] Erreur: {e}")
+
     return jsonify({'status': 'ok'}), 200
 
 

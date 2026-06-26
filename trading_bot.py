@@ -1012,6 +1012,8 @@ def webhook():
             logger.info(f"[ST2D] Flip: {symbol} → {direction_2d}")
 
 
+
+    if alert_type == 'st_context':
         parsed_ctx = parse_st_context_value(val)
         if tf == '1h':
             m['st_context_1h'] = parsed_ctx

@@ -1429,6 +1429,14 @@ def webhook():
 
     persist_runtime_state()
 
+    # Stocker ST AI 3H pour sync_scalp
+    if alert_type == 'supertrend' and tf == '3h':
+        st_3h_val = parse_supertrend_value(val)
+        if st_3h_val is not None:
+            m = MOMENTUM_STATE.get(symbol, {})
+            m['st_3h'] = st_3h_val
+            MOMENTUM_STATE[symbol] = m
+
     # ── Relay vers le Scalping Bot ────────────────────────────────────
     scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
     if scalp_url and alert_type in ('supertrend', 'bias') and tf in ('15m', '3h', '1h'):

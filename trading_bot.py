@@ -1229,7 +1229,7 @@ def webhook():
 
     # ── Relay vers le Scalping Bot ────────────────────────────────────
     scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
-    if scalp_url and alert_type in ('supertrend', 'bias') and tf in ('15m', '3h', '1h'):
+    if scalp_url and alert_type in ('supertrend', 'bias') and tf in ('15m', '4h', '1h'):
         scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
         if symbol in scalp_symbols:
             try:
@@ -1422,16 +1422,16 @@ def sync_scalp():
     for symbol, m in state_copy.items():
         if symbol not in scalp_symbols:
             continue
-        st_3h = m.get('st_ai_3h') or m.get('st_3h')
-        if st_3h is None:
+        st_4h = m.get('st_ai_4h') or m.get('st_4h')
+        if st_4h is None:
             continue
         try:
             payload = {
                 'symbol':   symbol,
                 'strategy': 'scalp',
-                'tf':       '3h',
+                'tf':       '4h',
                 'type':     'supertrend',
-                'value':    '1' if st_3h == 'buy' else '0',
+                'value':    '1' if st_4h == 'buy' else '0',
                 'price':    0,
             }
             resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)

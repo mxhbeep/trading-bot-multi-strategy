@@ -1604,6 +1604,50 @@ def refresh_indicators():
     return jsonify({'status': 'ok', 'message': f'Refresh lancé pour {len(symbols)} assets'}), 200
 
 
+@app.route('/sync_scalp', methods=['POST'])
+def sync_scalp():
+    """Force l'envoi de l'état ST AI 3H actuel vers le scalpbot."""
+    if not require_admin_secret():
+        return jsonify({'error': 'unauthorized'}), 401
+
+    scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
+    if not scalp_url:
+        return jsonify({'error': 'SCALP_BOT_URL non défini'}), 400
+
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    sent = []
+    errors = []
+
+    with STATE_LOCK:
+        state_copy = dict(MOMENTUM_STATE)
+
+    for symbol, m in state_copy.items():
+        if symbol not in scalp_symbols:
+            continue
+        st_3h = m.get('st_ai_3h') or m.get('st_3h')
+        if st_3h is None:
+            continue
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '3h',
+                'type':     'supertrend',
+                'value':    '1' if st_3h == 'buy' else '0',
+                'price':    0,
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                sent.append(symbol)
+            else:
+                errors.append(f"{symbol}: HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: {e}")
+
+    logger.info(f"[SYNC_SCALP] Envoyé: {len(sent)} assets, erreurs: {len(errors)}")
+    return jsonify({'sent': sent, 'errors': errors}), 200
+
+
 @app.route('/reset_state', methods=['POST'])
 def reset_state_all():
     if not require_admin_secret():

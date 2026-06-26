@@ -1443,9 +1443,9 @@ def webhook():
                     json=data,
                     timeout=3
                 )
-                logger.debug(f"[RELAY] {symbol} {tf} → scalpbot")
+                logger.info(f"[RELAY] {symbol} {tf} → scalpbot")
             except Exception as e:
-                logger.debug(f"[RELAY] Erreur: {e}")
+                logger.warning(f"[RELAY] Erreur: {e}")
 
     return jsonify({'status': 'ok'}), 200
 

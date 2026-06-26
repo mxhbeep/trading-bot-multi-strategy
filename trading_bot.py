@@ -1432,13 +1432,7 @@ def webhook():
     # ── Relay vers le Scalping Bot ────────────────────────────────────
     scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
     if scalp_url and alert_type in ('supertrend', 'bias') and tf in ('15m', '3h', '1h'):
-        scalp_symbols = {
-            'AAVE/USDT', 'APT/USDT', 'ARB/USDT', 'AVAX/USDT', 'BCH/USDT',
-            'BTC/USDT', 'DOGE/USDT', 'ETC/USDT', 'ETH/USDT', 'FIL/USDT',
-            'HBAR/USDT', 'INJ/USDT', 'LINK/USDT', 'LTC/USDT', 'NEAR/USDT',
-            'ONDO/USDT', 'RENDER/USDT', 'SAND/USDT', 'SOL/USDT', 'SUI/USDT',
-            'UNI/USDT', 'VIRTUAL/USDT', 'XRP/USDT', 'ZEC/USDT',
-        }
+        scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
         if symbol in scalp_symbols:
             try:
                 # Payload normalisé — symbole et tf déjà normalisés par le bot principal
@@ -2073,6 +2067,11 @@ def startup():
         watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
         watchdog_thread.start()
 
+        scalp_url_check = os.environ.get('SCALP_BOT_URL', '')
+        if not scalp_url_check:
+            logger.warning('⚠️ SCALP_BOT_URL non défini — relay scalpbot désactivé')
+        else:
+            logger.info(f'✅ Relay scalpbot activé → {scalp_url_check}')
         logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX + sentiment 4H + TV watchdog)")
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")

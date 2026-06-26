@@ -993,7 +993,25 @@ def webhook():
                 m['bias_15m'] = bias_val if bias_val != 'neutral' else None
                 logger.info(f"[BIAS TV] {symbol} bias_15m = {bias_val}")
 
-    if alert_type == 'st_context':
+    if alert_type == 'supertrend' and tf == '2d':
+        st_2d_val  = parse_supertrend_value(val)
+        prev_2d    = m.get('st_2d')
+        flipped_2d = (st_2d_val is not None and prev_2d is not None and st_2d_val != prev_2d)
+        m['st_2d'] = st_2d_val
+        if flipped_2d:
+            direction_2d = "LONG" if st_2d_val == 'buy' else "SHORT"
+            emoji = "🟢" if direction_2d == "LONG" else "🔴"
+            send_telegram(
+                f"{emoji} <b>[ST AI 2D - FLIP]</b> {symbol}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📈 Direction: {direction_2d}\n"
+                f"💰 Price: ${format_price(price)}\n"
+                f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                f"📊 SuperTrend AI 2D: {st_2d_val.upper()}"
+            )
+            logger.info(f"[ST2D] Flip: {symbol} → {direction_2d}")
+
+
         parsed_ctx = parse_st_context_value(val)
         if tf == '1h':
             m['st_context_1h'] = parsed_ctx

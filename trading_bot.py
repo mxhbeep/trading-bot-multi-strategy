@@ -1438,12 +1438,24 @@ def webhook():
         }
         if symbol in scalp_symbols:
             try:
-                requests.post(
+                # Payload normalisé — symbole et tf déjà normalisés par le bot principal
+                relay_payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       tf,
+                    'type':     alert_type,
+                    'value':    val,
+                    'price':    price,
+                }
+                resp = requests.post(
                     f"{scalp_url}/webhook",
-                    json=data,
+                    json=relay_payload,
                     timeout=3
                 )
-                logger.info(f"[RELAY] {symbol} {tf} → scalpbot")
+                if 200 <= resp.status_code < 300:
+                    logger.info(f"[RELAY] {symbol} {tf} → scalpbot OK")
+                else:
+                    logger.warning(f"[RELAY] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
             except Exception as e:
                 logger.warning(f"[RELAY] Erreur: {e}")
 

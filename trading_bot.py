@@ -1240,7 +1240,7 @@ def process_webhook(data):
 
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
-        if scalp_url and alert_type in ('supertrend', 'bias') and tf in ('15m', '4h', '1h'):
+        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context') and tf in ('15m', '4h', '1h', '5m'):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:

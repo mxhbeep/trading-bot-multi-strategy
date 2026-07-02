@@ -1130,6 +1130,38 @@ def process_webhook(data):
         if strat in ['pulse', 'all']:
             m = MOMENTUM_STATE[symbol]
 
+            # ── Entrée secondaire PULSE : flip ST AI 4H + ST Context 4H + zone ctx 15m ──
+            if alert_type == 'supertrend' and tf == '4h':
+                st_4h_v   = m.get('st_4h')
+                prev_4h_p = m.get('last_st_4h')
+                flipped_4h_p = (st_4h_v is not None and prev_4h_p is not None and st_4h_v != prev_4h_p)
+
+                if flipped_4h_p:
+                    ctx_4h_p  = m.get('st_context_4h')
+                    ctx_15m_p = ST_CONTEXT_15M.get(symbol)
+                    direction_4h = "LONG" if st_4h_v == 'buy' else "SHORT"
+                    exp_ctx      = 'buy' if direction_4h == 'LONG' else 'sell'
+
+                    ctx_4h_ok  = ctx_4h_p  == exp_ctx
+                    ctx_15m_ok = ctx_15m_p == exp_ctx
+
+                    if ctx_4h_ok and ctx_15m_ok:
+                        emoji = "\U0001f7e2" if direction_4h == "LONG" else "\U0001f534"
+                        send_telegram_ttmtf(
+                            f"{emoji} <b>[PULSE - ENTREE 4H]</b> {symbol}\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\U0001f4c8 Direction: {direction_4h}\n"
+                            f"\U0001f4b0 Price: ${format_price(price)}\n"
+                            f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
+                            f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"\u2705 Flip ST AI 4H: {st_4h_v.upper()} (signal)\n"
+                            f"\u2705 ST Context 4H: {ctx_4h_p.upper()}\n"
+                            f"\u2705 Zone ST Context 15m: {ctx_15m_p.upper()}"
+                            f"{get_market_context_info()}"
+                        )
+                        track_alert(symbol, 'PULSE')
+                        logger.info(f"[PULSE] Entrée 4H: {symbol} {direction_4h}")
+
             if alert_type == 'supertrend' and tf == '15m':
                 st_15m_val  = m.get('st_ai_15m')
                 prev_15m    = m.get('last_st_15m')
@@ -1786,15 +1818,21 @@ def bias4h_report_scheduler():
             bear_str = "  ".join(bear_assets) if bear_assets else "—"
             none_str = "  ".join(none_assets) if none_assets else "—"
 
-            # ST Context 4H CT actif
-            ctx4h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_4h') == 'buy'])
-            ctx4h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_4h') == 'sell'])
-            ctx4h_long_str  = "  ".join(ctx4h_long)  if ctx4h_long  else "—"
-            ctx4h_short_str = "  ".join(ctx4h_short) if ctx4h_short else "—"
-            ctx1h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'buy'])
-            ctx1h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items() if m.get('st_context_1h') == 'sell'])
-            ctx1h_long_str  = "  ".join(ctx1h_long)  if ctx1h_long  else "—"
-            ctx1h_short_str = "  ".join(ctx1h_short) if ctx1h_short else "—"
+            # Bloc 2 : ST Context 4H + ST AI 4H alignés
+            ctx4h_ai4h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('st_context_4h') == 'buy' and m.get('st_4h') == 'buy'])
+            ctx4h_ai4h_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('st_context_4h') == 'sell' and m.get('st_4h') == 'sell'])
+            ctx4h_ai4h_long_str  = "  ".join(ctx4h_ai4h_long)  if ctx4h_ai4h_long  else "—"
+            ctx4h_ai4h_short_str = "  ".join(ctx4h_ai4h_short) if ctx4h_ai4h_short else "—"
+
+            # Bloc 3 : ST Context 1H + Bias 1H alignés
+            ctx1h_bias_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('st_context_1h') == 'buy' and m.get('bias_1h') == 'bull'])
+            ctx1h_bias_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('st_context_1h') == 'sell' and m.get('bias_1h') == 'bear'])
+            ctx1h_bias_long_str  = "  ".join(ctx1h_bias_long)  if ctx1h_bias_long  else "—"
+            ctx1h_bias_short_str = "  ".join(ctx1h_bias_short) if ctx1h_bias_short else "—"
 
             msg = (
                 f"📊 <b>[BIAS 4H+1H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
@@ -1802,12 +1840,12 @@ def bias4h_report_scheduler():
                 f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
                 f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
                 f"⬜ <b>N/A ({len(none_assets)})</b> : {none_str}\n\n"
-                f"📈 <b>[ST CONTEXT 4H CT]</b>\n"
-                f"🟢 <b>LONG ({len(ctx4h_long)})</b> : {ctx4h_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ctx4h_short)})</b> : {ctx4h_short_str}\n\n"
-                f"📈 <b>[ST CONTEXT 1H CT]</b>\n"
-                f"🟢 <b>LONG ({len(ctx1h_long)})</b> : {ctx1h_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ctx1h_short)})</b> : {ctx1h_short_str}"
+                f"📈 <b>[ST CONTEXT 4H + ST AI 4H]</b>\n"
+                f"🟢 <b>LONG ({len(ctx4h_ai4h_long)})</b> : {ctx4h_ai4h_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(ctx4h_ai4h_short)})</b> : {ctx4h_ai4h_short_str}\n\n"
+                f"📈 <b>[ST CONTEXT 1H + BIAS 1H]</b>\n"
+                f"🟢 <b>LONG ({len(ctx1h_bias_long)})</b> : {ctx1h_bias_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(ctx1h_bias_short)})</b> : {ctx1h_bias_short_str}"
             )
             send_telegram(msg)
             logger.info(f"[BIAS4H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")

@@ -415,6 +415,24 @@ def send_telegram(msg):
             logger.error(f"ntfy dispatch: {e}")
 
 
+def send_info(msg):
+    """Envoie un message sur le canal info (bot secondaire)."""
+    tok  = os.environ.get('INFO_BOT_TOKEN', '')
+    chat = os.environ.get('INFO_CHAT_ID', '')
+    if not tok or not chat:
+        logger.debug("⚠️ INFO_BOT_TOKEN/INFO_CHAT_ID non configurés — message info ignoré")
+        return
+    try:
+        url  = f"https://api.telegram.org/bot{tok}/sendMessage"
+        resp = requests.post(url, json={'chat_id': chat, 'text': msg, 'parse_mode': 'HTML'}, timeout=10)
+        if resp.status_code == 200:
+            logger.info("✅ Message info envoyé")
+        else:
+            logger.error(f"❌ Info bot erreur {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        logger.error(f"❌ Erreur info bot: {e}")
+
+
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     redis_status = "✅ Redis connecté" if REDIS_CLIENT else "⚠️ Redis non disponible"
@@ -440,7 +458,7 @@ def send_start_notification():
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏰ {now}"
     )
-    send_telegram(msg)
+    send_info(msg)
 
 
 def send_weekly_report():
@@ -625,7 +643,7 @@ def send_prep_report():
         emoji = "🟢" if direction == "LONG" else "🔴"
         msg += '\n\n<b>' + strat + ' ' + direction + '</b>\n'
         msg += '\n'.join([emoji + ' ' + x for x in groups[key]]) + '\n'
-    send_telegram(msg)
+    send_info(msg)
     logger.info(f"[PREP REPORT] {len(entries)} assets envoyés")
 
 
@@ -905,12 +923,15 @@ def webhook():
         logger.warning("⚠️ Webhook sans données")
         return jsonify({'status': 'no_data'}), 400
     # Répondre immédiatement — traitement asynchrone pour éviter timeout TV
-    threading.Thread(target=process_webhook, args=(data,), daemon=True).start()
+    app_ctx = app.app_context()
+    threading.Thread(target=process_webhook, args=(data, app_ctx), daemon=True).start()
     return jsonify({'status': 'ok'}), 200
 
 
-def process_webhook(data):
+def process_webhook(data, app_ctx=None):
     """Traitement asynchrone du webhook — appelé dans un thread séparé."""
+    if app_ctx:
+        app_ctx.push()
     try:
 
         symbol      = format_tv_symbol(data.get('symbol', ''))
@@ -1725,7 +1746,7 @@ def check_prep_alerts():
         if not new_long and not new_short:
             lines.append("— Aucun asset en préparation")
         lines.append(f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
-        send_telegram("\n".join(lines))
+        send_info("\n".join(lines))
         logger.info("[PREP] CONTEXT4H envoyé")
     PREP_STATE['CONTEXT4H'] = {'LONG': new_long, 'SHORT': new_short}
 
@@ -1761,7 +1782,7 @@ def check_prep_alerts():
         if not new_p_long and not new_p_short:
             lines.append("— Aucun asset en préparation")
         lines.append(f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
-        send_telegram("\n".join(lines))
+        send_info("\n".join(lines))
         logger.info("[PREP] PULSE envoyé")
     PREP_STATE['PULSE'] = {'LONG': new_p_long, 'SHORT': new_p_short}
 
@@ -1822,7 +1843,7 @@ def bias4h_report_scheduler():
                 f"🟢 <b>LONG ({len(ctx1h_bias_long)})</b> : {ctx1h_bias_long_str}\n\n"
                 f"🔴 <b>SHORT ({len(ctx1h_bias_short)})</b> : {ctx1h_bias_short_str}"
             )
-            send_telegram(msg)
+            send_info(msg)
             logger.info(f"[BIAS4H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")
         except Exception as e:
             logger.error(f"[BIAS4H] Erreur rapport: {e}")

@@ -1019,6 +1019,11 @@ def process_webhook(data, app_ctx=None):
 
 
 
+        if alert_type == 'st_context_lt' and tf == '5m':
+            parsed_lt5m = parse_st_context_value(val)
+            ST_CONTEXT_LT_5M[symbol] = parsed_lt5m
+            m['st_context_lt_5m_ts'] = now_ts
+
         if alert_type == 'st_context':
             parsed_ctx = parse_st_context_value(val)
             if tf == '1h':
@@ -1182,7 +1187,9 @@ def process_webhook(data, app_ctx=None):
                     ctx_15m_ok   = ctx_15m_p == st_15m_val   # 15m aligné
                     ctx_1h_ok    = ctx_1h_p  == st_15m_val   # 1H aligné
                     ctx_1h_block = ctx_1h_p  == opp_ctx       # 1H opposé → bloqué
-                    zone_ok      = (ctx_15m_ok or ctx_1h_ok) and not ctx_1h_block
+                    ctx_lt5m_p   = ST_CONTEXT_LT_5M.get(symbol)
+                    lt5m_block   = ctx_lt5m_p == st_15m_val   # LT 5m même sens → bloqué
+                    zone_ok      = (ctx_15m_ok or ctx_1h_ok) and not ctx_1h_block and not lt5m_block
                     both_ok      = ctx_15m_ok and ctx_1h_ok   # jackpot
 
                     all_ok = bias_4h_ok and zone_ok

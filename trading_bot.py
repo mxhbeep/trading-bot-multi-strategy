@@ -1085,6 +1085,7 @@ def process_webhook(data, app_ctx=None):
                     m['last_st_1h'] = prev_1h  # guard pyramiding CONTEXT4H
             if alert_type == 'supertrend' and tf == '4h':
                 prev_4h = m.get('st_4h')
+                m['prev_st_4h'] = prev_4h  # sauvegarder avant mise à jour
                 m['st_4h'] = parse_supertrend_value(val)
                 m['st_4h_flipped'] = bool(prev_4h is not None and m['st_4h'] is not None and m['st_4h'] != prev_4h)
                 if m['st_4h_flipped']:
@@ -1126,37 +1127,35 @@ def process_webhook(data, app_ctx=None):
         if strat in ['pulse', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            # ── Entrée secondaire PULSE : flip ST AI 4H + ST Context 4H + zone ctx 15m ──
-            if alert_type == 'supertrend' and tf == '4h':
+            # ── PULSE 4H : ST AI 4H + ST Context 4H + zone ST Context 15m alignés ──
+            # Déclenche sur tout changement de l'un des 3 indicateurs
+            if alert_type in ('supertrend', 'st_context') and tf in ('4h', '15m'):
                 st_4h_v   = m.get('st_4h')
-                prev_4h_p = m.get('last_st_4h')
-                flipped_4h_p = (st_4h_v is not None and prev_4h_p is not None and st_4h_v != prev_4h_p)
+                ctx_4h_p  = m.get('st_context_4h')
+                ctx_15m_p = ST_CONTEXT_15M.get(symbol)
 
-                if flipped_4h_p:
-                    ctx_4h_p  = m.get('st_context_4h')
-                    ctx_15m_p = ST_CONTEXT_15M.get(symbol)
-                    direction_4h = "LONG" if st_4h_v == 'buy' else "SHORT"
-                    exp_ctx      = 'buy' if direction_4h == 'LONG' else 'sell'
+                for direction_4h in ('LONG', 'SHORT'):
+                    exp_st  = 'buy'  if direction_4h == 'LONG' else 'sell'
+                    exp_ctx = 'buy'  if direction_4h == 'LONG' else 'sell'
 
-                    ctx_4h_ok  = ctx_4h_p  == exp_ctx
-                    ctx_15m_ok = ctx_15m_p == exp_ctx
-
-                    if ctx_4h_ok and ctx_15m_ok:
-                        emoji = "\U0001f7e2" if direction_4h == "LONG" else "\U0001f534"
-                        send_telegram_ttmtf(
-                            f"{emoji} <b>[PULSE - ENTREE 4H]</b> {symbol}\n"
-                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            f"\U0001f4c8 Direction: {direction_4h}\n"
-                            f"\U0001f4b0 Price: ${format_price(price)}\n"
-                            f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                            f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"\u2705 Flip ST AI 4H: {st_4h_v.upper()} (signal)\n"
-                            f"\u2705 ST Context 4H: {ctx_4h_p.upper()}\n"
-                            f"\u2705 Zone ST Context 15m: {ctx_15m_p.upper()}"
-                            f"{get_market_context_info()}"
-                        )
-                        track_alert(symbol, 'PULSE')
-                        logger.info(f"[PULSE] Entrée 4H: {symbol} {direction_4h}")
+                    if (st_4h_v == exp_st and ctx_4h_p == exp_ctx and ctx_15m_p == exp_ctx):
+                        if should_send(symbol, f'pulse4h_{direction_4h}', cooldown=14400):
+                            emoji = '\U0001f7e2' if direction_4h == 'LONG' else '\U0001f534'
+                            send_telegram_ttmtf(
+                                f"{emoji} <b>[PULSE - ENTREE 4H]</b> {symbol}\n"
+                                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                                f"\U0001f4c8 Direction: {direction_4h}\n"
+                                f"\U0001f4b0 Price: ${format_price(price)}\n"
+                                f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
+                                f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                                f"\u2705 ST AI 4H: {st_4h_v.upper()}\n"
+                                f"\u2705 ST Context 4H: {ctx_4h_p.upper()}\n"
+                                f"\u2705 Zone ST Context 15m: {ctx_15m_p.upper()}"
+                                f"{get_market_context_info()}"
+                            )
+                            track_alert(symbol, 'PULSE')
+                            logger.info(f'[PULSE] Entrée 4H: {symbol} {direction_4h}')
+                        break
 
             if alert_type == 'supertrend' and tf == '15m':
                 st_15m_val  = m.get('st_ai_15m')

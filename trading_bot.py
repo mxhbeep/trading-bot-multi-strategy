@@ -1836,6 +1836,14 @@ def bias4h_report_scheduler():
             ctx1h_bias_long_str  = "  ".join(ctx1h_bias_long)  if ctx1h_bias_long  else "—"
             ctx1h_bias_short_str = "  ".join(ctx1h_bias_short) if ctx1h_bias_short else "—"
 
+            # Bloc 4 : ST AI 4H + Bias 1H alignés
+            ai4h_bias_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('st_4h') == 'buy' and m.get('bias_1h') == 'bull'])
+            ai4h_bias_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('st_4h') == 'sell' and m.get('bias_1h') == 'bear'])
+            ai4h_bias_long_str  = "  ".join(ai4h_bias_long)  if ai4h_bias_long  else "—"
+            ai4h_bias_short_str = "  ".join(ai4h_bias_short) if ai4h_bias_short else "—"
+
             msg = (
                 f"📊 <b>[BIAS 4H+1H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1847,7 +1855,10 @@ def bias4h_report_scheduler():
                 f"🔴 <b>SHORT ({len(ctx4h_ai4h_short)})</b> : {ctx4h_ai4h_short_str}\n\n"
                 f"📈 <b>[ST CONTEXT 1H + BIAS 1H]</b>\n"
                 f"🟢 <b>LONG ({len(ctx1h_bias_long)})</b> : {ctx1h_bias_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ctx1h_bias_short)})</b> : {ctx1h_bias_short_str}"
+                f"🔴 <b>SHORT ({len(ctx1h_bias_short)})</b> : {ctx1h_bias_short_str}\n\n"
+                f"📈 <b>[ST AI 4H + BIAS 1H]</b>\n"
+                f"🟢 <b>LONG ({len(ai4h_bias_long)})</b> : {ai4h_bias_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(ai4h_bias_short)})</b> : {ai4h_bias_short_str}"
             )
             send_info(msg)
             logger.info(f"[BIAS4H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")

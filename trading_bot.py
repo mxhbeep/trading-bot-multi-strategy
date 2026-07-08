@@ -38,7 +38,7 @@ CONFIG = {
         'ONDO/USDT':   {'exchange': 'okx', 'scalp': False},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False},
         'SOL/USDT':    {'exchange': 'okx', 'scalp': False},
-        'SUI/USDT':    {'exchange': 'okx', 'scalp': False},
+        'SUI/USDT':    {'exchange': 'okx', 'scalp': True},
         'TAO/USDT':    {'exchange': 'okx', 'scalp': False},  # perp-only
         'UNI/USDT':    {'exchange': 'okx', 'scalp': False},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True},

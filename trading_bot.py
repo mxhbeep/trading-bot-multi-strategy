@@ -870,6 +870,7 @@ ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
 PREP_STATE: dict = {}
 PYRA_ENABLED: dict = {}  # f'{symbol}_{strat}' -> True si pyramiding activé  # strategy -> {'LONG': set(), 'SHORT': set()} — assets en préparation
 ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
+ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp

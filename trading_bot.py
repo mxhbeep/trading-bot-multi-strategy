@@ -1273,7 +1273,7 @@ def process_webhook(data, app_ctx=None):
 
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
-        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context') and tf in ('15m', '4h', '1h', '5m'):
+        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('15m', '4h', '1h', '5m'):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:
@@ -1449,7 +1449,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Force l'envoi de l'état ST AI 3H actuel vers le scalpbot."""
+    """Force l'envoi de l'état ST AI 4H actuel vers le scalpbot."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
 

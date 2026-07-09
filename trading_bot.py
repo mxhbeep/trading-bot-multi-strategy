@@ -384,6 +384,14 @@ def send_ntfy(title: str, body: str):
     except Exception as e:
         logger.error(f"ntfy error: {e}")
 
+def normalize_base_url(url):
+    """Normalise une URL en ajoutant https:// si absent."""
+    url = str(url or '').strip().rstrip('/')
+    if url and not url.startswith(('https://', 'http://')):
+        url = f'https://{url}'
+    return url
+
+
 def send_telegram(msg):
     if not CONFIG['TELEGRAM_BOT_TOKEN'] or not CONFIG['TELEGRAM_CHAT_ID']:
         logger.warning("⚠️ Telegram non configuré (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID manquants)")
@@ -1150,8 +1158,12 @@ def process_webhook(data):
                 for direction_4h in ('LONG', 'SHORT'):
                     exp_st  = 'buy'  if direction_4h == 'LONG' else 'sell'
                     exp_ctx = 'buy'  if direction_4h == 'LONG' else 'sell'
+                    opp_ctx = 'sell' if direction_4h == 'LONG' else 'buy'
 
-                    if (st_4h_v == exp_st and ctx_4h_p == exp_ctx and ctx_15m_p == exp_ctx):
+                    ctx_1h_p = m.get('st_context_1h')
+                    ctx_1h_block = ctx_1h_p == opp_ctx  # anti-chop : 1H opposé → bloqué
+
+                    if (st_4h_v == exp_st and ctx_4h_p == exp_ctx and ctx_15m_p == exp_ctx and not ctx_1h_block):
                         if should_send(symbol, f'pulse4h_{direction_4h}', cooldown=14400):
                             emoji = '\U0001f7e2' if direction_4h == 'LONG' else '\U0001f534'
                             send_telegram_ttmtf(
@@ -1279,7 +1291,7 @@ def process_webhook(data):
 
         persist_runtime_state()
         # ── Relay vers le Scalping Bot ────────────────────────────────────
-        scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
+        scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('15m', '4h', '1h', '5m'):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
@@ -1292,6 +1304,7 @@ def process_webhook(data):
                         'type':     alert_type,
                         'value':    val,
                         'price':    price,
+                        'event_id': event_id,
                     }
                     resp = requests.post(
                         f"{scalp_url}/webhook",
@@ -1299,7 +1312,14 @@ def process_webhook(data):
                         timeout=3
                     )
                     if 200 <= resp.status_code < 300:
-                        logger.info(f"[RELAY] {symbol} {tf} → scalpbot OK")
+                        try:
+                            relay_result = resp.json()
+                        except ValueError:
+                            relay_result = {}
+                        if relay_result.get('status') == 'ignored':
+                            logger.warning(f"[RELAY] {symbol} {tf} ignoré par scalpbot: {relay_result.get('reason', 'raison inconnue')}")
+                        else:
+                            logger.info(f"[RELAY] {symbol} {tf} → scalpbot OK")
                     else:
                         logger.warning(f"[RELAY] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
                 except Exception as e:
@@ -1460,7 +1480,7 @@ def sync_scalp():
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
 
-    scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
         return jsonify({'error': 'SCALP_BOT_URL non défini'}), 400
 
@@ -1471,11 +1491,14 @@ def sync_scalp():
     with STATE_LOCK:
         state_copy = dict(MOMENTUM_STATE)
 
-    for symbol, m in state_copy.items():
-        if symbol not in scalp_symbols:
-            continue
+    for symbol in sorted(scalp_symbols):
+        m = state_copy.get(symbol, {})
         st_4h = m.get('st_ai_4h') or m.get('st_4h')
         if st_4h is None:
+            errors.append(f"{symbol}: état ST AI 4H absent")
+            continue
+        if st_4h not in ('buy', 'sell'):
+            errors.append(f"{symbol}: état ST AI 4H invalide ({st_4h!r})")
             continue
         try:
             payload = {
@@ -1541,16 +1564,18 @@ def reset_state_symbol(symbol):
         ST_CONTEXT_LT_4H.pop(symbol, None)
         ST_CONTEXT_LT_15M.pop(symbol, None)
         ST_CONTEXT_LT_5M.pop(symbol, None)
-    for k in ['', '_1h', '_4h', '_1d']:
-        ADX_STATE.pop(f'{symbol}{k}', None)
-    for strat in ['PULSE', 'CONTEXT4H', 'TREND2D']:
-        PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
-        SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
-   
-    keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
-    for k in keys_to_remove:
-        LAST_SIGNALS.pop(k, None)
-        LAST_SIGNAL_EVENTS.pop(k, None)
+
+        for k in ['', '_1h', '_4h', '_1d']:
+            ADX_STATE.pop(f'{symbol}{k}', None)
+
+        for strat in ['PULSE', 'CONTEXT4H', 'TREND2D']:
+            PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
+            SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
+
+        keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
+        for k in keys_to_remove:
+            LAST_SIGNALS.pop(k, None)
+            LAST_SIGNAL_EVENTS.pop(k, None)
     persist_runtime_state()
     logger.info(f"🔄 State remis à zéro pour {symbol}")
     return jsonify({'status': 'reset', 'symbol': symbol, 'message': f'État de {symbol} remis à zéro'}), 200
@@ -1986,12 +2011,17 @@ def startup():
             tok = CONFIG.get('TELEGRAM_BOT_TOKEN', '')
             base_url = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
             if tok and base_url:
+                if not base_url.startswith(('https://', 'http://')):
+                    base_url = f'https://{base_url}'
                 wh_url = f'{base_url}/telegram_callback'
                 wh_payload = {'url': wh_url}
                 tg_secret = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
                 if tg_secret:
                     wh_payload['secret_token'] = tg_secret
-                requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json=wh_payload, timeout=10)
+                resp_wh = requests.post(f'https://api.telegram.org/bot{tok}/setWebhook', json=wh_payload, timeout=10)
+                telegram_result = resp_wh.json()
+                if resp_wh.status_code != 200 or not telegram_result.get('ok'):
+                    raise RuntimeError(f"Telegram setWebhook HTTP {resp_wh.status_code}: {resp_wh.text[:200]}")
                 logger.info(f'✅ Telegram webhook configuré: {wh_url}')
             elif tok and not base_url:
                 logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')

@@ -11,6 +11,7 @@ import logging
 from flask import Flask, request, jsonify
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import redis
 
 # ============================================================================ #
@@ -143,6 +144,7 @@ def persist_runtime_state():
             'st_context_lt_1h':   dict(ST_CONTEXT_LT_1H),
             'st_context_lt_4h':   dict(ST_CONTEXT_LT_4H),
             'st_context_lt_15m':  dict(ST_CONTEXT_LT_15M),
+            'st_context_lt_5m':   dict(ST_CONTEXT_LT_5M),
             'pyra_enabled':       dict(PYRA_ENABLED),
         }
         try:
@@ -211,6 +213,7 @@ def load_runtime_state():
         ST_CONTEXT_LT_1H.update(payload.get('st_context_lt_1h', {}))
         ST_CONTEXT_LT_4H.update(payload.get('st_context_lt_4h', {}))
         ST_CONTEXT_LT_15M.update(payload.get('st_context_lt_15m', {}))
+        ST_CONTEXT_LT_5M.update(payload.get('st_context_lt_5m', {}))
         PYRA_ENABLED.update(payload.get('pyra_enabled', {}))
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in CONFIG['SYMBOLS']]
@@ -868,6 +871,7 @@ ST_CONTEXT_LT_1H:  dict = {}  # Long term context 1H
 ST_CONTEXT_LT_4H:  dict = {}  # Long term context 4H (plot_2)
 ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
 PREP_STATE: dict = {}
+WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 PYRA_ENABLED: dict = {}  # f'{symbol}_{strat}' -> True si pyramiding activé  # strategy -> {'LONG': set(), 'SHORT': set()} — assets en préparation
 ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
@@ -924,15 +928,18 @@ def webhook():
         logger.warning("⚠️ Webhook sans données")
         return jsonify({'status': 'no_data'}), 400
     # Répondre immédiatement — traitement asynchrone pour éviter timeout TV
-    app_ctx = app.app_context()
-    threading.Thread(target=process_webhook, args=(data, app_ctx), daemon=True).start()
+    WEBHOOK_EXECUTOR.submit(run_webhook_job, data)
     return jsonify({'status': 'ok'}), 200
 
 
-def process_webhook(data, app_ctx=None):
+def run_webhook_job(data):
+    """Wrapper avec contexte Flask pour l'exécuteur."""
+    with app.app_context():
+        process_webhook(data)
+
+
+def process_webhook(data):
     """Traitement asynchrone du webhook — appelé dans un thread séparé."""
-    if app_ctx:
-        app_ctx.push()
     try:
 
         symbol      = format_tv_symbol(data.get('symbol', ''))
@@ -1259,8 +1266,6 @@ def process_webhook(data, app_ctx=None):
                         track_alert(symbol, 'PULSE')
                         logger.info(f"[PULSE] Pyramiding #{entry_count_p}: {symbol} {direction_p}")
 
-        persist_runtime_state()
-
         # Stocker ST AI 3H pour sync_scalp
         # Stocker ST AI 4H pour sync_scalp
         if alert_type == 'supertrend' and tf == '4h':
@@ -1271,6 +1276,8 @@ def process_webhook(data, app_ctx=None):
                     m['st_4h'] = st_4h_val
                     MOMENTUM_STATE[symbol] = m
 
+
+        persist_runtime_state()
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = os.environ.get('SCALP_BOT_URL', '').rstrip('/')
         if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('15m', '4h', '1h', '5m'):
@@ -1496,20 +1503,22 @@ def reset_state_all():
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     """Remet tout le state à zéro."""
-    MOMENTUM_STATE.clear()
-    LAST_SIGNALS.clear()
-    LAST_SIGNAL_EVENTS.clear()
-    ST_AI_15M.clear()
-    ST_CONTEXT_15M.clear()
-    SCALP_POSITIONS.clear()
-    ST_CONTEXT_1D.clear()
-    ST_CONTEXT_LT_1H.clear()
-    ST_CONTEXT_LT_4H.clear()
-    ST_CONTEXT_3D.clear()
-    ST_CONTEXT_LT_15M.clear()
-    ADX_STATE.clear()
-    PREP_STATE.clear()
-    PYRA_ENABLED.clear()
+    with STATE_LOCK:
+        MOMENTUM_STATE.clear()
+        LAST_SIGNALS.clear()
+        LAST_SIGNAL_EVENTS.clear()
+        ST_AI_15M.clear()
+        ST_CONTEXT_15M.clear()
+        SCALP_POSITIONS.clear()
+        ST_CONTEXT_1D.clear()
+        ST_CONTEXT_LT_1H.clear()
+        ST_CONTEXT_LT_4H.clear()
+        ST_CONTEXT_3D.clear()
+        ST_CONTEXT_LT_15M.clear()
+        ST_CONTEXT_LT_5M.clear()
+        ADX_STATE.clear()
+        PREP_STATE.clear()
+        PYRA_ENABLED.clear()
     persist_runtime_state()
     logger.info("🔄 State complet remis à zéro")
     return jsonify({'status': 'reset', 'message': 'État complet remis à zéro'}), 200
@@ -1522,14 +1531,16 @@ def reset_state_symbol(symbol):
     symbol = symbol.upper().replace('-', '/')
     if symbol not in CONFIG['SYMBOLS']:
         return jsonify({'status': 'error', 'message': f'{symbol} non trouvé dans la watchlist'}), 404
-    MOMENTUM_STATE.pop(symbol, None)
-    ST_AI_15M.pop(symbol, None)
-    ST_CONTEXT_15M.pop(symbol, None)
-    ST_CONTEXT_1D.pop(symbol, None)
-    ST_CONTEXT_3D.pop(symbol, None)
-    ST_CONTEXT_LT_1H.pop(symbol, None)
-    ST_CONTEXT_LT_4H.pop(symbol, None)
-    ST_CONTEXT_LT_15M.pop(symbol, None)
+    with STATE_LOCK:
+        MOMENTUM_STATE.pop(symbol, None)
+        ST_AI_15M.pop(symbol, None)
+        ST_CONTEXT_15M.pop(symbol, None)
+        ST_CONTEXT_1D.pop(symbol, None)
+        ST_CONTEXT_3D.pop(symbol, None)
+        ST_CONTEXT_LT_1H.pop(symbol, None)
+        ST_CONTEXT_LT_4H.pop(symbol, None)
+        ST_CONTEXT_LT_15M.pop(symbol, None)
+        ST_CONTEXT_LT_5M.pop(symbol, None)
     for k in ['', '_1h', '_4h', '_1d']:
         ADX_STATE.pop(f'{symbol}{k}', None)
     for strat in ['PULSE', 'CONTEXT4H', 'TREND2D']:

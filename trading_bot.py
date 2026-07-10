@@ -27,18 +27,18 @@ CONFIG = {
         'APT/USDT':    {'exchange': 'okx', 'scalp': False},
         'AVAX/USDT':   {'exchange': 'okx', 'scalp': True},
         'BONK/USDT':   {'exchange': 'okx', 'scalp': False},
-        'BTC/USDT':    {'exchange': 'okx', 'scalp': True},
+        'BTC/USDT':    {'exchange': 'okx', 'scalp': False},
         'COMP/USDT':   {'exchange': 'okx', 'scalp': False},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': False},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': False},
-        'ETH/USDT':    {'exchange': 'okx', 'scalp': True},
+        'ETH/USDT':    {'exchange': 'okx', 'scalp': False},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': True},
         'LINK/USDT':   {'exchange': 'okx', 'scalp': False},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': True},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': False},
         'ONDO/USDT':   {'exchange': 'okx', 'scalp': False},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False},
-        'SOL/USDT':    {'exchange': 'okx', 'scalp': True},
+        'SOL/USDT':    {'exchange': 'okx', 'scalp': False},
         'SUI/USDT':    {'exchange': 'okx', 'scalp': True},
         'TAO/USDT':    {'exchange': 'okx', 'scalp': False},  # perp-only
         'UNI/USDT':    {'exchange': 'okx', 'scalp': False},
@@ -1707,6 +1707,8 @@ def update_indicators_for_symbol(symbol):
         bias_1h  = calc_bias_okx(df_1h, ema_len=8, sma_len=20)
         df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
         bias_2h  = calc_bias_okx(df_2h, ema_len=13, sma_len=30) if df_2h is not None else None
+        bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
+        bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
         bias_1d  = calc_bias_okx(df_1d, ema_len=21, sma_len=55)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)

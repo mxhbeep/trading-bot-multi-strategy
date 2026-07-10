@@ -904,7 +904,7 @@ def init_symbol_states(symbol):
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
+            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
         }
 
 
@@ -1705,7 +1705,8 @@ def update_indicators_for_symbol(symbol):
 
         # Calculs
         bias_1h  = calc_bias_okx(df_1h, ema_len=8, sma_len=20)
-        bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
+        df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
+        bias_2h  = calc_bias_okx(df_2h, ema_len=13, sma_len=30) if df_2h is not None else None
         bias_1d  = calc_bias_okx(df_1d, ema_len=21, sma_len=55)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)
@@ -1764,11 +1765,10 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1d']  = bias_1d
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
+                if bias_2h is not None: MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
 
 
-
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B4H={bias_4h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
-
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
@@ -1868,21 +1868,21 @@ def bias4h_report_scheduler():
                 state_copy  = dict(MOMENTUM_STATE)
                 bull_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull'
+                    if m.get('bias_4h') == 'bull' and m.get('bias_2h') == 'bull'
                 ])
                 bear_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') == 'bear' and m.get('bias_1h') == 'bear'
+                    if m.get('bias_4h') == 'bear' and m.get('bias_2h') == 'bear'
                 ])
-                none_assets = sorted([
+                mixed_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if not (m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull')
-                    and not (m.get('bias_4h') == 'bear' and m.get('bias_1h') == 'bear')
+                    if not (m.get('bias_4h') == 'bull' and m.get('bias_2h') == 'bull')
+                    and not (m.get('bias_4h') == 'bear' and m.get('bias_2h') == 'bear')
                 ])
 
             bull_str = "  ".join(bull_assets) if bull_assets else "—"
             bear_str = "  ".join(bear_assets) if bear_assets else "—"
-            none_str = "  ".join(none_assets) if none_assets else "—"
+            mixed_str = "  ".join(mixed_assets) if mixed_assets else "—"
 
             # Bloc 2 : ST Context 4H + ST AI 4H alignés
             ctx4h_ai4h_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
@@ -1892,35 +1892,25 @@ def bias4h_report_scheduler():
             ctx4h_ai4h_long_str  = "  ".join(ctx4h_ai4h_long)  if ctx4h_ai4h_long  else "—"
             ctx4h_ai4h_short_str = "  ".join(ctx4h_ai4h_short) if ctx4h_ai4h_short else "—"
 
-            # Bloc 3 : ST Context 1H + Bias 1H alignés
-            ctx1h_bias_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('st_context_1h') == 'buy' and m.get('bias_1h') == 'bull'])
-            ctx1h_bias_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('st_context_1h') == 'sell' and m.get('bias_1h') == 'bear'])
-            ctx1h_bias_long_str  = "  ".join(ctx1h_bias_long)  if ctx1h_bias_long  else "—"
-            ctx1h_bias_short_str = "  ".join(ctx1h_bias_short) if ctx1h_bias_short else "—"
 
-            # Bloc 4 : ST AI 4H + Bias 1H alignés
+            # Bloc 3 : ST AI 4H + Bias 2H alignés
             ai4h_bias_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('st_4h') == 'buy' and m.get('bias_1h') == 'bull'])
+                                        if m.get('st_4h') == 'buy' and m.get('bias_2h') == 'bull'])
             ai4h_bias_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('st_4h') == 'sell' and m.get('bias_1h') == 'bear'])
+                                        if m.get('st_4h') == 'sell' and m.get('bias_2h') == 'bear'])
             ai4h_bias_long_str  = "  ".join(ai4h_bias_long)  if ai4h_bias_long  else "—"
             ai4h_bias_short_str = "  ".join(ai4h_bias_short) if ai4h_bias_short else "—"
 
             msg = (
-                f"📊 <b>[BIAS 4H+1H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
+                f"📊 <b>[BIAS 4H+2H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
                 f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
-                f"⬜ <b>N/A ({len(none_assets)})</b> : {none_str}\n\n"
+                f"⬜ <b>MIXTE / NON ALIGNÉ ({len(mixed_assets)})</b> : {mixed_str}\n\n"
                 f"📈 <b>[ST CONTEXT 4H + ST AI 4H]</b>\n"
                 f"🟢 <b>LONG ({len(ctx4h_ai4h_long)})</b> : {ctx4h_ai4h_long_str}\n\n"
                 f"🔴 <b>SHORT ({len(ctx4h_ai4h_short)})</b> : {ctx4h_ai4h_short_str}\n\n"
-                f"📈 <b>[ST CONTEXT 1H + BIAS 1H]</b>\n"
-                f"🟢 <b>LONG ({len(ctx1h_bias_long)})</b> : {ctx1h_bias_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ctx1h_bias_short)})</b> : {ctx1h_bias_short_str}\n\n"
-                f"📈 <b>[ST AI 4H + BIAS 1H]</b>\n"
+                f"📈 <b>[ST AI 4H + BIAS 2H]</b>\n"
                 f"🟢 <b>LONG ({len(ai4h_bias_long)})</b> : {ai4h_bias_long_str}\n\n"
                 f"🔴 <b>SHORT ({len(ai4h_bias_short)})</b> : {ai4h_bias_short_str}"
             )

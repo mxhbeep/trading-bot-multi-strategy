@@ -550,7 +550,7 @@ def send_weekly_report():
 
             if flipped_1h_t2:
                 bias_2d_v    = m.get('bias_2d')
-                ctx_1h_t2    = m.get('st_context_1h')
+                ctx_1h_t2       = m.get('st_context_1h')
                 adx_4h_t2    = ADX_STATE.get(f'{symbol}_4h', {})
                 di_plus_4h   = adx_4h_t2.get('di_plus', 0)
                 di_minus_4h  = adx_4h_t2.get('di_minus', 0)
@@ -560,7 +560,8 @@ def send_weekly_report():
 
                 # Filtres entrée
                 bias_2d_ok  = bias_2d_v == exp_bias_t2
-                ctx_1h_ok   = ctx_1h_t2 == st_1h_val_t2
+                ctx_1h_fresh_t2 = is_signal_fresh(m.get('st_context_1h_ts'), 6 * 3600)
+                ctx_1h_ok       = ctx_1h_t2 == st_1h_val_t2 and ctx_1h_fresh_t2
 
                 # ADX 4H pour pyramiding
                 adx_4h_ok_t2 = (di_plus_4h >= di_minus_4h and direction_t2 == 'LONG') or \
@@ -576,8 +577,10 @@ def send_weekly_report():
                         is_entry_t2 = (bias_2d_ok and ctx_1h_ok and pos_t2 is None)
                         opp_1h_t2   = 'sell' if st_1h_val_t2 == 'buy' else 'buy'
                         guard_ok_t2 = m.get('last_st_1h_trend2d') == opp_1h_t2
-                        is_pyra_t2  = bool(pos_t2 and pos_t2['direction'] == direction_t2
-                                           and adx_4h_ok_t2 and guard_ok_t2)
+                        is_pyra_t2  = bool(
+                            pos_t2 and pos_t2['direction'] == direction_t2
+                            and ctx_1h_ok and adx_4h_ok_t2 and guard_ok_t2
+                        )
                     if is_entry_t2 and should_send(symbol, f"trend2d_entry_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
                         SCALP_POSITIONS[pos_key_t2] = {'direction': direction_t2, 'entry_count': 1}
                         pos_t2 = SCALP_POSITIONS[pos_key_t2]
@@ -1045,6 +1048,7 @@ def process_webhook(data):
             if tf == '1h':
                 m['st_context_1h'] = parsed_ctx
                 m['st_context_1h_ts'] = now_ts
+                logger.info(f"[CTX 1H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
             elif tf == '4h':
                 prev_ctx_4h = m.get('st_context_4h')
                 m['st_context_4h'] = parsed_ctx
@@ -1161,7 +1165,8 @@ def process_webhook(data):
                     opp_ctx = 'sell' if direction_4h == 'LONG' else 'buy'
 
                     ctx_1h_p = m.get('st_context_1h')
-                    ctx_1h_block = ctx_1h_p == opp_ctx  # anti-chop : 1H opposé → bloqué
+                    ctx_1h_fresh = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+                    ctx_1h_block = (not ctx_1h_fresh) or (ctx_1h_p == opp_ctx)
 
                     if (st_4h_v == exp_st and ctx_4h_p == exp_ctx and ctx_15m_p == exp_ctx and not ctx_1h_block):
                         if should_send(symbol, f'pulse4h_{direction_4h}', cooldown=14400):
@@ -1175,7 +1180,8 @@ def process_webhook(data):
                                 f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                                 f"\u2705 ST AI 4H: {st_4h_v.upper()}\n"
                                 f"\u2705 ST Context 4H: {ctx_4h_p.upper()}\n"
-                                f"\u2705 Zone ST Context 15m: {ctx_15m_p.upper()}"
+                                f"\u2705 Zone ST Context 15m: {ctx_15m_p.upper()}\n"
+                                f"\u2705 ST Context 1H: {(ctx_1h_p or 'NEUTRE').upper()}\n"
                                 f"{get_market_context_info()}"
                             )
                             track_alert(symbol, 'PULSE')
@@ -1203,14 +1209,34 @@ def process_webhook(data):
                     exp_bias    = 'bull' if direction_p == 'LONG' else 'bear'
                     opp_ctx     = 'sell' if direction_p == 'LONG' else 'buy'
 
-                    bias_4h_ok   = bias_4h_v == exp_bias
-                    ctx_15m_ok   = ctx_15m_p == st_15m_val   # 15m aligné
-                    ctx_1h_ok    = ctx_1h_p  == st_15m_val   # 1H aligné
-                    ctx_1h_block = ctx_1h_p  == opp_ctx       # 1H opposé → bloqué
-                    zone_ok      = (ctx_15m_ok or ctx_1h_ok) and not ctx_1h_block
-                    both_ok      = ctx_15m_ok and ctx_1h_ok   # jackpot
+                    bias_4h_ok    = bias_4h_v == exp_bias
+                    ctx_15m_ok    = ctx_15m_p == st_15m_val
+                    ctx_1h_fresh  = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+                    ctx_1h_block  = (not ctx_1h_fresh) or (ctx_1h_p == opp_ctx)
+                    ctx_15m_block = ctx_15m_p == opp_ctx
+                    zone_ok       = ctx_15m_ok and not ctx_1h_block and not ctx_15m_block
+                    both_ok       = ctx_15m_ok and (ctx_1h_p == st_15m_val)
 
                     all_ok = bias_4h_ok and zone_ok
+
+                    # Logs diagnostic
+                    logger.info(
+                        f"[PULSE CHECK] {symbol} dir={direction_p} "
+                        f"bias4h={bias_4h_v} ctx15m={ctx_15m_p} "
+                        f"ctx1h={ctx_1h_p} ctx1h_fresh={ctx_1h_fresh} "
+                        f"zone_ok={zone_ok} all_ok={all_ok}"
+                    )
+                    if not all_ok:
+                        if not bias_4h_ok:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=bias4h_not_aligned")
+                        elif ctx_15m_block:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx15m_opposite")
+                        elif not ctx_1h_fresh:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx1h_old")
+                        elif ctx_1h_p == opp_ctx:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx1h_opposite")
+                        elif not ctx_15m_ok:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx15m_not_aligned")
 
                     pos_key_p = f"{symbol}_PULSE"
                     with STATE_LOCK:
@@ -1245,7 +1271,8 @@ def process_webhook(data):
                             f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                             f"\u2705 Bias 4H: {(bias_4h_v or '?').upper()} (EMA21/SMA55)\n"
                             f"{zone_txt}\n"
-                            f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)"
+                            f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)\n"
+                            f"\u2705 ST Context 1H: {(ctx_1h_p or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_PULSE",
                             journal_symbol=symbol, journal_strategy='PULSE',
@@ -1807,7 +1834,9 @@ def check_prep_alerts():
             exp_ctx = 'buy' if direction == 'LONG' else 'sell'
             opp_ctx = 'sell' if direction == 'LONG' else 'buy'
             bias_ok  = bias_4h == exp
-            zone_ok  = (ctx_15m == exp_ctx or ctx_ct_1h == exp_ctx) and ctx_ct_1h != opp_ctx
+            ctx_1h_fresh = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+            ctx_1h_block = (not ctx_1h_fresh) or (ctx_ct_1h == opp_ctx)
+            zone_ok  = (ctx_15m == exp_ctx) and not ctx_1h_block
             if bias_ok and zone_ok:
                 new_prep_pulse[direction].add(symbol)
 

@@ -813,6 +813,8 @@ def parse_ema200_value(val):
 def normalize_tf(tf_raw):
     tf = str(tf_raw or '').strip().lower()
     tf_aliases = {
+        '1': '1m', '1min': '1m', '1minute': '1m',
+        '5': '5m', '5min': '5m', '5minute': '5m',
         '15': '15m', '60': '1h', '1hr': '1h', '1hour': '1h',
         '180': '3h', '3hr': '3h', '3hour': '3h',
         '240': '4h', '4hr': '4h', '4hour': '4h',
@@ -904,7 +906,7 @@ def init_symbol_states(symbol):
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None,
+            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_15m_pulse': None,
         }
 
 
@@ -1041,6 +1043,7 @@ def process_webhook(data):
         if alert_type == 'st_context_lt' and tf == '5m':
             parsed_lt5m = parse_st_context_value(val)
             ST_CONTEXT_LT_5M[symbol] = parsed_lt5m
+            m['st_context_lt_5m'] = parsed_lt5m
             m['st_context_lt_5m_ts'] = now_ts
 
         if alert_type == 'st_context':
@@ -1063,6 +1066,9 @@ def process_webhook(data):
             elif tf == '15m':
                 ST_CONTEXT_15M[symbol] = parsed_ctx
                 m['st_context_15m_ts'] = now_ts
+            elif tf == '5m':
+                m['st_context_5m'] = parsed_ctx
+                m['st_context_5m_ts'] = now_ts
             elif tf == '1d':
                 ST_CONTEXT_1D[symbol] = parsed_ctx
                 m['st_context_1d_ts'] = now_ts
@@ -1140,170 +1146,224 @@ def process_webhook(data):
         # LOGIQUE CONFLUENCE : ST Context 3D + ST Context 4H aligné → flip ST AI 4H
         # Anti-chop : ST Context 3D opposé OU ADX 1D DI opposé dominant → annulé
         # ========================================================================
+        # LOGIQUE CONTEXT4H - ENTREE SECONDAIRE :
+        # ST Context 4H + Bias 1H + Zone ST Context 5m
+        # ========================================================================
+        if strat in ['context', 'context4h', 'all']:
+            m = MOMENTUM_STATE[symbol]
+
+            if alert_type in ('st_context', 'bias') and tf in ('4h', '1h', '5m'):
+                ctx_4h_c = m.get('st_context_4h')
+                bias_1h_c = m.get('bias_1h')
+                ctx_5m_c = m.get('st_context_5m')
+                ctx_5m_fresh_c = is_signal_fresh(m.get('st_context_5m_ts'), 30 * 60)
+
+                if ctx_4h_c is not None and ctx_5m_c is not None and ctx_5m_fresh_c:
+                    direction_c = 'LONG' if ctx_5m_c == 'buy' else 'SHORT'
+                    exp_ctx_c = 'buy' if direction_c == 'LONG' else 'sell'
+                    exp_bias_c = 'bull' if direction_c == 'LONG' else 'bear'
+
+                    secondary_ok_c = (
+                        ctx_4h_c == exp_ctx_c
+                        and bias_1h_c == exp_bias_c
+                        and ctx_5m_c == exp_ctx_c
+                    )
+
+                    logger.info(
+                        f"[CONTEXT4H CHECK] {symbol} dir={direction_c} "
+                        f"ctx4h={ctx_4h_c} bias1h={bias_1h_c} ctx5m={ctx_5m_c} "
+                        f"ctx5m_fresh={ctx_5m_fresh_c} secondary={secondary_ok_c}"
+                    )
+
+                    pos_key_c = f"{symbol}_CONTEXT4H"
+                    with STATE_LOCK:
+                        pos_c = SCALP_POSITIONS.get(pos_key_c)
+                        if pos_c and pos_c['direction'] != direction_c:
+                            SCALP_POSITIONS.pop(pos_key_c, None)
+                            PYRA_ENABLED.pop(pos_key_c, None)
+                            pos_c = None
+                        is_entry_c = bool(secondary_ok_c and (pos_c is None or pos_c.get('signal_type') != 'secondary_ctx4h_bias1h_ctx5m'))
+                        if is_entry_c and should_send(symbol, f"context4h_secondary_{exp_ctx_c}", event_id=event_id, cooldown=14400):
+                            SCALP_POSITIONS[pos_key_c] = {
+                                'direction': direction_c,
+                                'entry_count': 1,
+                                'signal_type': 'secondary_ctx4h_bias1h_ctx5m',
+                            }
+                            PYRA_ENABLED.pop(pos_key_c, None)
+                            pos_c = SCALP_POSITIONS[pos_key_c]
+                        else:
+                            is_entry_c = False
+
+                    if is_entry_c and pos_c:
+                        emoji = "\U0001f7e2" if direction_c == "LONG" else "\U0001f534"
+                        send_telegram_with_buttons(
+                            f"{emoji} <b>[CONTEXT4H - ENTREE SECONDAIRE]</b> {symbol}\n"
+                            f"????????????????????\n"
+                            f"?? Direction: {direction_c}\n"
+                            f"?? Price: ${format_price(price)}\n"
+                            f"?? Exchange: {exchange_name.upper()}\n"
+                            f"? {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"? ST Context 4H: {(ctx_4h_c or '?').upper()}\n"
+                            f"? Bias 1H: {(bias_1h_c or '?').upper()}\n"
+                            f"? Zone ST Context 5m: {(ctx_5m_c or '?').upper()}\n"
+                            f"{get_market_context_info()}",
+                            f"{symbol}_CONTEXT4H",
+                            journal_symbol=symbol, journal_strategy='CONTEXT4H',
+                            journal_direction=direction_c, journal_price=price
+                        )
+                        track_alert(symbol, 'CONTEXT4H')
+                        logger.info(f"[CONTEXT4H] Entree secondaire: {symbol} {direction_c}")
+
+        # ========================================================================
         # ========================================================================
         # LOGIQUE PULSE :
-        # Filtre    : Bias 4H aligné
-        # Zone      : ST Context 15m aligné OU ST Context 1H aligné (au moins 1)
-        # Anti-chop : ST Context 1H opposé → bloqué
-        # Signal    : flip ST AI 15m — Cooldown 1H
-        # Pyramiding: flip ST AI 15m + guard — Cooldown 30min
-        # PREP      : envoyée si Bias 4H + (ctx 15m aligné OU ctx 1H aligné)
+        # Entree principale : Bias 4H + Bias 1H + Zone ST Context 5m
+        # Entree secondaire : ST AI 4H + Bias 1H + Zone ST Context 5m
+        # Anti-chop : ST Context LT 5m dans le meme sens => bloque
         # ========================================================================
         if strat in ['pulse', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            # ── PULSE 4H : ST AI 4H + ST Context 4H + zone ST Context 15m alignés ──
-            # Déclenche sur tout changement de l'un des 3 indicateurs
-            if alert_type in ('supertrend', 'st_context') and tf in ('4h', '15m'):
-                st_4h_v   = m.get('st_4h')
-                ctx_4h_p  = m.get('st_context_4h')
-                ctx_15m_p = ST_CONTEXT_15M.get(symbol)
+            if alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend') and tf in ('5m', '1h', '4h'):
+                ctx_5m_p = m.get('st_context_5m')
+                ctx_5m_fresh = is_signal_fresh(m.get('st_context_5m_ts'), 30 * 60)
+                if ctx_5m_p is not None and ctx_5m_fresh:
+                    direction_p = 'LONG' if ctx_5m_p == 'buy' else 'SHORT'
+                    exp_ctx = 'buy' if direction_p == 'LONG' else 'sell'
+                    exp_bias = 'bull' if direction_p == 'LONG' else 'bear'
 
-                for direction_4h in ('LONG', 'SHORT'):
-                    exp_st  = 'buy'  if direction_4h == 'LONG' else 'sell'
-                    exp_ctx = 'buy'  if direction_4h == 'LONG' else 'sell'
-                    opp_ctx = 'sell' if direction_4h == 'LONG' else 'buy'
+                    bias_4h_v = m.get('bias_4h')
+                    bias_1h_v = m.get('bias_1h')
+                    st_4h_v = m.get('st_4h') or m.get('st_ai_4h')
+                    ctx_lt_5m_p = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
+                    ctx_lt_5m_fresh = is_signal_fresh(m.get('st_context_lt_5m_ts'), 30 * 60)
 
-                    ctx_1h_p = m.get('st_context_1h')
-                    ctx_1h_fresh = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
-                    ctx_1h_block = (not ctx_1h_fresh) or (ctx_1h_p == opp_ctx)
+                    ctx_5m_ok = ctx_5m_p == exp_ctx
+                    bias_4h_ok = bias_4h_v == exp_bias
+                    bias_1h_ok = bias_1h_v == exp_bias
+                    st_4h_ok = st_4h_v == exp_ctx
+                    lt5m_block = ctx_lt_5m_fresh and ctx_lt_5m_p == exp_ctx
 
-                    if (st_4h_v == exp_st and ctx_4h_p == exp_ctx and ctx_15m_p == exp_ctx and not ctx_1h_block):
-                        if should_send(symbol, f'pulse4h_{direction_4h}', cooldown=14400):
-                            emoji = '\U0001f7e2' if direction_4h == 'LONG' else '\U0001f534'
-                            send_telegram_ttmtf(
-                                f"{emoji} <b>[PULSE - ENTREE 4H]</b> {symbol}\n"
-                                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                                f"\U0001f4c8 Direction: {direction_4h}\n"
-                                f"\U0001f4b0 Price: ${format_price(price)}\n"
-                                f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                                f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                                f"\u2705 ST AI 4H: {st_4h_v.upper()}\n"
-                                f"\u2705 ST Context 4H: {ctx_4h_p.upper()}\n"
-                                f"\u2705 Zone ST Context 15m: {ctx_15m_p.upper()}\n"
-                                f"\u2705 ST Context 1H: {(ctx_1h_p or 'NEUTRE').upper()}\n"
-                                f"{get_market_context_info()}"
-                            )
-                            track_alert(symbol, 'PULSE')
-                            logger.info(f'[PULSE] Entrée 4H: {symbol} {direction_4h}')
-                        break
+                    primary_ok = ctx_5m_ok and bias_4h_ok and bias_1h_ok and not lt5m_block
+                    secondary_ok = ctx_5m_ok and st_4h_ok and bias_1h_ok and not lt5m_block
+                    all_ok = primary_ok or secondary_ok
+                    signal_type_p = 'principal' if primary_ok else 'secondaire' if secondary_ok else 'blocked'
 
-            if alert_type == 'supertrend' and tf == '15m':
-                st_15m_val  = m.get('st_ai_15m')
-                prev_15m    = m.get('last_st_15m')
-                flipped_15m = (st_15m_val is not None and prev_15m is not None and st_15m_val != prev_15m)
-
-                if flipped_15m:
-                    # Recalculer Bias 4H en temps réel
-                    try:
-                        df_4h_rt  = fetch_ohlcv_okx(symbol, '4h', limit=100)
-                        bias_4h_v = calc_bias_okx(df_4h_rt, ema_len=21, sma_len=55) if df_4h_rt is not None else m.get('bias_4h')
-                        if df_4h_rt is not None: m['bias_4h'] = bias_4h_v
-                    except Exception:
-                        bias_4h_v = m.get('bias_4h')
-
-                    ctx_15m_p  = ST_CONTEXT_15M.get(symbol)
-                    ctx_1h_p   = m.get('st_context_1h')
-
-                    direction_p = "LONG" if st_15m_val == 'buy' else "SHORT"
-                    exp_bias    = 'bull' if direction_p == 'LONG' else 'bear'
-                    opp_ctx     = 'sell' if direction_p == 'LONG' else 'buy'
-
-                    bias_4h_ok    = bias_4h_v == exp_bias
-                    ctx_15m_ok    = ctx_15m_p == st_15m_val
-                    ctx_1h_fresh  = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
-                    ctx_1h_block  = (not ctx_1h_fresh) or (ctx_1h_p == opp_ctx)
-                    ctx_15m_block = ctx_15m_p == opp_ctx
-                    zone_ok       = ctx_15m_ok and not ctx_1h_block and not ctx_15m_block
-                    both_ok       = ctx_15m_ok and (ctx_1h_p == st_15m_val)
-
-                    all_ok = bias_4h_ok and zone_ok
-
-                    # Logs diagnostic
                     logger.info(
                         f"[PULSE CHECK] {symbol} dir={direction_p} "
-                        f"bias4h={bias_4h_v} ctx15m={ctx_15m_p} "
-                        f"ctx1h={ctx_1h_p} ctx1h_fresh={ctx_1h_fresh} "
-                        f"zone_ok={zone_ok} all_ok={all_ok}"
+                        f"ctx5m={ctx_5m_p} bias4h={bias_4h_v} bias1h={bias_1h_v} "
+                        f"st4h={st_4h_v} lt5m={ctx_lt_5m_p} "
+                        f"ctx5m_fresh={ctx_5m_fresh} lt5m_fresh={ctx_lt_5m_fresh} "
+                        f"primary={primary_ok} secondary={secondary_ok}"
                     )
                     if not all_ok:
-                        if not bias_4h_ok:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=bias4h_not_aligned")
-                        elif ctx_15m_block:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx15m_opposite")
-                        elif not ctx_1h_fresh:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx1h_old")
-                        elif ctx_1h_p == opp_ctx:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx1h_opposite")
-                        elif not ctx_15m_ok:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx15m_not_aligned")
+                        if not ctx_5m_ok:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx5m_not_aligned")
+                        elif lt5m_block:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=lt5m_same_direction")
+                        elif not bias_1h_ok:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=bias1h_not_aligned")
+                        elif not bias_4h_ok and not st_4h_ok:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=no_primary_or_secondary_filter")
 
                     pos_key_p = f"{symbol}_PULSE"
                     with STATE_LOCK:
                         pos_p = SCALP_POSITIONS.get(pos_key_p)
                         if pos_p and pos_p['direction'] != direction_p:
                             SCALP_POSITIONS.pop(pos_key_p, None)
-                            pos_p = None; is_entry_p = False; is_pyra_p = False
-                        else:
-                            is_entry_p = (all_ok and pos_p is None)
-                            opp_15m_p  = 'sell' if st_15m_val == 'buy' else 'buy'
-                            guard_ok_p = m.get('last_st_15m') == opp_15m_p
-                            is_pyra_p  = bool(pos_p and pos_p['direction'] == direction_p
-                                              and all_ok and guard_ok_p)
-                        if is_entry_p and should_send(symbol, f"pulse_entry_{st_15m_val}", event_id=event_id, cooldown=3600):
-                            SCALP_POSITIONS[pos_key_p] = {'direction': direction_p, 'entry_count': 1}
+                            PYRA_ENABLED.pop(pos_key_p, None)
+                            pos_p = None
+                        is_entry_p = bool(all_ok and (pos_p is None or pos_p.get('signal_type') != signal_type_p))
+                        if is_entry_p and should_send(symbol, f"pulse_entry_{signal_type_p}_{exp_ctx}", event_id=event_id, cooldown=3600):
+                            SCALP_POSITIONS[pos_key_p] = {
+                                'direction': direction_p,
+                                'entry_count': 1,
+                                'signal_type': signal_type_p,
+                            }
+                            PYRA_ENABLED.pop(pos_key_p, None)
                             pos_p = SCALP_POSITIONS[pos_key_p]
                         else:
                             is_entry_p = False
 
                     if is_entry_p and pos_p:
-                        emoji    = "\U0001f7e2" if direction_p == "LONG" else "\U0001f534"
-                        ctx15txt = ctx_15m_p.upper() if ctx_15m_p else "NEUTRE"
-                        ctx1htxt = ctx_1h_p.upper()  if ctx_1h_p  else "NEUTRE"
-                        zone_txt = "\u2705\u2705 15m ET 1H alignés (JACKPOT)" if both_ok else (
-                                   "\u2705 ST Context 15m aligné" if ctx_15m_ok else "\u2705 ST Context 1H aligné")
+                        emoji = "\U0001f7e2" if direction_p == "LONG" else "\U0001f534"
+                        title = "[PULSE - ENTREE]" if signal_type_p == 'principal' else "[PULSE - ENTREE SECONDAIRE]"
+                        filter_txt = (
+                            f"? Bias 4H: {(bias_4h_v or '?').upper()} (EMA21/SMA55)\n"
+                            if signal_type_p == 'principal'
+                            else f"? ST AI 4H: {(st_4h_v or '?').upper()}\n"
+                        )
                         send_telegram_with_buttons(
-                            f"{emoji} <b>[PULSE - ENTREE]</b> {symbol}\n"
-                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            f"\U0001f4c8 Direction: {direction_p}\n"
-                            f"\U0001f4b0 Price: ${format_price(price)}\n"
-                            f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                            f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"\u2705 Bias 4H: {(bias_4h_v or '?').upper()} (EMA21/SMA55)\n"
-                            f"{zone_txt}\n"
-                            f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (SIGNAL)\n"
-                            f"\u2705 ST Context 1H: {(ctx_1h_p or 'NEUTRE').upper()}\n"
+                            f"{emoji} <b>{title}</b> {symbol}\n"
+                            f"????????????????????\n"
+                            f"?? Direction: {direction_p}\n"
+                            f"?? Price: ${format_price(price)}\n"
+                            f"?? Exchange: {exchange_name.upper()}\n"
+                            f"? {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"{filter_txt}"
+                            f"? Bias 1H: {(bias_1h_v or '?').upper()}\n"
+                            f"? Zone ST Context 5m: {(ctx_5m_p or '?').upper()}\n"
+                            f"??? LT 5m: {(ctx_lt_5m_p or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_PULSE",
                             journal_symbol=symbol, journal_strategy='PULSE',
                             journal_direction=direction_p, journal_price=price
                         )
                         track_alert(symbol, 'PULSE')
-                        logger.info(f"[PULSE] Entrée: {symbol} {direction_p} | both={'oui' if both_ok else 'non'}")
+                        logger.info(f"[PULSE] Entree {signal_type_p}: {symbol} {direction_p}")
 
-                    elif is_pyra_p and PYRA_ENABLED.get(f"{symbol}_PULSE", False) and should_send(symbol, f"pulse_pyra_{st_15m_val}", event_id=event_id, cooldown=1800):
-                        with STATE_LOCK:
+            # ================================================================
+            # PULSE — PYRAMIDING : flip ST AI 15m + Bias 1H + Bias 4H alignés
+            # Anti-chop : ST Context 15m opposé → bloqué — Cooldown 30min
+            # ================================================================
+            if alert_type == 'supertrend' and tf == '15m':
+                st_15m_val_pu  = parse_supertrend_value(val)
+                prev_15m_pu    = m.get('st_ai_15m_pulse')
+                flipped_15m_pu = (st_15m_val_pu is not None and prev_15m_pu is not None and st_15m_val_pu != prev_15m_pu)
+                m['st_ai_15m_pulse'] = st_15m_val_pu
+
+                if flipped_15m_pu:
+                    direction_pu = "LONG" if st_15m_val_pu == 'buy' else "SHORT"
+                    exp_bias_pu  = 'bull' if direction_pu == 'LONG' else 'bear'
+                    exp_ctx_pu   = 'buy' if direction_pu == 'LONG' else 'sell'
+
+                    bias_1h_ok_pu = m.get('bias_1h') == exp_bias_pu
+                    bias_4h_ok_pu = m.get('bias_4h') == exp_bias_pu
+                    ctx_lt_5m_pu = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
+                    ctx_lt_5m_fresh_pu = is_signal_fresh(m.get('st_context_lt_5m_ts'), 30 * 60)
+                    antichop_pu = ctx_lt_5m_fresh_pu and ctx_lt_5m_pu == exp_ctx_pu
+
+                    pos_key_p = f"{symbol}_PULSE"
+                    with STATE_LOCK:
+                        pos_p = SCALP_POSITIONS.get(pos_key_p)
+                        is_pyra_p = bool(
+                            pos_p and pos_p['direction'] == direction_pu
+                            and bias_1h_ok_pu and bias_4h_ok_pu and not antichop_pu
+                            and PYRA_ENABLED.get(pos_key_p, False)
+                        )
+                        if is_pyra_p and should_send(symbol, f"pulse_pyra_{st_15m_val_pu}", event_id=event_id, cooldown=1800):
                             pos_p['entry_count'] += 1
-                            m['last_st_15m'] = None
-                            entry_count_p = pos_p['entry_count']
-                        emoji    = "\U0001f7e2" if direction_p == "LONG" else "\U0001f534"
-                        zone_txt = "\u2705\u2705 15m ET 1H alignés" if both_ok else (
-                                   "\u2705 ST Context 15m" if ctx_15m_ok else "\u2705 ST Context 1H")
+                            entry_count_pu = pos_p['entry_count']
+                        else:
+                            is_pyra_p = False
+
+                    if is_pyra_p:
+                        emoji = "🟢" if direction_pu == "LONG" else "🔴"
                         send_telegram_ttmtf(
-                            f"{emoji} <b>[PULSE - PYRAMIDING #{entry_count_p}]</b> {symbol}\n"
-                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                            f"\U0001f4c8 Direction: {direction_p}\n"
-                            f"\U0001f4b0 Price: ${format_price(price)}\n"
-                            f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                            f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"\u2705 Bias 4H: {(bias_4h_v or '?').upper()} (EMA21/SMA55)\n"
-                            f"{zone_txt}\n"
-                            f"\u2705 SuperTrend AI 15m: {st_15m_val.upper()} (PYRAMIDING)\n"
-                            f"\U0001f6e1\ufe0f Guard: flip opposé validé"
+                            f"{emoji} <b>[PULSE - PYRAMIDING #{entry_count_pu}]</b> {symbol}\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📈 Direction: {direction_pu}\n"
+                            f"💰 Price: ${format_price(price)}\n"
+                            f"🏦 Exchange: {exchange_name.upper()}\n"
+                            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"✅ Flip ST AI 15m: {st_15m_val_pu.upper()}\n"
+                            f"✅ Bias 1H: {(m.get('bias_1h') or '?').upper()}\n"
+                            f"✅ Bias 4H: {(m.get('bias_4h') or '?').upper()}\n"
+                            f"??? LT 5m: {(ctx_lt_5m_pu or 'NEUTRE').upper()} (anti-chop)"
                             f"{get_market_context_info()}"
                         )
                         track_alert(symbol, 'PULSE')
-                        logger.info(f"[PULSE] Pyramiding #{entry_count_p}: {symbol} {direction_p}")
+                        logger.info(f"[PULSE] Pyramiding #{entry_count_pu}: {symbol} {direction_pu}")
 
         # Stocker ST AI 3H pour sync_scalp
         # Stocker ST AI 4H pour sync_scalp
@@ -1319,7 +1379,7 @@ def process_webhook(data):
         persist_runtime_state()
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('15m', '4h', '1h', '5m'):
+        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('1m', '15m', '4h', '1h', '5m'):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:

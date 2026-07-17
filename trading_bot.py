@@ -1334,12 +1334,12 @@ def process_webhook(data):
         # LOGIQUE PULSE :
         # Entree principale : Bias 4H + Bias 1H + Zone ST Context 5m
         # Entree secondaire : ST AI 4H + Bias 1H + Zone ST Context 5m
-        # Anti-chop : ST Context LT 5m meme sens ou ST Context 1H oppose => bloque
+        # Anti-chop : ST Context LT 5m meme sens ou ST Context 15m oppose => bloque
         # ========================================================================
         if strat in ['pulse', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            if alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend') and tf in ('5m', '1h', '4h'):
+            if alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend') and tf in ('5m', '15m', '1h', '4h'):
                 ctx_5m_p = m.get('st_context_5m')
                 if ctx_5m_p is not None:
                     direction_p = 'LONG' if ctx_5m_p == 'buy' else 'SHORT'
@@ -1351,26 +1351,26 @@ def process_webhook(data):
                     st_4h_v = m.get('st_4h') or m.get('st_ai_4h')
                     ctx_lt_5m_p = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
                     opp_ctx = 'sell' if direction_p == 'LONG' else 'buy'
-                    ctx_1h_p = m.get('st_context_1h')
-                    ctx_1h_fresh = bool(ctx_1h_p) and is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+                    ctx_15m_p = ST_CONTEXT_15M.get(symbol)
+                    ctx_15m_fresh = bool(ctx_15m_p) and is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
 
                     ctx_5m_ok = ctx_5m_p == exp_ctx
                     bias_4h_ok = bias_4h_v == exp_bias
                     bias_1h_ok = bias_1h_v == exp_bias
                     st_4h_ok = st_4h_v == exp_ctx
                     lt5m_block = ctx_lt_5m_p == exp_ctx
-                    ctx1h_block = ctx_1h_fresh and ctx_1h_p == opp_ctx
+                    ctx15m_opp_block = ctx_15m_fresh and ctx_15m_p == opp_ctx
 
-                    primary_ok = ctx_5m_ok and bias_4h_ok and bias_1h_ok and not lt5m_block and not ctx1h_block
-                    secondary_ok = ctx_5m_ok and st_4h_ok and bias_1h_ok and not lt5m_block and not ctx1h_block
+                    primary_ok = ctx_5m_ok and bias_4h_ok and bias_1h_ok and not lt5m_block and not ctx15m_opp_block
+                    secondary_ok = ctx_5m_ok and st_4h_ok and bias_1h_ok and not lt5m_block and not ctx15m_opp_block
                     all_ok = primary_ok or secondary_ok
                     signal_type_p = 'principal' if primary_ok else 'secondaire' if secondary_ok else 'blocked'
 
                     logger.info(
                         f"[PULSE CHECK] {symbol} dir={direction_p} "
                         f"ctx5m={ctx_5m_p} bias4h={bias_4h_v} bias1h={bias_1h_v} "
-                        f"st4h={st_4h_v} lt5m={ctx_lt_5m_p} ctx1h={ctx_1h_p} "
-                        f"ctx1h_fresh={ctx_1h_fresh} "
+                        f"st4h={st_4h_v} lt5m={ctx_lt_5m_p} ctx15m={ctx_15m_p} "
+                        f"ctx15m_fresh={ctx_15m_fresh} "
                         f"primary={primary_ok} secondary={secondary_ok}"
                     )
                     if not all_ok:
@@ -1378,8 +1378,8 @@ def process_webhook(data):
                             logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx5m_not_aligned")
                         elif lt5m_block:
                             logger.info(f"[PULSE BLOCKED] {symbol} raison=lt5m_same_direction")
-                        elif ctx1h_block:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx1h_opposite")
+                        elif ctx15m_opp_block:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx15m_opposite")
                         elif not bias_1h_ok:
                             logger.info(f"[PULSE BLOCKED] {symbol} raison=bias1h_not_aligned")
                         elif not bias_4h_ok and not st_4h_ok:
@@ -1423,7 +1423,7 @@ def process_webhook(data):
                             f"[OK] Bias 1H: {(bias_1h_v or 'N/A').upper()}\n"
                             f"[OK] Zone ST Context 5m: {(ctx_5m_p or 'N/A').upper()}\n"
                             f"[ANTI-CHOP] LT 5m: {(ctx_lt_5m_p or 'NEUTRE').upper()}\n"
-                            f"[ANTI-CHOP] ST Context 1H: {(ctx_1h_p or 'NEUTRE').upper()}\n"
+                            f"[ANTI-CHOP] ST Context 15m: {(ctx_15m_p or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_PULSE",
                             journal_symbol=symbol, journal_strategy='PULSE',
@@ -1451,21 +1451,21 @@ def process_webhook(data):
                     bias_4h_pu = m.get('bias_4h')
                     bias_1h_pu = m.get('bias_1h')
                     ctx_lt_5m_pu = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
-                    ctx_1h_pu = m.get('st_context_1h')
-                    ctx_1h_fresh_pu = bool(ctx_1h_pu) and is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+                    ctx_15m_pu = ST_CONTEXT_15M.get(symbol)
+                    ctx_15m_fresh_pu = bool(ctx_15m_pu) and is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
 
                     flip_15m_pu = bool(last_st_15m_pu and st_15m_pu == exp_ctx_pu and last_st_15m_pu != st_15m_pu)
                     bias_4h_ok_pu = bias_4h_pu == exp_bias_pu
                     bias_1h_ok_pu = bias_1h_pu == exp_bias_pu
                     lt5m_block_pu = ctx_lt_5m_pu == exp_ctx_pu
-                    ctx1h_block_pu = ctx_1h_fresh_pu and ctx_1h_pu == opp_ctx_pu
-                    antichop_pu = lt5m_block_pu or ctx1h_block_pu
+                    ctx15m_opp_block_pu = ctx_15m_fresh_pu and ctx_15m_pu == opp_ctx_pu
+                    antichop_pu = lt5m_block_pu or ctx15m_opp_block_pu
 
                     logger.info(
                         f"[PULSE PYRA CHECK] {symbol} dir={direction_pu} "
                         f"st15m={st_15m_pu} last_st15m={last_st_15m_pu} "
                         f"bias4h={bias_4h_pu} bias1h={bias_1h_pu} "
-                        f"lt5m={ctx_lt_5m_pu} ctx1h={ctx_1h_pu} ctx1h_fresh={ctx_1h_fresh_pu} "
+                        f"lt5m={ctx_lt_5m_pu} ctx15m={ctx_15m_pu} ctx15m_fresh={ctx_15m_fresh_pu} "
                         f"flip={flip_15m_pu} antichop={antichop_pu}"
                     )
 
@@ -1499,7 +1499,7 @@ def process_webhook(data):
                                 f"[OK] Bias 4H: {(bias_4h_pu or 'N/A').upper()}\n"
                                 f"[OK] Bias 1H: {(bias_1h_pu or 'N/A').upper()}\n"
                                 f"[ANTI-CHOP] LT 5m: {(ctx_lt_5m_pu or 'NEUTRE').upper()}\n"
-                                f"[ANTI-CHOP] ST Context 1H: {(ctx_1h_pu or 'NEUTRE').upper()}\n"
+                                f"[ANTI-CHOP] ST Context 15m: {(ctx_15m_pu or 'NEUTRE').upper()}\n"
                                 f"{get_market_context_info()}"
                             )
                             logger.info(f"[PULSE] Pyramiding #{entry_count_pu}: {symbol} {direction_pu}")

@@ -2070,18 +2070,19 @@ def bias4h_report_scheduler():
         try:
             with STATE_LOCK:
                 state_copy  = dict(MOMENTUM_STATE)
+                ctx_15m_copy = dict(ST_CONTEXT_15M)
                 bull_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') == 'bull' and m.get('bias_2h') == 'bull'
+                    if m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull'
                 ])
                 bear_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_4h') == 'bear' and m.get('bias_2h') == 'bear'
+                    if m.get('bias_4h') == 'bear' and m.get('bias_1h') == 'bear'
                 ])
                 mixed_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if not (m.get('bias_4h') == 'bull' and m.get('bias_2h') == 'bull')
-                    and not (m.get('bias_4h') == 'bear' and m.get('bias_2h') == 'bear')
+                    if not (m.get('bias_4h') == 'bull' and m.get('bias_1h') == 'bull')
+                    and not (m.get('bias_4h') == 'bear' and m.get('bias_1h') == 'bear')
                 ])
 
             bull_str = "  ".join(bull_assets) if bull_assets else "—"
@@ -2097,16 +2098,24 @@ def bias4h_report_scheduler():
             ctx4h_ai4h_short_str = "  ".join(ctx4h_ai4h_short) if ctx4h_ai4h_short else "—"
 
 
-            # Bloc 3 : ST AI 4H + Bias 2H alignés
+            # Bloc 3 : ST AI 4H + Bias 1H alignés
             ai4h_bias_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('st_4h') == 'buy' and m.get('bias_2h') == 'bull'])
+                                        if m.get('st_4h') == 'buy' and m.get('bias_1h') == 'bull'])
             ai4h_bias_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('st_4h') == 'sell' and m.get('bias_2h') == 'bear'])
+                                        if m.get('st_4h') == 'sell' and m.get('bias_1h') == 'bear'])
             ai4h_bias_long_str  = "  ".join(ai4h_bias_long)  if ai4h_bias_long  else "—"
             ai4h_bias_short_str = "  ".join(ai4h_bias_short) if ai4h_bias_short else "—"
 
+            # Bloc 4 : Bias 4H + ST Context 15m alignés
+            bias4h_ctx15m_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('bias_4h') == 'bull' and ctx_15m_copy.get(s) == 'buy'])
+            bias4h_ctx15m_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('bias_4h') == 'bear' and ctx_15m_copy.get(s) == 'sell'])
+            bias4h_ctx15m_long_str  = "  ".join(bias4h_ctx15m_long)  if bias4h_ctx15m_long  else "—"
+            bias4h_ctx15m_short_str = "  ".join(bias4h_ctx15m_short) if bias4h_ctx15m_short else "—"
+
             msg = (
-                f"📊 <b>[BIAS 4H+2H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
+                f"📊 <b>[BIAS 4H+1H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
                 f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
@@ -2114,9 +2123,12 @@ def bias4h_report_scheduler():
                 f"📈 <b>[ST CONTEXT 4H + ST AI 4H]</b>\n"
                 f"🟢 <b>LONG ({len(ctx4h_ai4h_long)})</b> : {ctx4h_ai4h_long_str}\n\n"
                 f"🔴 <b>SHORT ({len(ctx4h_ai4h_short)})</b> : {ctx4h_ai4h_short_str}\n\n"
-                f"📈 <b>[ST AI 4H + BIAS 2H]</b>\n"
+                f"📈 <b>[ST AI 4H + BIAS 1H]</b>\n"
                 f"🟢 <b>LONG ({len(ai4h_bias_long)})</b> : {ai4h_bias_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ai4h_bias_short)})</b> : {ai4h_bias_short_str}"
+                f"🔴 <b>SHORT ({len(ai4h_bias_short)})</b> : {ai4h_bias_short_str}\n\n"
+                f"📈 <b>[BIAS 4H + ST CONTEXT 15M]</b>\n"
+                f"🟢 <b>LONG ({len(bias4h_ctx15m_long)})</b> : {bias4h_ctx15m_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(bias4h_ctx15m_short)})</b> : {bias4h_ctx15m_short_str}"
             )
             send_info(msg)
             logger.info(f"[BIAS4H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")

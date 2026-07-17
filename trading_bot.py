@@ -1063,6 +1063,8 @@ def process_webhook(data):
                     if parsed_ctx != exp_ctx:
                         send_close_alert(symbol, 'CONTEXT4H', dir_c4h, price, 'ST Context 4H opposé')
             elif tf == '15m':
+                prev_ctx_15m_global = ST_CONTEXT_15M.get(symbol)
+                ctx15m_zone_changed_this_call = (parsed_ctx is not None and parsed_ctx != prev_ctx_15m_global)
                 ST_CONTEXT_15M[symbol] = parsed_ctx
                 m['st_context_15m_ts'] = now_ts
             elif tf == '5m':
@@ -1145,7 +1147,7 @@ def process_webhook(data):
         # LOGIQUE CONFLUENCE : ST Context 3D + ST Context 4H aligné → flip ST AI 4H
         # Anti-chop : ST Context 3D opposé OU ADX 1D DI opposé dominant → annulé
         # ========================================================================
-        # LOGIQUE CONTEXT4H - ENTREE SECONDAIRE :
+        # LOGIQUE CONTEXT4H - ENTREE PRINCIPALE :
         # ST Context 4H + Bias 1H + Zone ST Context 5m
         # ========================================================================
         if strat in ['context', 'context4h', 'all']:
@@ -1161,7 +1163,7 @@ def process_webhook(data):
                     exp_ctx_c = 'buy' if direction_c == 'LONG' else 'sell'
                     exp_bias_c = 'bull' if direction_c == 'LONG' else 'bear'
 
-                    secondary_ok_c = (
+                    principal_ok_c = (
                         ctx_4h_c == exp_ctx_c
                         and bias_1h_c == exp_bias_c
                         and ctx_5m_c == exp_ctx_c
@@ -1169,7 +1171,7 @@ def process_webhook(data):
 
                     logger.info(
                         f"[CONTEXT4H CHECK] {symbol} dir={direction_c} "
-                        f"ctx4h={ctx_4h_c} bias1h={bias_1h_c} ctx5m={ctx_5m_c} secondary={secondary_ok_c}"
+                        f"ctx4h={ctx_4h_c} bias1h={bias_1h_c} ctx5m={ctx_5m_c} principal={principal_ok_c}"
                     )
 
                     pos_key_c = f"{symbol}_CONTEXT4H"
@@ -1179,12 +1181,12 @@ def process_webhook(data):
                             SCALP_POSITIONS.pop(pos_key_c, None)
                             PYRA_ENABLED.pop(pos_key_c, None)
                             pos_c = None
-                        is_entry_c = bool(secondary_ok_c and (pos_c is None or pos_c.get('signal_type') != 'secondary_ctx4h_bias1h_ctx5m'))
-                        if is_entry_c and should_send(symbol, f"context4h_secondary_{exp_ctx_c}", event_id=event_id, cooldown=14400):
+                        is_entry_c = bool(principal_ok_c and (pos_c is None or pos_c.get('signal_type') != 'principal_ctx4h_bias1h_ctx5m'))
+                        if is_entry_c and should_send(symbol, f"context4h_principal_{exp_ctx_c}", event_id=event_id, cooldown=14400):
                             SCALP_POSITIONS[pos_key_c] = {
                                 'direction': direction_c,
                                 'entry_count': 1,
-                                'signal_type': 'secondary_ctx4h_bias1h_ctx5m',
+                                'signal_type': 'principal_ctx4h_bias1h_ctx5m',
                             }
                             PYRA_ENABLED.pop(pos_key_c, None)
                             pos_c = SCALP_POSITIONS[pos_key_c]
@@ -1194,7 +1196,7 @@ def process_webhook(data):
                     if is_entry_c and pos_c:
                         emoji = "\U0001f7e2" if direction_c == "LONG" else "\U0001f534"
                         send_telegram_with_buttons(
-                            f"{emoji} <b>[CONTEXT4H - ENTREE SECONDAIRE]</b> {symbol}\n"
+                            f"{emoji} <b>[CONTEXT4H - ENTREE]</b> {symbol}\n"
                             f"--------------------\n"
                             f"Direction: {direction_c}\n"
                             f"Price: ${format_price(price)}\n"
@@ -1209,7 +1211,123 @@ def process_webhook(data):
                             journal_direction=direction_c, journal_price=price
                         )
                         track_alert(symbol, 'CONTEXT4H')
-                        logger.info(f"[CONTEXT4H] Entree secondaire: {symbol} {direction_c}")
+                        logger.info(f"[CONTEXT4H] Entree principale: {symbol} {direction_c}")
+
+            # LOGIQUE CONTEXT4H - ENTREE SECONDAIRE :
+            # ST Context 4H CT aligne + ST Context 15m aligne + ST Context LT 1H aligne
+            # + ST Context CT 1H neutre -> flip ST AI 1H
+            # ================================================================
+            if alert_type == 'supertrend' and tf == '1h' and m.get('st_1h_flipped'):
+                st_1h_val_c2 = m.get('st_1h')
+                if st_1h_val_c2 is not None:
+                    direction_c2 = 'LONG' if st_1h_val_c2 == 'buy' else 'SHORT'
+                    exp_c2 = 'buy' if direction_c2 == 'LONG' else 'sell'
+
+                    ctx_4h_ct_c2  = m.get('st_context_4h')
+                    ctx_15m_c2    = ST_CONTEXT_15M.get(symbol)
+                    ctx_lt_1h_c2  = ST_CONTEXT_LT_1H.get(symbol)
+                    ctx_ct_1h_c2  = m.get('st_context_1h')
+
+                    ctx4h_fresh_c2  = bool(ctx_4h_ct_c2) and is_signal_fresh(m.get('st_context_4h_ts'), 12 * 3600)
+                    ctx15m_fresh_c2 = bool(ctx_15m_c2) and is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
+                    lt1h_fresh_c2   = bool(ctx_lt_1h_c2) and is_signal_fresh(m.get('st_context_lt_1h_ts'), 3 * 3600)
+                    ctx1h_fresh_c2  = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+
+                    ct_4h_ok_c2      = ctx4h_fresh_c2 and ctx_4h_ct_c2 == exp_c2
+                    ctx_15m_ok_c2    = ctx15m_fresh_c2 and ctx_15m_c2 == exp_c2
+                    lt_1h_ok_c2      = lt1h_fresh_c2 and ctx_lt_1h_c2 == exp_c2
+                    # "CT 1H neutre" doit etre une lecture recente qui vaut None, pas une
+                    # absence/valeur perimee confondue avec un vrai neutre.
+                    ct_1h_neutral_c2 = ctx1h_fresh_c2 and ctx_ct_1h_c2 is None
+
+                    secondary_ok_c2 = ct_4h_ok_c2 and ctx_15m_ok_c2 and lt_1h_ok_c2 and ct_1h_neutral_c2
+
+                    logger.info(
+                        f"[CONTEXT4H CHECK SECONDAIRE] {symbol} dir={direction_c2} "
+                        f"ctx4h={ctx_4h_ct_c2}/{exp_c2} fresh={ctx4h_fresh_c2} "
+                        f"ctx15m={ctx_15m_c2}/{exp_c2} fresh={ctx15m_fresh_c2} "
+                        f"lt1h={ctx_lt_1h_c2}/{exp_c2} fresh={lt1h_fresh_c2} "
+                        f"ctx1h={ctx_ct_1h_c2} fresh={ctx1h_fresh_c2} neutral={ct_1h_neutral_c2} "
+                        f"secondary={secondary_ok_c2}"
+                    )
+
+                    pos_key_c2 = f"{symbol}_CONTEXT4H"
+                    with STATE_LOCK:
+                        pos_c2 = SCALP_POSITIONS.get(pos_key_c2)
+                        if pos_c2 and pos_c2['direction'] != direction_c2:
+                            SCALP_POSITIONS.pop(pos_key_c2, None)
+                            PYRA_ENABLED.pop(pos_key_c2, None)
+                            pos_c2 = None
+                        is_entry_c2 = bool(secondary_ok_c2 and (pos_c2 is None or pos_c2.get('signal_type') != 'secondary_ctx4h_15m_lt1h_neutral1h'))
+                        if is_entry_c2 and should_send(symbol, f"context4h_secondary_{exp_c2}", event_id=event_id, cooldown=14400):
+                            SCALP_POSITIONS[pos_key_c2] = {
+                                'direction': direction_c2,
+                                'entry_count': 1,
+                                'signal_type': 'secondary_ctx4h_15m_lt1h_neutral1h',
+                            }
+                            PYRA_ENABLED.pop(pos_key_c2, None)
+                            pos_c2 = SCALP_POSITIONS[pos_key_c2]
+                        else:
+                            is_entry_c2 = False
+
+                    if is_entry_c2 and pos_c2:
+                        emoji = "\U0001f7e2" if direction_c2 == "LONG" else "\U0001f534"
+                        send_telegram_with_buttons(
+                            f"{emoji} <b>[CONTEXT4H - ENTREE SECONDAIRE]</b> {symbol}\n"
+                            f"--------------------\n"
+                            f"Direction: {direction_c2}\n"
+                            f"Price: ${format_price(price)}\n"
+                            f"Exchange: {exchange_name.upper()}\n"
+                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"[OK] ST Context 4H CT: {(ctx_4h_ct_c2 or 'N/A').upper()}\n"
+                            f"[OK] ST Context 15m: {(ctx_15m_c2 or 'N/A').upper()}\n"
+                            f"[OK] ST Context LT 1H: {(ctx_lt_1h_c2 or 'N/A').upper()}\n"
+                            f"[OK] ST Context CT 1H: NEUTRE\n"
+                            f"[OK] Flip ST AI 1H: {st_1h_val_c2.upper()}\n"
+                            f"{get_market_context_info()}",
+                            f"{symbol}_CONTEXT4H",
+                            journal_symbol=symbol, journal_strategy='CONTEXT4H',
+                            journal_direction=direction_c2, journal_price=price
+                        )
+                        track_alert(symbol, 'CONTEXT4H')
+                        logger.info(f"[CONTEXT4H] Entree secondaire: {symbol} {direction_c2}")
+
+            # LOGIQUE CONTEXT4H - PYRAMIDING :
+            # Nouvelle zone ST Context 15m dans le sens de la position ouverte
+            # Cooldown 4H, necessite activation manuelle (bouton Telegram)
+            # ================================================================
+            if alert_type == 'st_context' and tf == '15m':
+                ctx_15m_pyra = ST_CONTEXT_15M.get(symbol)
+                if ctx_15m_pyra is not None:
+                    direction_pyra_c4h = 'LONG' if ctx_15m_pyra == 'buy' else 'SHORT'
+                    pos_key_c3 = f"{symbol}_CONTEXT4H"
+                    with STATE_LOCK:
+                        pos_c3 = SCALP_POSITIONS.get(pos_key_c3)
+                        is_pyra_c4h = bool(
+                            pos_c3 and pos_c3['direction'] == direction_pyra_c4h
+                            and ctx15m_zone_changed_this_call
+                            and PYRA_ENABLED.get(pos_key_c3, False)
+                        )
+                        if is_pyra_c4h and should_send(symbol, f"context4h_pyra_{ctx_15m_pyra}", event_id=event_id, cooldown=14400):
+                            pos_c3['entry_count'] += 1
+                            entry_count_c4h = pos_c3['entry_count']
+                        else:
+                            is_pyra_c4h = False
+
+                    if is_pyra_c4h:
+                        emoji = "\U0001f7e2" if direction_pyra_c4h == "LONG" else "\U0001f534"
+                        send_telegram_ttmtf(
+                            f"{emoji} <b>[CONTEXT4H - PYRAMIDING #{entry_count_c4h}]</b> {symbol}\n"
+                            f"--------------------\n"
+                            f"Direction: {direction_pyra_c4h}\n"
+                            f"Price: ${format_price(price)}\n"
+                            f"Exchange: {exchange_name.upper()}\n"
+                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"[OK] Nouvelle zone ST Context 15m: {ctx_15m_pyra.upper()}\n"
+                            f"{get_market_context_info()}"
+                        )
+                        track_alert(symbol, 'CONTEXT4H')
+                        logger.info(f"[CONTEXT4H] Pyramiding #{entry_count_c4h}: {symbol} {direction_pyra_c4h}")
 
         # ========================================================================
         # ========================================================================

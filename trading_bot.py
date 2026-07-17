@@ -36,7 +36,7 @@ CONFIG = {
         'LINK/USDT':   {'exchange': 'okx', 'scalp': False},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': True},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': False},
-        'ONDO/USDT':   {'exchange': 'okx', 'scalp': False},
+        'ONDO/USDT':   {'exchange': 'okx', 'scalp': True},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False},
         'SOL/USDT':    {'exchange': 'okx', 'scalp': True},
         'SUI/USDT':    {'exchange': 'okx', 'scalp': True},

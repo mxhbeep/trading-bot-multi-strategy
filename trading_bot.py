@@ -49,7 +49,7 @@ CONFIG = {
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
     'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),  # legacy
     'SCALP_BOT_TOKEN': os.environ.get('SCALP_BOT_TOKEN', ''),
-    'NTFY_TOPIC': os.environ.get('NTFY_TOPIC', ''),
+    'NTFY_TOPIC': os.environ.get('NTFY_TOPIC', 'maxence-trading-3f8a72'),
     'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
     'JOURNAL_BOT_URL': os.environ.get('JOURNAL_BOT_URL', ''),  # ex: https://journal-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
@@ -275,114 +275,238 @@ def get_market_context_info() -> str:
     eth = ctx_str('ETH/USDT')
     return f"\n📊 BTC: {btc} | ETH: {eth}"
 
+def strip_html(text: str) -> str:
+    """Return plain text for notification channels that do not support HTML."""
+    import re
+    return re.sub(r'<[^>]+>', '', str(text or '')).strip()
+
+
+def notification_title_from_message(msg: str, fallback: str = "Trading Bot") -> str:
+    lines = [strip_html(line).strip() for line in str(msg or '').splitlines() if strip_html(line).strip()]
+    if not lines:
+        return fallback
+    title = lines[0].replace('[', '').replace(']', '').replace('*', '').strip()
+    return title[:80] or fallback
+
+
+def notification_body_for_ntfy(msg: str, max_chars: int = 700) -> str:
+    body = strip_html(msg)
+    if len(body) <= max_chars:
+        return body
+    return body[:max_chars - 3].rstrip() + "..."
+
+
+def notification_tags_from_text(text: str):
+    plain = strip_html(text).lower()
+    if 'take profit' in plain or 'tp' in plain:
+        return ['tada']
+    if 'stop loss' in plain or 'sl' in plain:
+        return ['warning']
+    if 'short' in plain or 'sell' in plain:
+        return ['chart_with_downwards_trend']
+    if 'long' in plain or 'buy' in plain:
+        return ['chart_with_upwards_trend']
+    return ['chart_with_upwards_trend']
+
+
+class NotificationChannel:
+    name = 'base'
+
+    def send(self, title: str, message: str, priority=5, tags=None, **kwargs) -> bool:
+        raise NotImplementedError
+
+
+class TelegramChannel(NotificationChannel):
+    name = 'telegram'
+
+    def __init__(self, token_getter, chat_getter, label='Telegram'):
+        self.token_getter = token_getter
+        self.chat_getter = chat_getter
+        self.label = label
+
+    def send(self, title: str, message: str, priority=5, tags=None, reply_markup=None, **kwargs) -> bool:
+        token = self.token_getter()
+        chat = self.chat_getter()
+        if not token or not chat:
+            logger.warning(f"Telegram non configure ({self.label})")
+            return False
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {'chat_id': chat, 'text': message, 'parse_mode': 'HTML'}
+        if reply_markup:
+            payload['reply_markup'] = reply_markup
+
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                logger.info(f"Message {self.label} envoye")
+                return True
+            if resp.status_code == 429:
+                retry_after = resp.json().get('parameters', {}).get('retry_after', 30)
+                logger.warning(f"Telegram rate limit ({self.label}) - retry after {retry_after}s")
+                time.sleep(retry_after)
+                resp = requests.post(url, json=payload, timeout=10)
+                if resp.status_code == 200:
+                    logger.info(f"Message {self.label} envoye apres retry")
+                    return True
+            logger.error(f"Telegram erreur HTTP {resp.status_code} ({self.label}): {resp.text[:200]}")
+            return False
+        except Exception as e:
+            logger.error(f"Erreur Telegram ({self.label}): {e}")
+            return False
+
+
+class NtfyChannel(NotificationChannel):
+    name = 'ntfy'
+
+    def __init__(self, topic_getter):
+        self.topic_getter = topic_getter
+
+    def send(self, title: str, message: str, priority=5, tags=None, **kwargs) -> bool:
+        topic = str(self.topic_getter() or '').strip()
+        if not topic:
+            return False
+        url = topic if topic.startswith(('http://', 'https://')) else f"https://ntfy.sh/{topic}"
+        headers = {
+            'Title': strip_html(title)[:120] or 'Trading Bot',
+            'Priority': str(priority),
+        }
+        if tags:
+            headers['Tags'] = ','.join(tags) if isinstance(tags, (list, tuple)) else str(tags)
+        try:
+            resp = requests.post(
+                url,
+                data=notification_body_for_ntfy(message).encode('utf-8'),
+                headers=headers,
+                timeout=10,
+            )
+            if 200 <= resp.status_code < 300:
+                logger.info("ntfy envoye")
+                return True
+            logger.warning(f"ntfy erreur: {resp.status_code} {resp.text[:200]}")
+            return False
+        except Exception as e:
+            logger.error(f"ntfy error: {e}")
+            return False
+
+
+class NotificationManager:
+    def __init__(self):
+        self.channels = {}
+
+    def register(self, name: str, channel: NotificationChannel):
+        self.channels[name] = channel
+
+    def send(self, title: str, message: str, priority=5, tags=None, channels=None, **kwargs):
+        results = {}
+        for name in (channels or list(self.channels.keys())):
+            channel = self.channels.get(name)
+            if not channel:
+                continue
+            results[name] = channel.send(title, message, priority=priority, tags=tags, **kwargs)
+        return results
+
+
+NOTIFICATIONS = NotificationManager()
+NOTIFICATIONS.register(
+    'telegram_alerts',
+    TelegramChannel(
+        lambda: CONFIG.get('TELEGRAM_BOT_TOKEN', ''),
+        lambda: CONFIG.get('TELEGRAM_CHAT_ID', ''),
+        label='Telegram',
+    ),
+)
+NOTIFICATIONS.register(
+    'telegram_scalp',
+    TelegramChannel(
+        lambda: CONFIG.get('SCALP_BOT_TOKEN', '') or CONFIG.get('TELEGRAM_BOT_TOKEN', ''),
+        lambda: CONFIG.get('TELEGRAM_CHAT_ID', ''),
+        label='Scalp Bot',
+    ),
+)
+NOTIFICATIONS.register('ntfy', NtfyChannel(lambda: CONFIG.get('NTFY_TOPIC', '')))
+
+
+def send_notification(title: str, message: str, priority=5, tags=None,
+                      telegram=True, ntfy=True, telegram_channel='telegram_alerts',
+                      reply_markup=None):
+    channels = []
+    if telegram:
+        channels.append(telegram_channel)
+    if ntfy:
+        channels.append('ntfy')
+    if tags is None:
+        tags = notification_tags_from_text(f"{title}\n{message}")
+    return NOTIFICATIONS.send(title, message, priority=priority, tags=tags,
+                              channels=channels, reply_markup=reply_markup)
+
+
 def send_bark(title: str, body: str, group: str = "TradingBot"):
-    """Legacy — remplacé par send_ntfy."""
+    """Legacy wrapper kept for compatibility."""
     send_ntfy(title, body)
 
+
 def send_telegram_scalp(msg):
-    """Envoie une alerte sur le bot Telegram dédié SCALP."""
-    token = CONFIG.get('SCALP_BOT_TOKEN', '')
-    if not token:
-        send_telegram(msg)  # fallback sur le bot principal
-        return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        resp = requests.post(url, json={
-            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
-            'text': msg,
-            'parse_mode': 'HTML'
-        }, timeout=10)
-        if resp.status_code == 200:
-            logger.info("✅ Message Scalp Bot envoyé")
-        else:
-            logger.warning(f"⚠️ Scalp Bot erreur: {resp.status_code}")
-            send_telegram(msg)  # fallback
-    except Exception as e:
-        logger.error(f"Scalp Bot error: {e}")
-        send_telegram(msg)  # fallback
+    """Envoie une alerte sur le bot Telegram dedie SCALP + ntfy."""
+    result = send_notification(
+        notification_title_from_message(msg, 'Scalp Bot'),
+        msg,
+        priority=5,
+        telegram=True,
+        ntfy=True,
+        telegram_channel='telegram_scalp',
+    )
+    if not result.get('telegram_scalp'):
+        send_telegram(msg, ntfy=False)
+
 
 def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None,
                                journal_symbol=None, journal_strategy=None,
                                journal_direction=None, journal_price=None):
-    """Envoie un message Telegram avec boutons Pyramiding / Ignorer / Journal."""
-    tok  = token   or CONFIG.get('TELEGRAM_BOT_TOKEN', '')
-    chat = chat_id or CONFIG.get('TELEGRAM_CHAT_ID', '')
-    if not tok or not chat:
-        return
-    try:
-        # Ligne 1 : Pyramiding + Ignorer
-        row1 = [
-            {"text": "📈 Activer pyramiding", "callback_data": f"pyra_on:{callback_key}"},
-            {"text": "❌ Ignorer",             "callback_data": f"pyra_off:{callback_key}"},
-        ]
-        # Ligne 2 : bouton Journal (si les infos sont disponibles)
-        rows = [row1]
-        if journal_symbol and journal_strategy and journal_direction and journal_price is not None:
-            # Encode les données du trade dans le callback_data
-            # Format : "journal_log:{symbol}|{strategy}|{direction}|{price}"
-            sym_safe = str(journal_symbol).replace('|', '')
-            jdata = f"journal_log:{sym_safe}|{journal_strategy}|{journal_direction}|{journal_price}"
-            # Telegram limite callback_data à 64 octets — on tronque si nécessaire
-            if len(jdata.encode()) <= 64:
-                rows.append([{"text": "📓 Logger ce trade", "callback_data": jdata}])
-            else:
-                logger.warning(f"[JOURNAL] callback_data trop long ({len(jdata.encode())} octets), bouton ignoré")
+    """Envoie un message Telegram avec boutons Pyramiding / Ignorer / Journal + ntfy."""
+    row1 = [
+        {"text": "Activer pyramiding", "callback_data": f"pyra_on:{callback_key}"},
+        {"text": "Ignorer",             "callback_data": f"pyra_off:{callback_key}"},
+    ]
+    rows = [row1]
+    if journal_symbol and journal_strategy and journal_direction and journal_price is not None:
+        sym_safe = str(journal_symbol).replace('|', '')
+        jdata = f"journal_log:{sym_safe}|{journal_strategy}|{journal_direction}|{journal_price}"
+        if len(jdata.encode()) <= 64:
+            rows.append([{"text": "Logger ce trade", "callback_data": jdata}])
+        else:
+            logger.warning(f"[JOURNAL] callback_data trop long ({len(jdata.encode())} octets), bouton ignore")
 
-        keyboard = {"inline_keyboard": rows}
-        requests.post(
-            f"https://api.telegram.org/bot{tok}/sendMessage",
-            json={"chat_id": chat, "text": msg, "parse_mode": "HTML", "reply_markup": keyboard},
-            timeout=10
-        )
-        logger.info("✅ Message Telegram avec boutons envoyé")
-    except Exception as e:
-        logger.error(f"Telegram buttons error: {e}")
-        send_telegram(msg)  # fallback sans boutons
+    keyboard = {"inline_keyboard": rows}
+    title = notification_title_from_message(msg)
+
+    if token or chat_id:
+        temp = TelegramChannel(lambda: token or '', lambda: chat_id or '', label='Telegram custom')
+        telegram_ok = temp.send(title, msg, reply_markup=keyboard)
+        send_notification(title, msg, telegram=False, ntfy=True)
+        return telegram_ok
+
+    result = send_notification(
+        title,
+        msg,
+        priority=5,
+        telegram=True,
+        ntfy=True,
+        telegram_channel='telegram_alerts',
+        reply_markup=keyboard,
+    )
+    return bool(result.get('telegram_alerts'))
 
 
 def send_telegram_ttmtf(msg):
-    """Envoie une alerte sur le bot @TTMTF_bot (PULSE + CONFLUENCE + TREND)."""
-    token = CONFIG.get('TELEGRAM_BOT_TOKEN', '')
-    if not token:
-        send_telegram(msg)  # fallback
-        return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        resp = requests.post(url, json={
-            'chat_id': CONFIG['TELEGRAM_CHAT_ID'],
-            'text': msg,
-            'parse_mode': 'HTML'
-        }, timeout=10)
-        if resp.status_code != 200:
-            logger.warning(f'⚠️ TTMTF Bot erreur: {resp.status_code}')
-            send_telegram(msg)  # fallback
-        else:
-            logger.info('✅ Message TTMTF Bot envoyé')
-    except Exception as e:
-        logger.error(f'TTMTF Bot error: {e}')
-        send_telegram(msg)  # fallback
+    """Envoie une alerte trading sur le bot Telegram principal + ntfy."""
+    return send_telegram(msg)
 
-def send_ntfy(title: str, body: str):
-    """Envoie une notification via ntfy.sh (fonctionne sans VPN en Chine)."""
-    topic = CONFIG.get('NTFY_TOPIC', '')
-    if not topic:
-        return
-    import re as _re
-    clean_title = _re.sub(r'<[^>]+>', '', title).strip()
-    clean_body  = _re.sub(r'<[^>]+>', '', body).strip()
-    try:
-        r = requests.post(
-            f"https://ntfy.sh/{topic}",
-            data=clean_body.encode('utf-8'),
-            headers={'Title': clean_title.encode('utf-8'), 'Priority': 'high', 'Tags': 'chart_increasing'},
-            timeout=10
-        )
-        if r.status_code == 200:
-            logger.info("✅ ntfy envoyé")
-        else:
-            logger.warning(f"ntfy erreur: {r.status_code} {r.text}")
-    except Exception as e:
-        logger.error(f"ntfy error: {e}")
+
+def send_ntfy(title: str, body: str, priority=5, tags=None):
+    """Envoie uniquement une notification ntfy."""
+    return send_notification(title, body, priority=priority, tags=tags, telegram=False, ntfy=True)
+
 
 def normalize_base_url(url):
     """Normalise une URL en ajoutant https:// si absent."""
@@ -392,38 +516,17 @@ def normalize_base_url(url):
     return url
 
 
-def send_telegram(msg):
-    if not CONFIG['TELEGRAM_BOT_TOKEN'] or not CONFIG['TELEGRAM_CHAT_ID']:
-        logger.warning("⚠️ Telegram non configuré (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID manquants)")
-        return
-    url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/sendMessage"
-    payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'], 'text': msg, 'parse_mode': 'HTML'}
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            logger.info("✅ Message Telegram envoyé")
-        elif resp.status_code == 429:
-            retry_after = resp.json().get('parameters', {}).get('retry_after', 30)
-            logger.warning(f"⚠️ Telegram rate limit — retry after {retry_after}s")
-            time.sleep(retry_after)
-            resp2 = requests.post(url, json=payload, timeout=10)
-            if resp2.status_code == 200:
-                logger.info("✅ Message Telegram envoyé (après retry)")
-            else:
-                logger.error(f"❌ Telegram retry échoué: {resp2.status_code} {resp2.text}")
-        else:
-            logger.error(f"❌ Telegram erreur HTTP {resp.status_code}: {resp.text}")
-    except Exception as e:
-        logger.error(f"❌ Erreur Telegram: {e}")
-    # Envoi parallèle via ntfy
-    if CONFIG.get('NTFY_TOPIC'):
-        try:
-            import re as _re
-            lines = [l.strip() for l in msg.split('\n') if l.strip()]
-            title = _re.sub(r'<[^>]+>', '', lines[0]).strip() if lines else "TradingBot"
-            threading.Thread(target=send_ntfy, args=(title, msg), daemon=True).start()
-        except Exception as e:
-            logger.error(f"ntfy dispatch: {e}")
+def send_telegram(msg, ntfy=True):
+    result = send_notification(
+        notification_title_from_message(msg),
+        msg,
+        priority=5,
+        tags=notification_tags_from_text(msg),
+        telegram=True,
+        ntfy=ntfy,
+        telegram_channel='telegram_alerts',
+    )
+    return bool(result.get('telegram_alerts'))
 
 
 def send_info(msg):
@@ -527,7 +630,7 @@ def send_weekly_report():
         msg += "📈 <b>Par asset:</b> Aucune alerte cette semaine\n"
 
     msg += f"\n⏰ {now.strftime('%d/%m/%Y %H:%M')} (Taiwan)"
-    send_telegram(msg)
+    send_info(msg)
     logger.info("📊 Rapport hebdomadaire envoyé")
 
     WEEKLY_STATS.clear()
@@ -708,7 +811,7 @@ def tv_alert_watchdog():
                 missing.append(f"  • TF {tf.upper()}: dernier reçu il y a {age_h:.1f}H")
         if missing:
             details = "\n".join(missing)
-            send_telegram(
+            send_info(
                 "🚨 <b>[ALERTE] Webhooks TradingView manquants</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 f"{details}\n\n"
@@ -717,19 +820,8 @@ def tv_alert_watchdog():
             logger.warning(f"[TV WATCHDOG] Alertes manquantes: {missing}")
 
 def heartbeat_scheduler():
-    interval = max(300, int(CONFIG['HEARTBEAT_INTERVAL_SECONDS']))
-    logger.info(f"💓 Heartbeat scheduler démarré (interval={interval}s)")
-    while True:
-        time.sleep(interval)
-        redis_status = "✅" if REDIS_CLIENT else "⚠️ non dispo"
-        msg = (
-            "💓 <b>[BOT HEARTBEAT]</b>\n"
-            f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n"
-            f"📊 Assets: {len(CONFIG['SYMBOLS'])}\n"
-            f"🧠 State momentum: {len(MOMENTUM_STATE)}\n"
-            f"💾 Redis: {redis_status}"
-        )
-        send_telegram(msg)
+    logger.info("Heartbeat Telegram desactive")
+    return
 
 # ============================================================================ #
 # UTILITAIRES
@@ -978,6 +1070,9 @@ def process_webhook(data):
         LAST_WEBHOOK_TS[tf] = time.time()
         audit_log(data, status="reçu")
         event_id = build_event_id(data, symbol, strat, tf, alert_type, val)
+        # Defaut de securite : toujours defini, meme si le bloc de mise a jour
+        # ST AI 15m (gate par strat) ne s'execute pas pour cette alerte.
+        st_ai_15m_flipped_this_call = False
 
         if symbol not in CONFIG['SYMBOLS']:
             logger.info(f"⏭️ {symbol} non dans la watchlist")
@@ -1106,7 +1201,7 @@ def process_webhook(data):
         # ========================================================================
         # MISE À JOUR DES ÉTATS (ST AI, relai Tapbit, guards)
         # ========================================================================
-        if strat in ['momentum', 'context', 'scalp', 'all']:
+        if strat in ['momentum', 'context', 'scalp', 'pulse', 'all']:
             m = MOMENTUM_STATE[symbol]
 
             if alert_type == 'supertrend' and tf == '1h':
@@ -1138,7 +1233,8 @@ def process_webhook(data):
                 prev_15m = m.get('st_ai_15m')
                 st_15m_val = parse_supertrend_value(val)
                 m['st_ai_15m'] = st_15m_val
-                if prev_15m and st_15m_val and st_15m_val != prev_15m:
+                st_ai_15m_flipped_this_call = bool(prev_15m and st_15m_val and st_15m_val != prev_15m)
+                if st_ai_15m_flipped_this_call:
                     m['last_st_15m'] = prev_15m  # garde la valeur précédente pour le guard
                 ST_AI_15M[symbol] = st_15m_val
 
@@ -1353,6 +1449,10 @@ def process_webhook(data):
                     opp_ctx = 'sell' if direction_p == 'LONG' else 'buy'
                     ctx_15m_p = ST_CONTEXT_15M.get(symbol)
                     ctx_15m_fresh = bool(ctx_15m_p) and is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
+                    # ST AI 1H : condition non-bloquante, sert uniquement a marquer l'alerte
+                    # comme "haute qualite" quand elle est alignee. N'empeche jamais l'entree.
+                    st_1h_v = m.get('st_1h')
+                    st_1h_quality_ok = st_1h_v == exp_ctx
 
                     ctx_5m_ok = ctx_5m_p == exp_ctx
                     bias_4h_ok = bias_4h_v == exp_bias
@@ -1370,7 +1470,7 @@ def process_webhook(data):
                         f"[PULSE CHECK] {symbol} dir={direction_p} "
                         f"ctx5m={ctx_5m_p} bias4h={bias_4h_v} bias1h={bias_1h_v} "
                         f"st4h={st_4h_v} lt5m={ctx_lt_5m_p} ctx15m={ctx_15m_p} "
-                        f"ctx15m_fresh={ctx_15m_fresh} "
+                        f"ctx15m_fresh={ctx_15m_fresh} st1h_quality={st_1h_quality_ok} "
                         f"primary={primary_ok} secondary={secondary_ok}"
                     )
                     if not all_ok:
@@ -1412,9 +1512,14 @@ def process_webhook(data):
                             if signal_type_p == 'principal'
                             else f"[OK] ST AI 4H: {(st_4h_v or 'N/A').upper()}\n"
                         )
+                        quality_txt = (
+                            "\u2b50 <b>ALERTE HAUTE QUALITE</b> (ST AI 1H aligne)\n\n"
+                            if st_1h_quality_ok else ""
+                        )
                         send_telegram_with_buttons(
                             f"{emoji} <b>{title}</b> {symbol}\n"
                             f"--------------------\n"
+                            f"{quality_txt}"
                             f"Direction: {direction_p}\n"
                             f"Price: ${format_price(price)}\n"
                             f"Exchange: {exchange_name.upper()}\n"
@@ -1506,6 +1611,72 @@ def process_webhook(data):
                             # Consomme le guard seulement une fois le pyramiding reellement declenche :
                             # tant qu'il est refuse (cooldown/bouton/bias/anti-chop), le flip reste disponible.
                             m['last_st_15m'] = st_15m_pu
+
+            # Entree troisieme PULSE :
+            # Bias 4H + ST AI 4H + Zone ST Context 15m alignes, sur flip ST AI 15m.
+            # ================================================================
+            if alert_type == 'supertrend' and tf == '15m' and st_ai_15m_flipped_this_call:
+                st_15m_val_p3 = m.get('st_ai_15m')
+                if st_15m_val_p3 is not None:
+                    direction_p3 = 'LONG' if st_15m_val_p3 == 'buy' else 'SHORT'
+                    exp_p3 = 'buy' if direction_p3 == 'LONG' else 'sell'
+                    exp_bias_p3 = 'bull' if direction_p3 == 'LONG' else 'bear'
+
+                    bias_4h_p3 = m.get('bias_4h')
+                    st_4h_p3 = m.get('st_4h') or m.get('st_ai_4h')
+                    ctx_15m_p3 = ST_CONTEXT_15M.get(symbol)
+                    ctx_15m_fresh_p3 = bool(ctx_15m_p3) and is_signal_fresh(m.get('st_context_15m_ts'), 45 * 60)
+
+                    bias_4h_ok_p3 = bias_4h_p3 == exp_bias_p3
+                    st_4h_ok_p3 = st_4h_p3 == exp_p3
+                    ctx_15m_ok_p3 = ctx_15m_fresh_p3 and ctx_15m_p3 == exp_p3
+                    third_ok = bias_4h_ok_p3 and st_4h_ok_p3 and ctx_15m_ok_p3
+
+                    logger.info(
+                        f"[PULSE CHECK TROISIEME] {symbol} dir={direction_p3} "
+                        f"bias4h={bias_4h_p3}/{exp_bias_p3} st4h={st_4h_p3}/{exp_p3} "
+                        f"ctx15m={ctx_15m_p3}/{exp_p3} fresh={ctx_15m_fresh_p3} third_ok={third_ok}"
+                    )
+
+                    pos_key_p3 = f"{symbol}_PULSE"
+                    with STATE_LOCK:
+                        pos_p3 = SCALP_POSITIONS.get(pos_key_p3)
+                        if pos_p3 and pos_p3['direction'] != direction_p3:
+                            SCALP_POSITIONS.pop(pos_key_p3, None)
+                            PYRA_ENABLED.pop(pos_key_p3, None)
+                            pos_p3 = None
+                        is_entry_p3 = bool(third_ok and (pos_p3 is None or pos_p3.get('signal_type') != 'troisieme'))
+                        if is_entry_p3 and should_send(symbol, f"pulse_entry_troisieme_{exp_p3}", event_id=event_id, cooldown=3600):
+                            SCALP_POSITIONS[pos_key_p3] = {
+                                'direction': direction_p3,
+                                'entry_count': 1,
+                                'signal_type': 'troisieme',
+                            }
+                            PYRA_ENABLED.pop(pos_key_p3, None)
+                            pos_p3 = SCALP_POSITIONS[pos_key_p3]
+                        else:
+                            is_entry_p3 = False
+
+                    if is_entry_p3 and pos_p3:
+                        emoji = "\U0001f7e2" if direction_p3 == "LONG" else "\U0001f534"
+                        send_telegram_with_buttons(
+                            f"{emoji} <b>[PULSE - ENTREE TROISIEME]</b> {symbol}\n"
+                            f"--------------------\n"
+                            f"Direction: {direction_p3}\n"
+                            f"Price: ${format_price(price)}\n"
+                            f"Exchange: {exchange_name.upper()}\n"
+                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"[OK] Bias 4H: {(bias_4h_p3 or 'N/A').upper()}\n"
+                            f"[OK] ST AI 4H: {(st_4h_p3 or 'N/A').upper()}\n"
+                            f"[OK] Zone ST Context 15m: {(ctx_15m_p3 or 'N/A').upper()}\n"
+                            f"[OK] Flip ST AI 15m: {st_15m_val_p3.upper()}\n"
+                            f"{get_market_context_info()}",
+                            f"{symbol}_PULSE",
+                            journal_symbol=symbol, journal_strategy='PULSE',
+                            journal_direction=direction_p3, journal_price=price
+                        )
+                        track_alert(symbol, 'PULSE')
+                        logger.info(f"[PULSE] Entree troisieme: {symbol} {direction_p3}")
 
         # Stocker ST AI 3H pour sync_scalp
         # Stocker ST AI 4H pour sync_scalp
@@ -2201,7 +2372,7 @@ def send_market_sentiment():
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}"
         )
-        send_telegram(msg)
+        send_info(msg)
         logger.info(f"[SENTIMENT] 2D: {pct_2d}% bull | 4H: {pct_4h}% bull")
     except Exception as e:
         logger.error(f"[SENTIMENT] Erreur: {e}")
@@ -2239,8 +2410,7 @@ def startup():
         scheduler_thread = threading.Thread(target=weekly_report_scheduler, daemon=True)
         scheduler_thread.start()
 
-        heartbeat_thread = threading.Thread(target=heartbeat_scheduler, daemon=True)
-        heartbeat_thread.start()
+        logger.info("Heartbeat Telegram desactive")
         # Configurer le webhook Telegram pour les boutons inline
         try:
             tok = CONFIG.get('TELEGRAM_BOT_TOKEN', '')
@@ -2262,7 +2432,7 @@ def startup():
                 logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')
                 logger.warning('⚠️ Les boutons Telegram (pyramiding, journal) ne fonctionneront PAS')
                 # Envoyer un avertissement sur Telegram
-                send_telegram('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont désactivés.\nConfigurer PUBLIC_BASE_URL sur Railway.')
+                send_info('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont désactivés.\nConfigurer PUBLIC_BASE_URL sur Railway.')
         except Exception as e:
             logger.warning(f'⚠️ Telegram webhook setup: {e}')
         bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)

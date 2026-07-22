@@ -2106,7 +2106,7 @@ def update_indicators_for_symbol(symbol):
             return
 
         # Calculs
-        bias_1h  = calc_bias_okx(df_1h, ema_len=8, sma_len=20)
+        bias_1h  = calc_bias_okx(df_1h, ema_len=13, sma_len=30)
         df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
         bias_2h  = calc_bias_okx(df_2h, ema_len=13, sma_len=30) if df_2h is not None else None
         bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)

@@ -452,12 +452,31 @@ def send_bark(title: str, body: str, group: str = "TradingBot"):
     send_ntfy(title, body)
 
 
+def sanitize_scalp_notification(msg: str) -> str:
+    """Retire les emojis et normalise le titre directionnel des alertes scalp."""
+    import re
+    cleaned = re.sub(r'[^\x00-\x7F\u00C0-\u024F\n\r\t]', '', str(msg or ''))
+    lines = [re.sub(r'^\?+\s*', '', line.strip()) for line in cleaned.splitlines() if line.strip()]
+    text = '\n'.join(lines)
+    direction_match = re.search(r'\b(LONG|SHORT)\b', text, re.IGNORECASE)
+    symbol_match = re.search(r'\b[A-Z0-9]+/USDT\b', text, re.IGNORECASE)
+    if lines and direction_match:
+        direction = direction_match.group(1).upper()
+        symbol = f" {symbol_match.group(0).upper()}" if symbol_match else ''
+        suffix = ' - PYRAMIDING' if 'PYRAMIDING' in text.upper() else ''
+        lines[0] = f"<b>SCALP {direction}{suffix}</b>{symbol}"
+    return '\n'.join(lines)
+
+
 def send_telegram_scalp(msg):
     """Envoie une alerte sur le bot Telegram dedie SCALP + ntfy."""
+    msg = sanitize_scalp_notification(msg)
+    direction = 'SHORT' if 'SHORT' in msg.upper() else 'LONG'
     result = send_notification(
-        notification_title_from_message(msg, 'Scalp Bot'),
+        f'SCALP {direction}',
         msg,
         priority=5,
+        tags=[],
         telegram=True,
         ntfy=True,
         telegram_channel='telegram_scalp',

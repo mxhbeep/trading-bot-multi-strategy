@@ -591,14 +591,14 @@ def send_start_notification():
         "📋 <b>STRATEGIES:</b>\n\n"
         
         "1️⃣ <b>CONTEXT 4H</b>\n"
-        "   • Principale: ST Context 4H + Bias 1H + Zone ST Context 10m\n"
+        "   • Principale: ST Context 4H + Bias 1H + Zone ST Context 5m, bonus 10m\n"
         "   • Secondaire: ST Context 4H + ST Context 30m + LT 1H + CT 1H neutre sur flip ST AI 1H\n"
         "   • Pyramiding: nouvelle zone ST Context 30m / Cooldown 4H\n\n"
         "2️⃣ <b>PULSE</b>\n"
-        "   • Principale: Bias 6H + Bias 2H + Zone ST Context 10m\n"
-        "   • Secondaire: ST AI 6H + Bias 2H + Zone ST Context 10m\n"
+        "   • Principale: Bias 6H + Bias 2H + Zone ST Context 5m, bonus 10m\n"
+        "   • Secondaire: ST AI 6H + Bias 2H + Zone ST Context 5m, bonus 10m\n"
         "   • Troisieme: Bias 6H + ST AI 6H + Zone ST Context 30m sur flip ST AI 30m\n"
-        "   • Anti-chop: LT 10m meme sens OU ST Context 30m oppose\n\n"
+        "   • Anti-chop: LT 5m meme sens OU ST Context 30m oppose\n\n"
         "3️⃣ <b>TREND2D</b>\n"
         "   • Bias 2D (EMA21/SMA55) + ST Context 1H aligné\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) — 44 assets\n\n"
@@ -1330,30 +1330,34 @@ def process_webhook(data):
         # Anti-chop : ST Context 3D opposé OU ADX 1D DI opposé dominant → annulé
         # ========================================================================
         # LOGIQUE CONTEXT4H - ENTREE PRINCIPALE :
-        # ST Context 4H + Bias 1H + Zone ST Context 10m
+        # ST Context 4H + Bias 1H + Zone ST Context 5m
+        # Bonus qualite non-bloquant : Zone ST Context 10m alignee
         # ========================================================================
         if strat in ['context', 'context4h', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            if alert_type in ('st_context', 'bias') and tf in ('4h', '1h', '10m'):
+            if alert_type in ('st_context', 'bias') and tf in ('4h', '1h', '5m', '10m'):
                 ctx_4h_c = m.get('st_context_4h')
                 bias_1h_c = m.get('bias_1h')
+                ctx_5m_c = m.get('st_context_5m')
                 ctx_10m_c = m.get('st_context_10m')
 
-                if ctx_4h_c is not None and ctx_10m_c is not None:
-                    direction_c = 'LONG' if ctx_10m_c == 'buy' else 'SHORT'
+                if ctx_4h_c is not None and ctx_5m_c is not None:
+                    direction_c = 'LONG' if ctx_5m_c == 'buy' else 'SHORT'
                     exp_ctx_c = 'buy' if direction_c == 'LONG' else 'sell'
                     exp_bias_c = 'bull' if direction_c == 'LONG' else 'bear'
+                    ctx10m_bonus_c = ctx_10m_c == exp_ctx_c
 
                     principal_ok_c = (
                         ctx_4h_c == exp_ctx_c
                         and bias_1h_c == exp_bias_c
-                        and ctx_10m_c == exp_ctx_c
+                        and ctx_5m_c == exp_ctx_c
                     )
 
                     logger.info(
                         f"[CONTEXT4H CHECK] {symbol} dir={direction_c} "
-                        f"ctx4h={ctx_4h_c} bias1h={bias_1h_c} ctx10m={ctx_10m_c} principal={principal_ok_c}"
+                        f"ctx4h={ctx_4h_c} bias1h={bias_1h_c} ctx5m={ctx_5m_c} "
+                        f"ctx10m={ctx_10m_c} ctx10m_bonus={ctx10m_bonus_c} principal={principal_ok_c}"
                     )
 
                     pos_key_c = f"{symbol}_CONTEXT4H"
@@ -1363,12 +1367,12 @@ def process_webhook(data):
                             SCALP_POSITIONS.pop(pos_key_c, None)
                             PYRA_ENABLED.pop(pos_key_c, None)
                             pos_c = None
-                        is_entry_c = bool(principal_ok_c and (pos_c is None or pos_c.get('signal_type') != 'principal_ctx4h_bias1h_ctx10m'))
+                        is_entry_c = bool(principal_ok_c and (pos_c is None or pos_c.get('signal_type') != 'principal_ctx4h_bias1h_ctx5m'))
                         if is_entry_c and should_send(symbol, f"context4h_principal_{exp_ctx_c}", event_id=event_id, cooldown=14400):
                             SCALP_POSITIONS[pos_key_c] = {
                                 'direction': direction_c,
                                 'entry_count': 1,
-                                'signal_type': 'principal_ctx4h_bias1h_ctx10m',
+                                'signal_type': 'principal_ctx4h_bias1h_ctx5m',
                             }
                             PYRA_ENABLED.pop(pos_key_c, None)
                             pos_c = SCALP_POSITIONS[pos_key_c]
@@ -1377,6 +1381,10 @@ def process_webhook(data):
 
                     if is_entry_c and pos_c:
                         emoji = "\U0001f7e2" if direction_c == "LONG" else "\U0001f534"
+                        bonus_10m_txt_c = (
+                            "\u2b50 <b>BONUS 10M ALIGNÉ</b>\n"
+                            if ctx10m_bonus_c else ""
+                        )
                         send_telegram_with_buttons(
                             f"{emoji} <b>[CONTEXT4H - ENTREE]</b> {symbol}\n"
                             f"--------------------\n"
@@ -1384,9 +1392,11 @@ def process_webhook(data):
                             f"Price: ${format_price(price)}\n"
                             f"Exchange: {exchange_name.upper()}\n"
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"{bonus_10m_txt_c}"
                             f"[OK] ST Context 4H: {(ctx_4h_c or 'N/A').upper()}\n"
                             f"[OK] Bias 1H: {(bias_1h_c or 'N/A').upper()}\n"
-                            f"[OK] Zone ST Context 10m: {(ctx_10m_c or 'N/A').upper()}\n"
+                            f"[OK] Zone ST Context 5m: {(ctx_5m_c or 'N/A').upper()}\n"
+                            f"[BONUS] Zone ST Context 10m: {(ctx_10m_c or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_CONTEXT4H",
                             journal_symbol=symbol, journal_strategy='CONTEXT4H',
@@ -1514,24 +1524,26 @@ def process_webhook(data):
         # ========================================================================
         # ========================================================================
         # LOGIQUE PULSE :
-        # Entree principale : Bias 6H + Bias 2H + Zone ST Context 10m
-        # Entree secondaire : ST AI 6H + Bias 2H + Zone ST Context 10m
-        # Anti-chop : ST Context LT 10m meme sens ou ST Context 30m oppose => bloque
+        # Entree principale : Bias 6H + Bias 2H + Zone ST Context 5m
+        # Entree secondaire : ST AI 6H + Bias 2H + Zone ST Context 5m
+        # Bonus qualite non-bloquant : Zone ST Context 10m alignee
+        # Anti-chop : ST Context LT 5m meme sens ou ST Context 30m oppose => bloque
         # ========================================================================
         if strat in ['pulse', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            if alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend') and tf in ('10m', '30m', '1h', '2h', '6h'):
+            if alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend') and tf in ('5m', '10m', '30m', '1h', '2h', '6h'):
+                ctx_5m_p = m.get('st_context_5m')
                 ctx_10m_p = m.get('st_context_10m')
-                if ctx_10m_p is not None:
-                    direction_p = 'LONG' if ctx_10m_p == 'buy' else 'SHORT'
+                if ctx_5m_p is not None:
+                    direction_p = 'LONG' if ctx_5m_p == 'buy' else 'SHORT'
                     exp_ctx = 'buy' if direction_p == 'LONG' else 'sell'
                     exp_bias = 'bull' if direction_p == 'LONG' else 'bear'
 
                     bias_6h_v = m.get('bias_6h')
                     bias_2h_v = m.get('bias_2h')
                     st_6h_v = m.get('st_6h') or m.get('st_ai_6h')
-                    ctx_lt_10m_p = ST_CONTEXT_LT_10M.get(symbol) or m.get('st_context_lt_10m')
+                    ctx_lt_5m_p = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
                     opp_ctx = 'sell' if direction_p == 'LONG' else 'buy'
                     ctx_30m_p = ST_CONTEXT_30M.get(symbol)
                     ctx_30m_fresh = bool(ctx_30m_p) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
@@ -1540,30 +1552,32 @@ def process_webhook(data):
                     st_1h_v = m.get('st_1h')
                     st_1h_quality_ok = st_1h_v == exp_ctx
 
-                    ctx_10m_ok = ctx_10m_p == exp_ctx
+                    ctx_5m_ok = ctx_5m_p == exp_ctx
+                    ctx10m_bonus_p = ctx_10m_p == exp_ctx
                     bias_6h_ok = bias_6h_v == exp_bias
                     bias_2h_ok = bias_2h_v == exp_bias
                     st_6h_ok = st_6h_v == exp_ctx
-                    lt10m_block = ctx_lt_10m_p == exp_ctx
+                    lt5m_block = ctx_lt_5m_p == exp_ctx
                     ctx30m_opp_block = ctx_30m_fresh and ctx_30m_p == opp_ctx
 
-                    primary_ok = ctx_10m_ok and bias_6h_ok and bias_2h_ok and not lt10m_block and not ctx30m_opp_block
-                    secondary_ok = ctx_10m_ok and st_6h_ok and bias_2h_ok and not lt10m_block and not ctx30m_opp_block
+                    primary_ok = ctx_5m_ok and bias_6h_ok and bias_2h_ok and not lt5m_block and not ctx30m_opp_block
+                    secondary_ok = ctx_5m_ok and st_6h_ok and bias_2h_ok and not lt5m_block and not ctx30m_opp_block
                     all_ok = primary_ok or secondary_ok
                     signal_type_p = 'principal' if primary_ok else 'secondaire' if secondary_ok else 'blocked'
 
                     logger.info(
                         f"[PULSE CHECK] {symbol} dir={direction_p} "
-                        f"ctx10m={ctx_10m_p} bias6h={bias_6h_v} bias2h={bias_2h_v} "
-                        f"st6h={st_6h_v} lt10m={ctx_lt_10m_p} ctx30m={ctx_30m_p} "
+                        f"ctx5m={ctx_5m_p} ctx10m={ctx_10m_p} ctx10m_bonus={ctx10m_bonus_p} "
+                        f"bias6h={bias_6h_v} bias2h={bias_2h_v} "
+                        f"st6h={st_6h_v} lt5m={ctx_lt_5m_p} ctx30m={ctx_30m_p} "
                         f"ctx30m_fresh={ctx_30m_fresh} st1h_quality={st_1h_quality_ok} "
                         f"primary={primary_ok} secondary={secondary_ok}"
                     )
                     if not all_ok:
-                        if not ctx_10m_ok:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx10m_not_aligned")
-                        elif lt10m_block:
-                            logger.info(f"[PULSE BLOCKED] {symbol} raison=lt10m_same_direction")
+                        if not ctx_5m_ok:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx5m_not_aligned")
+                        elif lt5m_block:
+                            logger.info(f"[PULSE BLOCKED] {symbol} raison=lt5m_same_direction")
                         elif ctx30m_opp_block:
                             logger.info(f"[PULSE BLOCKED] {symbol} raison=ctx30m_opposite")
                         elif not bias_2h_ok:
@@ -1602,6 +1616,10 @@ def process_webhook(data):
                             "\u2b50 <b>ALERTE HAUTE QUALITE</b> (ST AI 1H aligne)\n\n"
                             if st_1h_quality_ok else ""
                         )
+                        bonus_10m_txt_p = (
+                            "\u2b50 <b>BONUS 10M ALIGNÉ</b>\n"
+                            if ctx10m_bonus_p else ""
+                        )
                         send_telegram_with_buttons(
                             f"{emoji} <b>{title}</b> {symbol}\n"
                             f"--------------------\n"
@@ -1612,8 +1630,10 @@ def process_webhook(data):
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                             f"{filter_txt}"
                             f"[OK] Bias 2H: {(bias_2h_v or 'N/A').upper()}\n"
-                            f"[OK] Zone ST Context 10m: {(ctx_10m_p or 'N/A').upper()}\n"
-                            f"[ANTI-CHOP] LT 10m: {(ctx_lt_10m_p or 'NEUTRE').upper()}\n"
+                            f"{bonus_10m_txt_p}"
+                            f"[OK] Zone ST Context 5m: {(ctx_5m_p or 'N/A').upper()}\n"
+                            f"[BONUS] Zone ST Context 10m: {(ctx_10m_p or 'NEUTRE').upper()}\n"
+                            f"[ANTI-CHOP] LT 5m: {(ctx_lt_5m_p or 'NEUTRE').upper()}\n"
                             f"[ANTI-CHOP] ST Context 30m: {(ctx_30m_p or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_PULSE",
@@ -1641,22 +1661,22 @@ def process_webhook(data):
                     last_st_30m_pu = m.get('last_st_30m')
                     bias_6h_pu = m.get('bias_6h')
                     bias_2h_pu = m.get('bias_2h')
-                    ctx_lt_10m_pu = ST_CONTEXT_LT_10M.get(symbol) or m.get('st_context_lt_10m')
+                    ctx_lt_5m_pu = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
                     ctx_30m_pu = ST_CONTEXT_30M.get(symbol)
                     ctx_30m_fresh_pu = bool(ctx_30m_pu) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
 
                     flip_30m_pu = bool(last_st_30m_pu and st_30m_pu == exp_ctx_pu and last_st_30m_pu != st_30m_pu)
                     bias_6h_ok_pu = bias_6h_pu == exp_bias_pu
                     bias_2h_ok_pu = bias_2h_pu == exp_bias_pu
-                    lt10m_block_pu = ctx_lt_10m_pu == exp_ctx_pu
+                    lt5m_block_pu = ctx_lt_5m_pu == exp_ctx_pu
                     ctx30m_opp_block_pu = ctx_30m_fresh_pu and ctx_30m_pu == opp_ctx_pu
-                    antichop_pu = lt10m_block_pu or ctx30m_opp_block_pu
+                    antichop_pu = lt5m_block_pu or ctx30m_opp_block_pu
 
                     logger.info(
                         f"[PULSE PYRA CHECK] {symbol} dir={direction_pu} "
                         f"st30m={st_30m_pu} last_st30m={last_st_30m_pu} "
                         f"bias6h={bias_6h_pu} bias2h={bias_2h_pu} "
-                        f"lt10m={ctx_lt_10m_pu} ctx30m={ctx_30m_pu} ctx30m_fresh={ctx_30m_fresh_pu} "
+                        f"lt5m={ctx_lt_5m_pu} ctx30m={ctx_30m_pu} ctx30m_fresh={ctx_30m_fresh_pu} "
                         f"flip={flip_30m_pu} antichop={antichop_pu}"
                     )
 
@@ -1689,7 +1709,7 @@ def process_webhook(data):
                                 f"[OK] Flip ST AI 30m: {(st_30m_pu or 'N/A').upper()}\n"
                                 f"[OK] Bias 6H: {(bias_6h_pu or 'N/A').upper()}\n"
                                 f"[OK] Bias 2H: {(bias_2h_pu or 'N/A').upper()}\n"
-                                f"[ANTI-CHOP] LT 10m: {(ctx_lt_10m_pu or 'NEUTRE').upper()}\n"
+                                f"[ANTI-CHOP] LT 5m: {(ctx_lt_5m_pu or 'NEUTRE').upper()}\n"
                                 f"[ANTI-CHOP] ST Context 30m: {(ctx_30m_pu or 'NEUTRE').upper()}\n"
                                 f"{get_market_context_info()}"
                             )
@@ -2295,7 +2315,8 @@ def check_prep_alerts():
     PREP_STATE['CONTEXT4H'] = {'LONG': new_long, 'SHORT': new_short}
 
     # ── PREP PULSE ────────────────────────────────────────────────────
-    # Condition : Bias 6H + Bias 2H alignes + ST Context 30m aligne, sans ST Context 1H oppose frais.
+    # Condition : Bias 6H + Bias 2H alignes + ST Context 5m aligne.
+    # ST Context 10m reste un bonus qualite non-bloquant sur l'alerte d'entree.
     new_prep_pulse = {'LONG': set(), 'SHORT': set()}
 
     for symbol, m in state_copy.items():
@@ -2303,17 +2324,13 @@ def check_prep_alerts():
             continue
         bias_6h   = m.get('bias_6h')
         bias_2h   = m.get('bias_2h')
-        ctx_30m   = ST_CONTEXT_30M.get(symbol)
-        ctx_ct_1h = m.get('st_context_1h')
+        ctx_5m    = m.get('st_context_5m')
 
         for direction in ('LONG', 'SHORT'):
             exp = 'bull' if direction == 'LONG' else 'bear'
             exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-            opp_ctx = 'sell' if direction == 'LONG' else 'buy'
             bias_ok  = bias_6h == exp and bias_2h == exp
-            ctx_1h_fresh = bool(ctx_ct_1h) and is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
-            ctx_1h_block = ctx_1h_fresh and ctx_ct_1h == opp_ctx
-            zone_ok  = (ctx_30m == exp_ctx) and not ctx_1h_block
+            zone_ok  = ctx_5m == exp_ctx
             if bias_ok and zone_ok:
                 new_prep_pulse[direction].add(symbol)
 
@@ -2343,7 +2360,7 @@ def bias4h_report_scheduler():
         try:
             with STATE_LOCK:
                 state_copy  = dict(MOMENTUM_STATE)
-                ctx_30m_copy = dict(ST_CONTEXT_30M)
+                ctx_5m_copy = {s: m.get('st_context_5m') for s, m in state_copy.items()}
                 bull_assets = sorted([
                     s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
                     if m.get('bias_6h') == 'bull' and m.get('bias_2h') == 'bull'
@@ -2379,13 +2396,13 @@ def bias4h_report_scheduler():
             ai6h_bias_long_str  = "  ".join(ai6h_bias_long)  if ai6h_bias_long  else "—"
             ai6h_bias_short_str = "  ".join(ai6h_bias_short) if ai6h_bias_short else "—"
 
-            # Bloc 4 : Bias 6H + ST Context 30m alignés
-            bias6h_ctx30m_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('bias_6h') == 'bull' and ctx_30m_copy.get(s) == 'buy'])
-            bias6h_ctx30m_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if m.get('bias_6h') == 'bear' and ctx_30m_copy.get(s) == 'sell'])
-            bias6h_ctx30m_long_str  = "  ".join(bias6h_ctx30m_long)  if bias6h_ctx30m_long  else "—"
-            bias6h_ctx30m_short_str = "  ".join(bias6h_ctx30m_short) if bias6h_ctx30m_short else "—"
+            # Bloc 4 : Bias 6H + ST Context 5m alignés
+            bias6h_ctx5m_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('bias_6h') == 'bull' and ctx_5m_copy.get(s) == 'buy'])
+            bias6h_ctx5m_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
+                                        if m.get('bias_6h') == 'bear' and ctx_5m_copy.get(s) == 'sell'])
+            bias6h_ctx5m_long_str  = "  ".join(bias6h_ctx5m_long)  if bias6h_ctx5m_long  else "—"
+            bias6h_ctx5m_short_str = "  ".join(bias6h_ctx5m_short) if bias6h_ctx5m_short else "—"
 
             msg = (
                 f"📊 <b>[BIAS 6H+2H — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
@@ -2399,9 +2416,9 @@ def bias4h_report_scheduler():
                 f"📈 <b>[ST AI 6H + BIAS 2H]</b>\n"
                 f"🟢 <b>LONG ({len(ai6h_bias_long)})</b> : {ai6h_bias_long_str}\n\n"
                 f"🔴 <b>SHORT ({len(ai6h_bias_short)})</b> : {ai6h_bias_short_str}\n\n"
-                f"📈 <b>[BIAS 6H + ST CONTEXT 30M]</b>\n"
-                f"🟢 <b>LONG ({len(bias6h_ctx30m_long)})</b> : {bias6h_ctx30m_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(bias6h_ctx30m_short)})</b> : {bias6h_ctx30m_short_str}"
+                f"📈 <b>[BIAS 6H + ST CONTEXT 5M]</b>\n"
+                f"🟢 <b>LONG ({len(bias6h_ctx5m_long)})</b> : {bias6h_ctx5m_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(bias6h_ctx5m_short)})</b> : {bias6h_ctx5m_short_str}"
             )
             send_info(msg)
             logger.info(f"[BIAS6H] Rapport envoyé — {len(bull_assets)} bull, {len(bear_assets)} bear")

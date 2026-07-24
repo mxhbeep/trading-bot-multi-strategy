@@ -76,7 +76,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'CONTEXT4H': 0, 'TREND2D': 0, 'PULSE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'CONTEXT4H': 0, 'TREND3D': 0, 'PULSE': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -599,8 +599,8 @@ def send_start_notification():
         "   • Secondaire: ST AI 6H + Bias 2H + Zone ST Context 5m, bonus 10m\n"
         "   • Troisieme: Bias 6H + Zone ST Context 30m sur flip ST AI 30m (ST AI 6H info)\n"
         "   • Anti-chop: LT 5m meme sens OU ST Context 30m oppose\n\n"
-        "3️⃣ <b>TREND2D</b>\n"
-        "   • Bias 2D (EMA21/SMA55) + ST Context 1H aligné\n"
+        "3️⃣ <b>TREND3D</b>\n"
+        "   • Bias 3D (EMA21/SMA55) + ST Context 2H aligné\n"
         "   • Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) — 44 assets\n\n"
 
 
@@ -625,7 +625,7 @@ def send_weekly_report():
     )
     total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_context4h  = sum(s.get('CONTEXT4H', 0)   for s in WEEKLY_STATS.values())
-    total_trend      = sum(s.get('TREND', 0)        for s in WEEKLY_STATS.values())
+    total_trend      = sum(s.get('TREND3D', 0)      for s in WEEKLY_STATS.values())
     total_momentum   = sum(s.get('MOMENTUM', 0)     for s in WEEKLY_STATS.values())
     total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
     total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
@@ -656,7 +656,7 @@ def send_weekly_report():
             if stats.get('MOMENTUM', 0):    details.append(f"M:{stats['MOMENTUM']}")
             if stats.get('CONFLUENCE', 0):  details.append(f"CONF:{stats['CONFLUENCE']}")
             if stats.get('CONTEXT4H', 0):   details.append(f"C4H:{stats['CONTEXT4H']}")
-            if stats.get('TREND', 0):       details.append(f"TR:{stats['TREND']}")
+            if stats.get('TREND3D', 0):     details.append(f"T3D:{stats['TREND3D']}")
             if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
             if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
             if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
@@ -671,24 +671,24 @@ def send_weekly_report():
     WEEKLY_STATS.clear()
     WEEKLY_START = datetime.now(timezone.utc)
     # ========================================================================
-    # LOGIQUE TREND2D : Bias 2D + ST Context 1H aligné → flip ST AI 1H
+    # LOGIQUE TREND3D : Bias 3D + ST Context 2H aligne -> flip ST AI 1H
     # Pyramiding renforcé : ADX 4H DI aligné + flip ST AI 1H + guard
     # Cooldown entrée 4H / Pyramiding 4H
     # ========================================================================
-    if strat in ['trend2d', 'all']:
+    if strat in ['trend3d', 'trend2d', 'all']:
         m = MOMENTUM_STATE[symbol]
 
         if alert_type == 'supertrend' and tf == '1h':
             st_1h_val_t2  = parse_supertrend_value(val)
-            prev_1h_t2    = m.get('st_1h_trend2d')
+            prev_1h_t2    = m.get('st_1h_trend3d')
             flipped_1h_t2 = (st_1h_val_t2 is not None and prev_1h_t2 is not None and st_1h_val_t2 != prev_1h_t2)
-            m['st_1h_trend2d'] = st_1h_val_t2
+            m['st_1h_trend3d'] = st_1h_val_t2
             if flipped_1h_t2 and prev_1h_t2:
-                m['last_st_1h_trend2d'] = prev_1h_t2
+                m['last_st_1h_trend3d'] = prev_1h_t2
 
             if flipped_1h_t2:
-                bias_2d_v    = m.get('bias_2d')
-                ctx_1h_t2       = m.get('st_context_1h')
+                bias_3d_v    = m.get('bias_3d')
+                ctx_2h_t2       = m.get('st_context_2h')
                 adx_4h_t2    = ADX_STATE.get(f'{symbol}_4h', {})
                 di_plus_4h   = adx_4h_t2.get('di_plus', 0)
                 di_minus_4h  = adx_4h_t2.get('di_minus', 0)
@@ -697,29 +697,29 @@ def send_weekly_report():
                 exp_bias_t2  = 'bull' if direction_t2 == 'LONG' else 'bear'
 
                 # Filtres entrée
-                bias_2d_ok  = bias_2d_v == exp_bias_t2
-                ctx_1h_fresh_t2 = is_signal_fresh(m.get('st_context_1h_ts'), 6 * 3600)
-                ctx_1h_ok       = ctx_1h_t2 == st_1h_val_t2 and ctx_1h_fresh_t2
+                bias_3d_ok  = bias_3d_v == exp_bias_t2
+                ctx_2h_fresh_t2 = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
+                ctx_2h_ok       = ctx_2h_t2 == st_1h_val_t2 and ctx_2h_fresh_t2
 
                 # ADX 4H pour pyramiding
                 adx_4h_ok_t2 = (di_plus_4h >= di_minus_4h and direction_t2 == 'LONG') or \
                                (di_minus_4h >= di_plus_4h and direction_t2 == 'SHORT')
 
-                pos_key_t2 = f"{symbol}_TREND2D"
+                pos_key_t2 = f"{symbol}_TREND3D"
                 with STATE_LOCK:
                     pos_t2 = SCALP_POSITIONS.get(pos_key_t2)
                     if pos_t2 and pos_t2['direction'] != direction_t2:
                         SCALP_POSITIONS.pop(pos_key_t2, None)
                         pos_t2 = None; is_entry_t2 = False; is_pyra_t2 = False
                     else:
-                        is_entry_t2 = (bias_2d_ok and ctx_1h_ok and pos_t2 is None)
+                        is_entry_t2 = (bias_3d_ok and ctx_2h_ok and pos_t2 is None)
                         opp_1h_t2   = 'sell' if st_1h_val_t2 == 'buy' else 'buy'
-                        guard_ok_t2 = m.get('last_st_1h_trend2d') == opp_1h_t2
+                        guard_ok_t2 = m.get('last_st_1h_trend3d') == opp_1h_t2
                         is_pyra_t2  = bool(
                             pos_t2 and pos_t2['direction'] == direction_t2
-                            and ctx_1h_ok and adx_4h_ok_t2 and guard_ok_t2
+                            and ctx_2h_ok and adx_4h_ok_t2 and guard_ok_t2
                         )
-                    if is_entry_t2 and should_send(symbol, f"trend2d_entry_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
+                    if is_entry_t2 and should_send(symbol, f"trend3d_entry_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
                         SCALP_POSITIONS[pos_key_t2] = {'direction': direction_t2, 'entry_count': 1}
                         pos_t2 = SCALP_POSITIONS[pos_key_t2]
                     else:
@@ -727,45 +727,45 @@ def send_weekly_report():
 
                 if is_entry_t2 and pos_t2:
                     emoji   = "\U0001f7e2" if direction_t2 == "LONG" else "\U0001f534"
-                    ctx_txt = ctx_1h_t2.upper() if ctx_1h_t2 else "NEUTRE"
+                    ctx_txt = ctx_2h_t2.upper() if ctx_2h_t2 else "NEUTRE"
                     send_telegram_with_buttons(
-                        f"{emoji} <b>[TREND2D - ENTREE]</b> {symbol}\n"
+                        f"{emoji} <b>[TREND3D - ENTREE]</b> {symbol}\n"
                         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                         f"\U0001f4c8 Direction: {direction_t2}\n"
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 2D: {(bias_2d_v or '?').upper()} (EMA21/SMA55)\n"
-                        f"\u2705 ST Context 1H: {ctx_txt} (zone)\n"
+                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA21/SMA55)\n"
+                        f"\u2705 ST Context 2H: {ctx_txt} (zone)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
-                        f"{symbol}_TREND2D"
+                        f"{symbol}_TREND3D"
                     )
-                    track_alert(symbol, 'TREND2D')
-                    logger.info(f"[TREND2D] Entrée: {symbol} {direction_t2}")
+                    track_alert(symbol, 'TREND3D')
+                    logger.info(f"[TREND3D] Entree: {symbol} {direction_t2}")
 
-                elif is_pyra_t2 and PYRA_ENABLED.get(f"{symbol}_TREND2D", False) and should_send(symbol, f"trend2d_pyra_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
+                elif is_pyra_t2 and PYRA_ENABLED.get(f"{symbol}_TREND3D", False) and should_send(symbol, f"trend3d_pyra_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
                     with STATE_LOCK:
                         pos_t2['entry_count'] += 1
                         entry_count_t2 = pos_t2['entry_count']
                     emoji   = "\U0001f7e2" if direction_t2 == "LONG" else "\U0001f534"
-                    ctx_txt = ctx_1h_t2.upper() if ctx_1h_t2 else "NEUTRE"
+                    ctx_txt = ctx_2h_t2.upper() if ctx_2h_t2 else "NEUTRE"
                     send_telegram_ttmtf(
-                        f"{emoji} <b>[TREND2D - PYRAMIDING #{entry_count_t2}]</b> {symbol}\n"
+                        f"{emoji} <b>[TREND3D - PYRAMIDING #{entry_count_t2}]</b> {symbol}\n"
                         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
                         f"\U0001f4c8 Direction: {direction_t2}\n"
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 2D: {(bias_2d_v or '?').upper()} (EMA21/SMA55)\n"
-                        f"\u2705 ST Context 1H: {ctx_txt}\n"
+                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA21/SMA55)\n"
+                        f"\u2705 ST Context 2H: {ctx_txt}\n"
                         f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (PYRAMIDING)\n"
                         f"\U0001f6e1\ufe0f Guard: flip opposé validé"
                         f"{get_market_context_info()}"
                     )
-                    track_alert(symbol, 'TREND2D')
-                    logger.info(f"[TREND2D] Pyramiding #{entry_count_t2}: {symbol} {direction_t2}")
+                    track_alert(symbol, 'TREND3D')
+                    logger.info(f"[TREND3D] Pyramiding #{entry_count_t2}: {symbol} {direction_t2}")
 
     persist_runtime_state()
 
@@ -827,7 +827,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '4h': 6*3600, '6h': 9*3600}
+    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '2h': 4*3600, '4h': 6*3600, '6h': 9*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -1033,7 +1033,7 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_1d': None, 'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
-            'st_context_1h_ts': None, 'st_context_4h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None,
+            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
             'st_1h': None, 'st_4h': None, 'st_6h': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
@@ -1042,6 +1042,7 @@ def init_symbol_states(symbol):
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None,
+            'st_context_2h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
         }
 
@@ -1206,6 +1207,10 @@ def process_webhook(data):
                 m['st_context_1h'] = parsed_ctx
                 m['st_context_1h_ts'] = now_ts
                 logger.info(f"[CTX 1H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
+            elif tf == '2h':
+                m['st_context_2h'] = parsed_ctx
+                m['st_context_2h_ts'] = now_ts
+                logger.info(f"[CTX 2H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
             elif tf == '4h':
                 prev_ctx_4h = m.get('st_context_4h')
                 m['st_context_4h'] = parsed_ctx
@@ -2098,7 +2103,7 @@ def reset_state_symbol(symbol):
         for k in ['', '_1h', '_4h', '_1d']:
             ADX_STATE.pop(f'{symbol}{k}', None)
 
-        for strat in ['PULSE', 'CONTEXT4H', 'TREND2D']:
+        for strat in ['PULSE', 'CONTEXT4H', 'TREND3D']:
             PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 

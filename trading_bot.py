@@ -597,7 +597,7 @@ def send_start_notification():
         "2️⃣ <b>PULSE</b>\n"
         "   • Principale: Bias 6H + Bias 2H + Zone ST Context 5m, bonus 10m\n"
         "   • Secondaire: ST AI 6H + Bias 2H + Zone ST Context 5m, bonus 10m\n"
-        "   • Troisieme: Bias 6H + ST AI 6H + Zone ST Context 30m sur flip ST AI 30m\n"
+        "   • Troisieme: Bias 6H + Zone ST Context 30m sur flip ST AI 30m (ST AI 6H info)\n"
         "   • Anti-chop: LT 5m meme sens OU ST Context 30m oppose\n\n"
         "3️⃣ <b>TREND2D</b>\n"
         "   • Bias 2D (EMA21/SMA55) + ST Context 1H aligné\n"
@@ -1719,7 +1719,8 @@ def process_webhook(data):
                             m['last_st_30m'] = st_30m_pu
 
             # Entree troisieme PULSE :
-            # Bias 6H + ST AI 6H + Zone ST Context 30m alignes, sur flip ST AI 30m.
+            # Bias 6H + Zone ST Context 30m alignes, sur flip ST AI 30m.
+            # ST AI 6H reste affiche en info, mais n'est plus bloquant.
             # ================================================================
             if alert_type == 'supertrend' and tf == '30m' and st_ai_30m_flipped_this_call:
                 st_30m_val_p3 = m.get('st_ai_30m')
@@ -1734,13 +1735,13 @@ def process_webhook(data):
                     ctx_30m_fresh_p3 = bool(ctx_30m_p3) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
 
                     bias_6h_ok_p3 = bias_6h_p3 == exp_bias_p3
-                    st_6h_ok_p3 = st_6h_p3 == exp_p3
+                    st_6h_info_p3 = st_6h_p3 == exp_p3
                     ctx_30m_ok_p3 = ctx_30m_fresh_p3 and ctx_30m_p3 == exp_p3
-                    third_ok = bias_6h_ok_p3 and st_6h_ok_p3 and ctx_30m_ok_p3
+                    third_ok = bias_6h_ok_p3 and ctx_30m_ok_p3
 
                     logger.info(
                         f"[PULSE CHECK TROISIEME] {symbol} dir={direction_p3} "
-                        f"bias6h={bias_6h_p3}/{exp_bias_p3} st6h={st_6h_p3}/{exp_p3} "
+                        f"bias6h={bias_6h_p3}/{exp_bias_p3} st6h_info={st_6h_p3}/{exp_p3} st6h_aligned={st_6h_info_p3} "
                         f"ctx30m={ctx_30m_p3}/{exp_p3} fresh={ctx_30m_fresh_p3} third_ok={third_ok}"
                     )
 
@@ -1773,9 +1774,9 @@ def process_webhook(data):
                             f"Exchange: {exchange_name.upper()}\n"
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                             f"[OK] Bias 6H: {(bias_6h_p3 or 'N/A').upper()}\n"
-                            f"[OK] ST AI 6H: {(st_6h_p3 or 'N/A').upper()}\n"
                             f"[OK] Zone ST Context 30m: {(ctx_30m_p3 or 'N/A').upper()}\n"
                             f"[OK] Flip ST AI 30m: {st_30m_val_p3.upper()}\n"
+                            f"[INFO] ST AI 6H: {(st_6h_p3 or 'N/A').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_PULSE",
                             journal_symbol=symbol, journal_strategy='PULSE',

@@ -502,7 +502,7 @@ def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None,
         {"text": "Ignorer",             "callback_data": f"pyra_off:{callback_key}"},
     ]
     rows = [row1]
-    if journal_symbol and journal_strategy and journal_direction and journal_price is not None:
+    if journal_symbol and journal_strategy and journal_direction and journal_price is not None and CONFIG.get('JOURNAL_BOT_URL'):
         sym_safe = str(journal_symbol).replace('|', '')
         jdata = f"journal_log:{sym_safe}|{journal_strategy}|{journal_direction}|{journal_price}"
         if len(jdata.encode()) <= 64:
@@ -827,7 +827,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'10m': 30*60, '15m': 3600, '30m': 90*60, '1h': 3*3600, '4h': 6*3600, '6h': 9*3600}
+    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '4h': 6*3600, '6h': 9*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -1819,11 +1819,21 @@ def process_webhook(data):
                         'price':    price,
                         'event_id': event_id,
                     }
-                    resp = requests.post(
-                        f"{scalp_url}/webhook",
-                        json=relay_payload,
-                        timeout=3
-                    )
+                    try:
+                        resp = requests.post(
+                            f"{scalp_url}/webhook",
+                            json=relay_payload,
+                            timeout=6
+                        )
+                    except requests.exceptions.Timeout:
+                        # Un seul retry court : le scalpbot peut avoir un cold start
+                        # ou un pic de charge ponctuel, un deuxieme essai suffit souvent.
+                        logger.warning(f"[RELAY] {symbol} {tf} timeout, retry...")
+                        resp = requests.post(
+                            f"{scalp_url}/webhook",
+                            json=relay_payload,
+                            timeout=6
+                        )
                     if 200 <= resp.status_code < 300:
                         try:
                             relay_result = resp.json()

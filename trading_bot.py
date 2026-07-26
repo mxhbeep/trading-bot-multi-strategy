@@ -44,6 +44,38 @@ CONFIG = {
         'UNI/USDT':    {'exchange': 'okx', 'scalp': False},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True},
     },
+
+    # Assets suivis uniquement en radar/info. Ils ne declenchent pas les entrees trade.
+    # FARTCOIN et USELESS recoivent le Bias 1D via TradingView.
+    'RADAR_SYMBOLS': {
+        'ARB/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'ADA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'BCH/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'BNB/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'CHZ/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'CVX/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'DYDX/USDT':     {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'EIGEN/USDT':    {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'ENA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'ETC/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'FARTCOIN/USDT': {'exchange': 'okx', 'bias_1d_source': 'tv'},
+        'FET/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'FIL/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'HBAR/USDT':     {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'LDO/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'ONT/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'PENGU/USDT':    {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'PEPE/USDT':     {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'SAND/USDT':     {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'SKY/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'STX/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'TIA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'USELESS/USDT':  {'exchange': 'okx', 'bias_1d_source': 'tv'},
+        'VIRTUAL/USDT':  {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'XPL/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'ZEC/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'ZEN/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+    },
     
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
@@ -89,14 +121,27 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+def get_tracked_symbols():
+    return set(CONFIG['SYMBOLS']) | set(CONFIG.get('RADAR_SYMBOLS', {}))
+
+def is_trade_symbol(symbol):
+    return symbol in CONFIG['SYMBOLS']
+
+def is_radar_symbol(symbol):
+    return symbol in CONFIG.get('RADAR_SYMBOLS', {})
+
+def get_symbol_config(symbol):
+    return CONFIG['SYMBOLS'].get(symbol) or CONFIG.get('RADAR_SYMBOLS', {}).get(symbol) or {}
+
 @app.route('/')
 def home():
     total_symbols = len(CONFIG['SYMBOLS'])
+    radar_symbols = len(CONFIG.get('RADAR_SYMBOLS', {}))
     okx_count = sum(1 for ex in CONFIG['SYMBOLS'].values() if ex.get('exchange') == 'okx')
     return f"""
     <h1>Trading Bot Multi-Strategy</h1>
     <p>Status: Running</p>
-    <p>Total assets: {total_symbols} | OKX: {okx_count}</p>
+    <p>Trade assets: {total_symbols} | Radar assets: {radar_symbols} | OKX trade: {okx_count}</p>
     <p>Strategies: SAFE + MOMENTUM + CONTEXT</p>
     """
 
@@ -228,7 +273,7 @@ def load_runtime_state():
         ST_CONTEXT_LT_30M.update(payload.get('st_context_lt_30m', {}))
         PYRA_ENABLED.update(payload.get('pyra_enabled', {}))
         # Nettoyer les assets hors watchlist chargés depuis Redis
-        stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in CONFIG['SYMBOLS']]
+        stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
         for s in stale:
             del MOMENTUM_STATE[s]
         if stale:
@@ -884,7 +929,7 @@ def format_tv_symbol(s):
     return s
 
 def get_exchange_for_symbol(symbol):
-    sym_cfg = CONFIG['SYMBOLS'].get(symbol)
+    sym_cfg = get_symbol_config(symbol)
     if not sym_cfg:
         return None
     return exchanges.get(sym_cfg.get('exchange'))
@@ -1036,7 +1081,7 @@ SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_1d': None, 'bias_2d': None, 'bias_3d': None,
+            'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_3d': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
@@ -1127,12 +1172,14 @@ def process_webhook(data):
         st_ai_30m_flipped_this_call = False
         ctx30m_zone_changed_this_call = False
 
-        if symbol not in CONFIG['SYMBOLS']:
+        if symbol not in get_tracked_symbols():
             logger.info(f"⏭️ {symbol} non dans la watchlist")
             audit_log(data, status="ignoré_watchlist")
             return jsonify({'status': 'ignored', 'reason': 'not_in_watchlist'}), 200
 
-        exchange_name = CONFIG['SYMBOLS'][symbol].get('exchange', 'okx')
+        trade_symbol = is_trade_symbol(symbol)
+        radar_only = is_radar_symbol(symbol) and not trade_symbol
+        exchange_name = get_symbol_config(symbol).get('exchange', 'okx')
         init_symbol_states(symbol)
 
         # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
@@ -1159,6 +1206,7 @@ def process_webhook(data):
                 elif tf == '1d':
                     prev_bias_1d = m.get('bias_1d')
                     m['bias_1d'] = bias_val if bias_val != 'neutral' else None
+                    m['bias_1d_ts'] = now_ts
                     logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
                     logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
                 elif tf == '2d':
@@ -1269,6 +1317,11 @@ def process_webhook(data):
             elif tf in ('4h', 'lt_4h'):
                 ST_CONTEXT_LT_4H[symbol] = parsed_ctx_lt
                 m['st_context_lt_4h_ts'] = now_ts
+
+        if radar_only:
+            check_daily_radar_report()
+            persist_runtime_state()
+            return jsonify({'status': 'ok', 'mode': 'radar_only'}), 200
 
         ema200_value = None
         if alert_type == 'ema200' and tf == '1h':
@@ -2077,19 +2130,24 @@ def refresh_indicators():
 
     if symbol_filter:
         symbol = format_tv_symbol(symbol_filter)
-        if symbol not in CONFIG['SYMBOLS']:
+        if symbol not in get_tracked_symbols():
             return jsonify({'error': f'{symbol} non dans la watchlist'}), 404
         symbols = [symbol]
     else:
-        symbols = list(CONFIG['SYMBOLS'].keys())
+        symbols = list(CONFIG['SYMBOLS'].keys()) + list(CONFIG.get('RADAR_SYMBOLS', {}).keys())
 
     def _run():
         logger.info(f"[REFRESH] Calcul forcé pour {len(symbols)} assets...")
         for sym in symbols:
             try:
-                update_indicators_for_symbol(sym)
+                if is_radar_symbol(sym) and not is_trade_symbol(sym):
+                    update_daily_radar_bias(sym)
+                else:
+                    update_indicators_for_symbol(sym)
             except Exception as e:
                 logger.error(f"[REFRESH] {sym}: {e}")
+        persist_runtime_state()
+        check_daily_radar_report()
         logger.info("[REFRESH] Terminé")
 
     threading.Thread(target=_run, daemon=True).start()
@@ -2179,7 +2237,7 @@ def reset_state_symbol(symbol):
         return jsonify({'error': 'unauthorized'}), 401
     """Remet à zéro l'état d'un seul asset. Ex: /reset_state/CVX/USDT"""
     symbol = symbol.upper().replace('-', '/')
-    if symbol not in CONFIG['SYMBOLS']:
+    if symbol not in get_tracked_symbols():
         return jsonify({'status': 'error', 'message': f'{symbol} non trouvé dans la watchlist'}), 404
     with STATE_LOCK:
         MOMENTUM_STATE.pop(symbol, None)
@@ -2371,6 +2429,7 @@ def update_indicators_for_symbol(symbol):
                 if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
                 if bias_3d: MOMENTUM_STATE[symbol]['bias_3d'] = bias_3d
                 MOMENTUM_STATE[symbol]['bias_1d']  = bias_1d
+                MOMENTUM_STATE[symbol]['bias_1d_ts'] = datetime.now(timezone.utc).timestamp()
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 if bias_6h is not None: MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
@@ -2380,6 +2439,79 @@ def update_indicators_for_symbol(symbol):
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
+
+
+def update_daily_radar_bias(symbol):
+    """Met a jour uniquement le Bias 1D des assets radar suivis en info."""
+    cfg = CONFIG.get('RADAR_SYMBOLS', {}).get(symbol, {})
+    if cfg.get('bias_1d_source') == 'tv':
+        return
+    try:
+        df_1d = fetch_ohlcv_okx(symbol, '1d', limit=100)
+        if df_1d is None:
+            logger.info(f"[RADAR] {symbol} bias1d=None reason=fetch_failed")
+            return
+        bias_1d = calc_bias_okx(df_1d, ema_len=13, sma_len=30)
+        with STATE_LOCK:
+            init_symbol_states(symbol)
+            MOMENTUM_STATE[symbol]['bias_1d'] = bias_1d
+            MOMENTUM_STATE[symbol]['bias_1d_ts'] = datetime.now(timezone.utc).timestamp()
+        logger.info(f"[RADAR] {symbol} bias1d={bias_1d}")
+    except Exception as e:
+        logger.error(f"[RADAR] update_daily_radar_bias {symbol}: {e}")
+
+
+def check_daily_radar_report():
+    """Rapport info-only: Bias 1D + ST Context 30m alignes, bloque par LT 30m meme sens."""
+    global PREP_STATE
+    radar_symbols = set(CONFIG.get('RADAR_SYMBOLS', {}))
+    if not radar_symbols:
+        return
+
+    with STATE_LOCK:
+        state_copy = {s: dict(MOMENTUM_STATE.get(s, {})) for s in radar_symbols}
+
+    new_radar = {'LONG': set(), 'SHORT': set()}
+    blocked = {'LONG': set(), 'SHORT': set()}
+
+    for symbol, m in state_copy.items():
+        bias_1d = m.get('bias_1d')
+        ctx_30m = ST_CONTEXT_30M.get(symbol)
+        lt_30m = ST_CONTEXT_LT_30M.get(symbol)
+
+        bias_fresh = bool(bias_1d) and is_signal_fresh(m.get('bias_1d_ts'), 36 * 3600)
+        ctx_fresh = bool(ctx_30m) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+        lt_fresh = bool(lt_30m) and is_signal_fresh(m.get('st_context_lt_30m_ts'), 90 * 60)
+
+        for direction in ('LONG', 'SHORT'):
+            exp_bias = 'bull' if direction == 'LONG' else 'bear'
+            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+            setup_ok = bias_fresh and ctx_fresh and bias_1d == exp_bias and ctx_30m == exp_ctx
+            antichop = lt_fresh and lt_30m == exp_ctx
+            if setup_ok and antichop:
+                blocked[direction].add(symbol)
+            elif setup_ok:
+                new_radar[direction].add(symbol)
+
+    old_radar = PREP_STATE.get('DAILY_RADAR', {'LONG': set(), 'SHORT': set()})
+    if new_radar['LONG'] == old_radar.get('LONG', set()) and new_radar['SHORT'] == old_radar.get('SHORT', set()):
+        return
+
+    lines = ["🔎 <b>[DAILY RADAR]</b>"]
+    if new_radar['LONG']:
+        lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['LONG'])))
+    if new_radar['SHORT']:
+        lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['SHORT'])))
+    if not new_radar['LONG'] and not new_radar['SHORT']:
+        lines.append("• Aucun asset radar aligne")
+    if blocked['LONG'] or blocked['SHORT']:
+        blocked_assets = sorted((blocked['LONG'] | blocked['SHORT']))
+        lines.append("🛡️ Bloques LT30m : " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
+    lines.append(f"⏰ {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
+
+    send_info("\n".join(lines))
+    PREP_STATE['DAILY_RADAR'] = {'LONG': new_radar['LONG'], 'SHORT': new_radar['SHORT']}
+    logger.info(f"[DAILY RADAR] envoye long={len(new_radar['LONG'])} short={len(new_radar['SHORT'])}")
 
 
 
@@ -2542,12 +2674,17 @@ def indicators_scheduler():
     # Premier calcul au démarrage après 30s
     time.sleep(30)
     while True:
-        logger.info(f"[OKX] Calcul indicateurs pour {len(CONFIG['SYMBOLS'])} assets...")
+        radar_symbols = CONFIG.get('RADAR_SYMBOLS', {})
+        logger.info(f"[OKX] Calcul indicateurs pour {len(CONFIG['SYMBOLS'])} assets trade + {len(radar_symbols)} assets radar...")
         for symbol in CONFIG['SYMBOLS']:
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
+        for symbol in radar_symbols:
+            update_daily_radar_bias(symbol)
+            time.sleep(0.5)  # rate limit OKX
         persist_runtime_state()
         check_prep_alerts()
+        check_daily_radar_report()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m
         now = datetime.now(timezone.utc)

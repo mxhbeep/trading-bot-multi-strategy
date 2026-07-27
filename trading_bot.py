@@ -875,7 +875,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '2h': 4*3600, '4h': 6*3600, '6h': 9*3600, '1d': 36*3600}
+    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -989,6 +989,7 @@ def normalize_tf(tf_raw):
     tf = str(tf_raw or '').strip().lower()
     tf_aliases = {
         '1': '1m', '1min': '1m', '1minute': '1m',
+        '3': '3m', '3min': '3m', '3minute': '3m',
         '10': '10m', '10min': '10m', '10minute': '10m',
         '15': '15m', '60': '1h', '1hr': '1h', '1hour': '1h',
         '30': '30m', '30min': '30m', '30minute': '30m',
@@ -1957,7 +1958,7 @@ def process_webhook(data):
         persist_runtime_state()
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('1m', '15m', '4h', '1h', '5m'):
+        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('3m', '1h'):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:

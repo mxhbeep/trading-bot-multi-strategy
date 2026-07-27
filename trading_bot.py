@@ -2157,13 +2157,13 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Force l'envoi de l'état ST AI 4H actuel vers le scalpbot."""
+    """Force l'envoi des etats utiles au scalpbot."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
 
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
-        return jsonify({'error': 'SCALP_BOT_URL non défini'}), 400
+        return jsonify({'error': 'SCALP_BOT_URL non defini'}), 400
 
     scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
     sent = []
@@ -2174,31 +2174,56 @@ def sync_scalp():
 
     for symbol in sorted(scalp_symbols):
         m = state_copy.get(symbol, {})
-        st_4h = m.get('st_ai_4h') or m.get('st_4h')
-        if st_4h is None:
-            errors.append(f"{symbol}: état ST AI 4H absent")
-            continue
-        if st_4h not in ('buy', 'sell'):
-            errors.append(f"{symbol}: état ST AI 4H invalide ({st_4h!r})")
-            continue
-        try:
-            payload = {
-                'symbol':   symbol,
-                'strategy': 'scalp',
-                'tf':       '4h',
-                'type':     'supertrend',
-                'value':    '1' if st_4h == 'buy' else '0',
-                'price':    0,
-            }
-            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-            if resp.status_code == 200:
-                sent.append(symbol)
-            else:
-                errors.append(f"{symbol}: HTTP {resp.status_code}")
-        except Exception as e:
-            errors.append(f"{symbol}: {e}")
+        symbol_sent = []
 
-    logger.info(f"[SYNC_SCALP] Envoyé: {len(sent)} assets, erreurs: {len(errors)}")
+        st_1h = m.get('st_ai_1h') or m.get('st_1h')
+        if st_1h in ('buy', 'sell'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '1h',
+                    'type':     'supertrend',
+                    'value':    '1' if st_1h == 'buy' else '0',
+                    'price':    0,
+                    'event_id': f"sync_scalp_st1h_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('st1h')
+                else:
+                    errors.append(f"{symbol}: ST1H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ST1H {e}")
+        else:
+            errors.append(f"{symbol}: etat ST AI 1H absent/invalide ({st_1h!r})")
+
+        bias_1h = m.get('bias_1h')
+        if bias_1h in ('bull', 'bear', 'neutral'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '1h',
+                    'type':     'bias',
+                    'value':    bias_1h,
+                    'price':    0,
+                    'event_id': f"sync_scalp_bias1h_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('bias1h')
+                else:
+                    errors.append(f"{symbol}: Bias1H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: Bias1H {e}")
+        else:
+            errors.append(f"{symbol}: etat Bias 1H absent/invalide ({bias_1h!r})")
+
+        if symbol_sent:
+            sent.append(f"{symbol}:{','.join(symbol_sent)}")
+
+    logger.info(f"[SYNC_SCALP] Envoye: {len(sent)} assets, erreurs: {len(errors)}")
     return jsonify({'sent': sent, 'errors': errors}), 200
 
 
@@ -2351,6 +2376,36 @@ def calc_bias_2d(symbol):
         logger.error(f'[OKX] calc_bias_2d {symbol}: {e}')
         return None
 
+
+def relay_scalp_bias_1h(symbol, bias_1h, price=0):
+    """Envoie au scalpbot le Bias 1H calcule par le bot principal."""
+    if bias_1h not in ('bull', 'bear', 'neutral'):
+        return False
+    if not CONFIG['SYMBOLS'].get(symbol, {}).get('scalp'):
+        return False
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return False
+    payload = {
+        'symbol':   symbol,
+        'strategy': 'scalp',
+        'tf':       '1h',
+        'type':     'bias',
+        'value':    bias_1h,
+        'price':    price,
+        'event_id': f"okx_bias_1h_{symbol}_{int(time.time())}",
+    }
+    try:
+        resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+        if resp.status_code == 200:
+            logger.info(f"[RELAY] {symbol} bias 1H -> scalpbot OK ({bias_1h})")
+            return True
+        logger.warning(f"[RELAY] {symbol} bias 1H -> scalpbot HTTP {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        logger.warning(f"[RELAY] {symbol} bias 1H -> scalpbot erreur: {e}")
+    return False
+
+
 def update_indicators_for_symbol(symbol):
     """Met a jour tous les indicateurs calculables pour un asset."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
@@ -2438,6 +2493,7 @@ def update_indicators_for_symbol(symbol):
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        relay_scalp_bias_1h(symbol, bias_1h, price)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

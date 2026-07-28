@@ -1610,14 +1610,17 @@ def process_webhook(data):
                 if st_30m_d is not None:
                     direction_d = 'LONG' if st_30m_d == 'buy' else 'SHORT'
                     exp_ctx_d = 'buy' if direction_d == 'LONG' else 'sell'
+                    opp_ctx_d = 'sell' if direction_d == 'LONG' else 'buy'
                     exp_bias_d = 'bull' if direction_d == 'LONG' else 'bear'
 
                     bias_1d_d = m.get('bias_1d')
                     st_1d_d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+                    ctx_2h_d = m.get('st_context_2h')
                     ctx_30m_d = ST_CONTEXT_30M.get(symbol)
                     ctx_lt_30m_d = ST_CONTEXT_LT_30M.get(symbol)
                     ctx_1d_d = ST_CONTEXT_1D.get(symbol)
 
+                    ctx_2h_fresh_d = bool(ctx_2h_d) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
                     ctx_30m_fresh_d = bool(ctx_30m_d) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
                     ctx_lt_30m_fresh_d = bool(ctx_lt_30m_d) and is_signal_fresh(m.get('st_context_lt_30m_ts'), 90 * 60)
                     ctx_1d_fresh_d = bool(ctx_1d_d) and is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
@@ -1627,6 +1630,7 @@ def process_webhook(data):
                     st_1d_ok_d = st_1d_fresh_d and st_1d_d == exp_ctx_d
                     ctx_30m_ok_d = ctx_30m_fresh_d and ctx_30m_d == exp_ctx_d
                     lt_30m_block_d = ctx_lt_30m_fresh_d and ctx_lt_30m_d == exp_ctx_d
+                    ctx_2h_warning_d = ctx_2h_fresh_d and ctx_2h_d == opp_ctx_d
                     daily_plus_d = ctx_1d_fresh_d and ctx_1d_d == exp_ctx_d
                     daily_ok_d = bias_1d_ok_d and st_1d_ok_d and ctx_30m_ok_d and not lt_30m_block_d
                     signal_type_d = 'daily_plus' if daily_plus_d else 'daily'
@@ -1635,6 +1639,7 @@ def process_webhook(data):
                         f"[DAILY CHECK] {symbol} dir={direction_d} "
                         f"bias1d={bias_1d_d}/{exp_bias_d} st1d={st_1d_d}/{exp_ctx_d} st1d_fresh={st_1d_fresh_d} "
                         f"ctx30m={ctx_30m_d}/{exp_ctx_d} fresh={ctx_30m_fresh_d} "
+                        f"ctx2h={ctx_2h_d}/{opp_ctx_d} fresh={ctx_2h_fresh_d} warning={ctx_2h_warning_d} "
                         f"lt30m={ctx_lt_30m_d} fresh={ctx_lt_30m_fresh_d} block={lt_30m_block_d} "
                         f"ctx1d_bonus={ctx_1d_d} fresh={ctx_1d_fresh_d} daily_plus={daily_plus_d} ok={daily_ok_d}"
                     )
@@ -1665,6 +1670,10 @@ def process_webhook(data):
                             "\u2b50 <b>DAILY++ / TRES HAUTE QUALITE</b> (ST Context 1D aligne)\n\n"
                             if daily_plus_d else ""
                         )
+                        warning_2h_txt_d = (
+                            "\u26a0\ufe0f <b>WARNING NON BLOQUANT</b> : ST Context 2H oppose\n"
+                            if ctx_2h_warning_d else ""
+                        )
                         send_telegram_with_buttons(
                             f"{emoji} <b>{title_d}</b> {symbol}\n"
                             f"--------------------\n"
@@ -1677,6 +1686,7 @@ def process_webhook(data):
                             f"[OK] ST AI 1D: {(st_1d_d or 'N/A').upper()}\n"
                             f"[OK] Zone ST Context 30m: {(ctx_30m_d or 'N/A').upper()}\n"
                             f"[OK] Flip ST AI 30m: {st_30m_d.upper()}\n"
+                            f"{warning_2h_txt_d}"
                             f"[ANTI-CHOP] LT 30m: {(ctx_lt_30m_d or 'NEUTRE').upper()}\n"
                             f"[BONUS] ST Context 1D: {(ctx_1d_d or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
@@ -1704,11 +1714,13 @@ def process_webhook(data):
                 if ctx_5m_p is not None:
                     direction_p = 'LONG' if ctx_5m_p == 'buy' else 'SHORT'
                     exp_ctx = 'buy' if direction_p == 'LONG' else 'sell'
+                    opp_ctx = 'sell' if direction_p == 'LONG' else 'buy'
                     exp_bias = 'bull' if direction_p == 'LONG' else 'bear'
 
                     bias_6h_v = m.get('bias_6h')
                     bias_2h_v = m.get('bias_2h')
                     st_6h_v = m.get('st_6h') or m.get('st_ai_6h')
+                    ctx_30m_p = ST_CONTEXT_30M.get(symbol)
                     ctx_lt_5m_p = ST_CONTEXT_LT_5M.get(symbol) or m.get('st_context_lt_5m')
                     # ST AI 1H : condition non-bloquante, sert uniquement a marquer l'alerte
                     # comme "haute qualite" quand elle est alignee. N'empeche jamais l'entree.
@@ -1717,6 +1729,8 @@ def process_webhook(data):
 
                     ctx_5m_ok = ctx_5m_p == exp_ctx
                     ctx10m_bonus_p = ctx_10m_p == exp_ctx
+                    ctx30m_fresh_p = bool(ctx_30m_p) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+                    ctx30m_warning_p = ctx30m_fresh_p and ctx_30m_p == opp_ctx
                     bias_6h_ok = bias_6h_v == exp_bias
                     bias_2h_ok = bias_2h_v == exp_bias
                     st_6h_ok = st_6h_v == exp_ctx
@@ -1730,6 +1744,7 @@ def process_webhook(data):
                     logger.info(
                         f"[PULSE CHECK] {symbol} dir={direction_p} "
                         f"ctx5m={ctx_5m_p} ctx10m={ctx_10m_p} ctx10m_bonus={ctx10m_bonus_p} "
+                        f"ctx30m={ctx_30m_p}/{opp_ctx} fresh={ctx30m_fresh_p} warning={ctx30m_warning_p} "
                         f"bias6h={bias_6h_v} bias2h={bias_2h_v} "
                         f"st6h={st_6h_v} lt5m={ctx_lt_5m_p} st1h_quality={st_1h_quality_ok} "
                         f"primary={primary_ok} secondary={secondary_ok}"
@@ -1779,6 +1794,10 @@ def process_webhook(data):
                             "\u2b50 <b>BONUS 10M ALIGNÉ</b>\n"
                             if ctx10m_bonus_p else ""
                         )
+                        warning_30m_txt_p = (
+                            "\u26a0\ufe0f <b>WARNING NON BLOQUANT</b> : ST Context 30m oppose\n"
+                            if ctx30m_warning_p else ""
+                        )
                         send_telegram_with_buttons(
                             f"{emoji} <b>{title}</b> {symbol}\n"
                             f"--------------------\n"
@@ -1792,6 +1811,7 @@ def process_webhook(data):
                             f"{bonus_10m_txt_p}"
                             f"[OK] Zone ST Context 5m: {(ctx_5m_p or 'N/A').upper()}\n"
                             f"[BONUS] Zone ST Context 10m: {(ctx_10m_p or 'NEUTRE').upper()}\n"
+                            f"{warning_30m_txt_p}"
                             f"[ANTI-CHOP] LT 5m: {(ctx_lt_5m_p or 'NEUTRE').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_PULSE",

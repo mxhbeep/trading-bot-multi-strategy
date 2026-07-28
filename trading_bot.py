@@ -1349,6 +1349,12 @@ def process_webhook(data):
                 m['st_1h_flipped'] = bool(prev_1h is not None and m['st_1h'] is not None and m['st_1h'] != prev_1h)
                 if m['st_1h_flipped'] and prev_1h:
                     m['last_st_1h'] = prev_1h  # guard pyramiding CONTEXT4H
+            if alert_type == 'supertrend' and tf == '2h':
+                prev_2h = m.get('st_2h')
+                m['st_2h'] = parse_supertrend_value(val)
+                m['st_2h_flipped'] = bool(prev_2h is not None and m['st_2h'] is not None and m['st_2h'] != prev_2h)
+                if m['st_2h_flipped'] and prev_2h:
+                    m['last_st_2h'] = prev_2h
             if alert_type == 'supertrend' and tf == '4h':
                 prev_4h = m.get('st_4h')
                 m['prev_st_4h'] = prev_4h  # sauvegarder avant mise à jour
@@ -1978,7 +1984,7 @@ def process_webhook(data):
         persist_runtime_state()
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('3m', '1h'):
+        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('3m', '2h'):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:
@@ -2196,49 +2202,49 @@ def sync_scalp():
         m = state_copy.get(symbol, {})
         symbol_sent = []
 
-        st_1h = m.get('st_ai_1h') or m.get('st_1h')
-        if st_1h in ('buy', 'sell'):
+        st_2h = m.get('st_ai_2h') or m.get('st_2h')
+        if st_2h in ('buy', 'sell'):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
-                    'tf':       '1h',
+                    'tf':       '2h',
                     'type':     'supertrend',
-                    'value':    '1' if st_1h == 'buy' else '0',
+                    'value':    '1' if st_2h == 'buy' else '0',
                     'price':    0,
-                    'event_id': f"sync_scalp_st1h_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_st2h_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('st1h')
+                    symbol_sent.append('st2h')
                 else:
-                    errors.append(f"{symbol}: ST1H HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: ST2H HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: ST1H {e}")
+                errors.append(f"{symbol}: ST2H {e}")
         else:
-            errors.append(f"{symbol}: etat ST AI 1H absent/invalide ({st_1h!r})")
+            errors.append(f"{symbol}: etat ST AI 2H absent/invalide ({st_2h!r})")
 
-        bias_1h = m.get('bias_1h')
-        if bias_1h in ('bull', 'bear', 'neutral'):
+        bias_2h = m.get('bias_2h')
+        if bias_2h in ('bull', 'bear', 'neutral'):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
-                    'tf':       '1h',
+                    'tf':       '2h',
                     'type':     'bias',
-                    'value':    bias_1h,
+                    'value':    bias_2h,
                     'price':    0,
-                    'event_id': f"sync_scalp_bias1h_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_bias2h_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('bias1h')
+                    symbol_sent.append('bias2h')
                 else:
-                    errors.append(f"{symbol}: Bias1H HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: Bias2H HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: Bias1H {e}")
+                errors.append(f"{symbol}: Bias2H {e}")
         else:
-            errors.append(f"{symbol}: etat Bias 1H absent/invalide ({bias_1h!r})")
+            errors.append(f"{symbol}: etat Bias 2H absent/invalide ({bias_2h!r})")
 
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
@@ -2426,6 +2432,35 @@ def relay_scalp_bias_1h(symbol, bias_1h, price=0):
     return False
 
 
+def relay_scalp_bias_2h(symbol, bias_2h, price=0):
+    """Envoie au scalpbot le Bias 2H calcule par le bot principal."""
+    if bias_2h not in ('bull', 'bear', 'neutral'):
+        return False
+    if not CONFIG['SYMBOLS'].get(symbol, {}).get('scalp'):
+        return False
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return False
+    payload = {
+        'symbol':   symbol,
+        'strategy': 'scalp',
+        'tf':       '2h',
+        'type':     'bias',
+        'value':    bias_2h,
+        'price':    price,
+        'event_id': f"okx_bias_2h_{symbol}_{int(time.time())}",
+    }
+    try:
+        resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+        if resp.status_code == 200:
+            logger.info(f"[RELAY] {symbol} bias 2H -> scalpbot OK ({bias_2h})")
+            return True
+        logger.warning(f"[RELAY] {symbol} bias 2H -> scalpbot HTTP {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        logger.warning(f"[RELAY] {symbol} bias 2H -> scalpbot erreur: {e}")
+    return False
+
+
 def update_indicators_for_symbol(symbol):
     """Met a jour tous les indicateurs calculables pour un asset."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
@@ -2513,7 +2548,7 @@ def update_indicators_for_symbol(symbol):
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
-        relay_scalp_bias_1h(symbol, bias_1h, price)
+        relay_scalp_bias_2h(symbol, bias_2h, price)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

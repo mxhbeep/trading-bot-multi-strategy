@@ -2246,6 +2246,27 @@ def sync_scalp():
         else:
             errors.append(f"{symbol}: etat Bias 2H absent/invalide ({bias_2h!r})")
 
+        ctx_2h = m.get('st_context_2h')
+        ctx_2h_seen = m.get('st_context_2h_ts') is not None
+        if ctx_2h in ('buy', 'sell') or ctx_2h_seen:
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '2h',
+                    'type':     'st_context',
+                    'value':    '-2' if ctx_2h == 'buy' else '2' if ctx_2h == 'sell' else '0',
+                    'price':    0,
+                    'event_id': f"sync_scalp_ctx2h_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('ctx2h')
+                else:
+                    errors.append(f"{symbol}: Context2H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: Context2H {e}")
+
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
 

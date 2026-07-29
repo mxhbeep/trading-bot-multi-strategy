@@ -1984,7 +1984,11 @@ def process_webhook(data):
         persist_runtime_state()
         # ── Relay vers le Scalping Bot ────────────────────────────────────
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-        if scalp_url and alert_type in ('supertrend', 'bias', 'st_context', 'st_context_lt') and tf in ('3m', '2h'):
+        should_relay_scalp = (
+            (alert_type == 'supertrend' and tf == '2h')
+            or (alert_type == 'st_context' and tf in ('1m', '5m'))
+        )
+        if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:
@@ -2223,49 +2227,6 @@ def sync_scalp():
                 errors.append(f"{symbol}: ST2H {e}")
         else:
             errors.append(f"{symbol}: etat ST AI 2H absent/invalide ({st_2h!r})")
-
-        bias_2h = m.get('bias_2h')
-        if bias_2h in ('bull', 'bear', 'neutral'):
-            try:
-                payload = {
-                    'symbol':   symbol,
-                    'strategy': 'scalp',
-                    'tf':       '2h',
-                    'type':     'bias',
-                    'value':    bias_2h,
-                    'price':    0,
-                    'event_id': f"sync_scalp_bias2h_{symbol}_{int(time.time())}",
-                }
-                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-                if resp.status_code == 200:
-                    symbol_sent.append('bias2h')
-                else:
-                    errors.append(f"{symbol}: Bias2H HTTP {resp.status_code}")
-            except Exception as e:
-                errors.append(f"{symbol}: Bias2H {e}")
-        else:
-            errors.append(f"{symbol}: etat Bias 2H absent/invalide ({bias_2h!r})")
-
-        ctx_2h = m.get('st_context_2h')
-        ctx_2h_seen = m.get('st_context_2h_ts') is not None
-        if ctx_2h in ('buy', 'sell') or ctx_2h_seen:
-            try:
-                payload = {
-                    'symbol':   symbol,
-                    'strategy': 'scalp',
-                    'tf':       '2h',
-                    'type':     'st_context',
-                    'value':    '-2' if ctx_2h == 'buy' else '2' if ctx_2h == 'sell' else '0',
-                    'price':    0,
-                    'event_id': f"sync_scalp_ctx2h_{symbol}_{int(time.time())}",
-                }
-                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-                if resp.status_code == 200:
-                    symbol_sent.append('ctx2h')
-                else:
-                    errors.append(f"{symbol}: Context2H HTTP {resp.status_code}")
-            except Exception as e:
-                errors.append(f"{symbol}: Context2H {e}")
 
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
@@ -2569,7 +2530,6 @@ def update_indicators_for_symbol(symbol):
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
-        relay_scalp_bias_2h(symbol, bias_2h, price)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

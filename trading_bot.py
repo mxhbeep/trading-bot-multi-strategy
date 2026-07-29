@@ -1790,7 +1790,7 @@ def process_webhook(data):
                         filter_txt = (
                             f"[OK] ST AI 6H: {(st_6h_v or 'N/A').upper()}\n"
                             if signal_type_p == 'principal'
-                            else f"[OK] Bias 6H: {(bias_6h_v or 'N/A').upper()} (EMA21/SMA55)\n"
+                            else f"[OK] Bias 6H: {(bias_6h_v or 'N/A').upper()} (EMA13/SMA30)\n"
                         )
                         quality_txt = (
                             "\u2b50 <b>ALERTE HAUTE QUALITE</b> (ST AI 1H aligne)\n\n"
@@ -2483,7 +2483,7 @@ def update_indicators_for_symbol(symbol):
         df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
         bias_2h  = calc_bias_okx(df_2h, ema_len=13, sma_len=30) if df_2h is not None else None
         bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
-        bias_6h  = calc_bias_okx(df_6h, ema_len=21, sma_len=55) if df_6h is not None else None
+        bias_6h  = calc_bias_okx(df_6h, ema_len=13, sma_len=30) if df_6h is not None else None
         bias_1d  = calc_bias_okx(df_1d, ema_len=13, sma_len=30)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)

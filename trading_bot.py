@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import pandas as pd
@@ -103,7 +103,7 @@ MOMENTUM_STATE = {}
 WEEKLY_STATS = {}
 WEEKLY_START = datetime.now(timezone.utc)
 PREP_BUFFER = []  # Buffer des alertes de preparation
-STATE_LOCK = threading.RLock()  # RLock r茅entrant 鈥?茅vite deadlock should_send dans SCALP
+STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
@@ -155,20 +155,20 @@ def init_redis():
     global REDIS_CLIENT
     redis_url = os.environ.get('REDIS_URL')
     if not redis_url:
-        logger.warning("鈿狅笍 REDIS_URL non d茅fini 鈥?茅tat en m茅moire uniquement")
+        logger.warning("⚠️ REDIS_URL non défini — état en mémoire uniquement")
         return
     try:
         REDIS_CLIENT = redis.from_url(redis_url, decode_responses=True)
         REDIS_CLIENT.ping()
-        logger.info("鉁?Redis connect茅")
+        logger.info("✅ Redis connecté")
     except Exception as e:
-        logger.error(f"鉂?Redis erreur: {e}")
+        logger.error(f"❌ Redis erreur: {e}")
         REDIS_CLIENT = None
 
 
     # ========================================================================
-    # LOGIQUE SCALP : ADX 4H DI align茅 + ST AI 1H dans le sens 鈫?flip ST AI 15m
-    # Pyramiding : flip ST AI 15m + guard 鈥?cooldown 1H
+    # LOGIQUE SCALP : ADX 4H DI aligné + ST AI 1H dans le sens → flip ST AI 15m
+    # Pyramiding : flip ST AI 15m + guard — cooldown 1H
     # ========================================================================
 def persist_runtime_state():
     if not REDIS_CLIENT:
@@ -201,10 +201,10 @@ def persist_runtime_state():
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
         except Exception as e:
-            logger.error(f"鉂?Redis save error: {e}")
+            logger.error(f"❌ Redis save error: {e}")
 
 
-def audit_log(data, status="re莽u"):
+def audit_log(data, status="reçu"):
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "symbol": data.get("symbol"),
@@ -236,18 +236,18 @@ def audit_log(data, status="re莽u"):
         REDIS_CLIENT.lpush('audit_trail', json.dumps(entry))
         REDIS_CLIENT.ltrim('audit_trail', 0, 999)
     except Exception as e:
-        logger.error(f"鉂?Erreur audit Redis: {e}")
+        logger.error(f"❌ Erreur audit Redis: {e}")
 
 
 def load_runtime_state():
     global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
     if not REDIS_CLIENT:
-        logger.info("鈩癸笍 Redis non disponible 鈥?d茅marrage 脿 froid")
+        logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
     try:
         raw = REDIS_CLIENT.get('bot_state')
         if not raw:
-            logger.info("鈩癸笍 Aucun 茅tat persistant trouv茅 dans Redis 鈥?d茅marrage 脿 froid")
+            logger.info("ℹ️ Aucun état persistant trouvé dans Redis — démarrage à froid")
             return
 
         payload = json.loads(raw)
@@ -272,23 +272,23 @@ def load_runtime_state():
         ST_CONTEXT_LT_10M.update(payload.get('st_context_lt_10m', {}))
         ST_CONTEXT_LT_30M.update(payload.get('st_context_lt_30m', {}))
         PYRA_ENABLED.update(payload.get('pyra_enabled', {}))
-        # Nettoyer les assets hors watchlist charg茅s depuis Redis
+        # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
         for s in stale:
             del MOMENTUM_STATE[s]
         if stale:
-            logger.info(f'[REDIS] Supprim茅 {len(stale)} assets obsol猫tes: {stale}')
+            logger.info(f'[REDIS] Supprimé {len(stale)} assets obsolètes: {stale}')
 
         weekly_start_raw = payload.get('weekly_start')
         if weekly_start_raw:
             WEEKLY_START = datetime.fromisoformat(weekly_start_raw)
 
         logger.info(
-            f"鉁?脡tat restaur茅 depuis Redis | "
+            f"✅ État restauré depuis Redis | "
             f"momentum={len(MOMENTUM_STATE)}"
         )
     except Exception as e:
-        logger.error(f"鉂?Redis load error: {e}")
+        logger.error(f"❌ Redis load error: {e}")
 
 # ============================================================================ #
 # INITIALISATION EXCHANGES
@@ -297,18 +297,18 @@ def load_runtime_state():
 def init_exchanges():
     global exchanges
     exchanges['okx'] = 'okx'
-    logger.info("鉁?Exchange OKX configur茅 (webhook mode 鈥?pas d'API)")
+    logger.info("✅ Exchange OKX configuré (webhook mode — pas d'API)")
 
 # ============================================================================ #
 # FONCTIONS TELEGRAM
 # ============================================================================ #
 
 def escape_html(text):
-    """脡chappe les caract猫res HTML dans le texte (hors balises intentionnelles)."""
+    """Échappe les caractères HTML dans le texte (hors balises intentionnelles)."""
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 def format_price(price: float) -> str:
-    """Formate un prix en 茅vitant les z茅ros pour les tr猫s petits assets."""
+    """Formate un prix en évitant les zéros pour les très petits assets."""
     if price == 0:
         return "N/A"
     if price < 0.0001:
@@ -320,7 +320,7 @@ def format_price(price: float) -> str:
     return f"{price:.2f}"
 
 def get_market_context_info() -> str:
-    """Retourne la derni猫re zone ST Context connue pour BTC et ETH."""
+    """Retourne la dernière zone ST Context connue pour BTC et ETH."""
     def ctx_str(symbol):
         ctx_1h = MOMENTUM_STATE.get(symbol, {}).get('st_context_1h')
         ctx_4h = MOMENTUM_STATE.get(symbol, {}).get('st_context_4h')
@@ -330,7 +330,7 @@ def get_market_context_info() -> str:
         return ', '.join(parts) if parts else 'N/A'
     btc = ctx_str('BTC/USDT')
     eth = ctx_str('ETH/USDT')
-    return f"\n馃搳 BTC: {btc} | ETH: {eth}"
+    return f"\n📊 BTC: {btc} | ETH: {eth}"
 
 def strip_html(text: str) -> str:
     """Return plain text for notification channels that do not support HTML."""
@@ -616,44 +616,44 @@ def send_info(msg):
     tok  = os.environ.get('INFO_BOT_TOKEN', '')
     chat = os.environ.get('INFO_CHAT_ID', '')
     if not tok or not chat:
-        logger.debug("鈿狅笍 INFO_BOT_TOKEN/INFO_CHAT_ID non configur茅s 鈥?message info ignor茅")
+        logger.debug("⚠️ INFO_BOT_TOKEN/INFO_CHAT_ID non configurés — message info ignoré")
         return
     try:
         url  = f"https://api.telegram.org/bot{tok}/sendMessage"
         resp = requests.post(url, json={'chat_id': chat, 'text': msg, 'parse_mode': 'HTML'}, timeout=10)
         if resp.status_code == 200:
-            logger.info("鉁?Message info envoy茅")
+            logger.info("✅ Message info envoyé")
         else:
-            logger.error(f"鉂?Info bot erreur {resp.status_code}: {resp.text[:100]}")
+            logger.error(f"❌ Info bot erreur {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
-        logger.error(f"鉂?Erreur info bot: {e}")
+        logger.error(f"❌ Erreur info bot: {e}")
 
 
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    redis_status = "鉁?Redis connect茅" if REDIS_CLIENT else "鈿狅笍 Redis non disponible"
+    redis_status = "✅ Redis connecté" if REDIS_CLIENT else "⚠️ Redis non disponible"
     msg = (
-        "馃 <b>[BOT STARTED]</b>\n"
-        "鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n\n"
-        f"馃搳 Total Assets: {len(CONFIG['SYMBOLS'])}\n"
-        f"馃捑 {redis_status}\n\n"
-        "馃搵 <b>STRATEGIES:</b>\n\n"
+        "🚀 <b>[BOT STARTED]</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 Total Assets: {len(CONFIG['SYMBOLS'])}\n"
+        f"💾 {redis_status}\n\n"
+        "📋 <b>STRATEGIES:</b>\n\n"
         
-        "1锔忊儯 <b>DAILY</b>\n"
-        "   鈥?Bias 1D 13/30 + ST AI 1D + Zone ST Context 30m\n"
-        "   鈥?Signal: flip ST AI 30m / Bonus: ST Context 1D align茅\n"
-        "   鈥?Anti-chop: LT 30m m锚me sens\n\n"
-        "2锔忊儯 <b>PULSE</b>\n"
-        "   鈥?Principale: ST AI 6H + Bias 2H + Zone ST Context 5m, bonus/warning 30m\n"
-        "   鈥?Secondaire: Bias 6H + Zone ST Context 30m + Zone ST Context 5m\n"
-        "   鈥?Anti-chop: LT 5m principale / LT 30m secondaire\n\n"
-        "3锔忊儯 <b>TREND3D</b>\n"
-        "   鈥?Bias 3D (EMA21/SMA55) + ST Context 2H align茅\n"
-        "   鈥?Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) 鈥?44 assets\n\n"
+        "1️⃣ <b>DAILY</b>\n"
+        "   — Bias 1D 13/30 + ST AI 1D + Zone ST Context 30m\n"
+        "   — Signal: flip ST AI 30m / Bonus: ST Context 1D aligné\n"
+        "   — Anti-chop: LT 30m même sens\n\n"
+        "2️⃣ <b>PULSE</b>\n"
+        "   — Principale: ST AI 6H + Bias 2H + Zone ST Context 5m, bonus/warning 30m\n"
+        "   — Secondaire: Bias 6H + Zone ST Context 30m + Zone ST Context 5m\n"
+        "   — Anti-chop: LT 5m principale / LT 30m secondaire\n\n"
+        "3️⃣ <b>TREND3D</b>\n"
+        "   — Bias 3D (EMA21/SMA55) + ST Context 2H aligné\n"
+        "   — Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) — 44 assets\n\n"
 
 
-        "鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-        f"鈴?{now}"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏰{now}"
     )
     send_info(msg)
 
@@ -666,10 +666,10 @@ def send_weekly_report():
     total_alerts = sum(sum(strats.values()) for strats in WEEKLY_STATS.values())
 
     msg = (
-        "馃搳 <b>[RAPPORT HEBDOMADAIRE]</b>\n"
-        "鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-        f"馃搮 Semaine du {week_start.strftime('%d/%m')} au {now.strftime('%d/%m/%Y')}\n"
-        f"馃敂 Total alertes: <b>{total_alerts}</b>\n\n"
+        "📊 <b>[RAPPORT HEBDOMADAIRE]</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 Semaine du {week_start.strftime('%d/%m')} au {now.strftime('%d/%m/%Y')}\n"
+        f"🔔 Total alertes: <b>{total_alerts}</b>\n\n"
     )
     total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_daily      = sum(s.get('DAILY', 0)       for s in WEEKLY_STATS.values())
@@ -680,14 +680,14 @@ def send_weekly_report():
     total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
     msg += (
-        "馃搵 <b>Par strat茅gie:</b>\n"
-        f"  鈥?CONFLUENCE: {total_confluence}\n"
-        f"  鈥?DAILY: {total_daily}\n"
-        f"  鈥?TREND: {total_trend}\n"
-        f"  鈥?SWING: {total_swing}\n"
-        f"  鈥?PULSE: {total_pulse}\n"
-        f"  鈥?SCALP: {total_scalp}\n"
-        f"  鈥?MOMENTUM: {total_momentum}\n\n"
+        "📋 <b>Par stratégie:</b>\n"
+        f"  — CONFLUENCE: {total_confluence}\n"
+        f"  — DAILY: {total_daily}\n"
+        f"  — TREND: {total_trend}\n"
+        f"  — SWING: {total_swing}\n"
+        f"  — PULSE: {total_pulse}\n"
+        f"  — SCALP: {total_scalp}\n"
+        f"  — MOMENTUM: {total_momentum}\n\n"
     )
 
     assets_with_alerts = {
@@ -696,7 +696,7 @@ def send_weekly_report():
     }
 
     if assets_with_alerts:
-        msg += "馃搱 <b>Par asset:</b>\n"
+        msg += "📈 <b>Par asset:</b>\n"
         for symbol, stats in sorted(assets_with_alerts.items(), key=lambda x: sum(x[1].values()), reverse=True):
             base = symbol.replace('/USDT', '')
             details = []
@@ -708,20 +708,20 @@ def send_weekly_report():
             if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
             if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
             if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
-            msg += f"  鈥?{base}: {sum(stats.values())} ({', '.join(details)})\n"
+            msg += f"  —{base}: {sum(stats.values())} ({', '.join(details)})\n"
     else:
-        msg += "馃搱 <b>Par asset:</b> Aucune alerte cette semaine\n"
+        msg += "📈 <b>Par asset:</b> Aucune alerte cette semaine\n"
 
-    msg += f"\n鈴?{now.strftime('%d/%m/%Y %H:%M')} (Taiwan)"
+    msg += f"\n⏰{now.strftime('%d/%m/%Y %H:%M')} (Taiwan)"
     send_info(msg)
-    logger.info("馃搳 Rapport hebdomadaire envoy茅")
+    logger.info("📊 Rapport hebdomadaire envoyé")
 
     WEEKLY_STATS.clear()
     WEEKLY_START = datetime.now(timezone.utc)
     # ========================================================================
     # LOGIQUE TREND3D : Bias 3D + ST Context 2H aligne -> flip ST AI 1H
-    # Pyramiding renforc茅 : ADX 4H DI align茅 + flip ST AI 1H + guard
-    # Cooldown entr茅e 4H / Pyramiding 4H
+    # Pyramiding renforcé : ADX 4H DI aligné + flip ST AI 1H + guard
+    # Cooldown entrée 4H / Pyramiding 4H
     # ========================================================================
     if strat in ['trend3d', 'trend2d', 'all']:
         m = MOMENTUM_STATE[symbol]
@@ -744,7 +744,7 @@ def send_weekly_report():
                 direction_t2 = "LONG" if st_1h_val_t2 == 'buy' else "SHORT"
                 exp_bias_t2  = 'bull' if direction_t2 == 'LONG' else 'bear'
 
-                # Filtres entr茅e
+                # Filtres entrée
                 bias_3d_ok  = bias_3d_v == exp_bias_t2
                 ctx_2h_fresh_t2 = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
                 ctx_2h_ok       = ctx_2h_t2 == st_1h_val_t2 and ctx_2h_fresh_t2
@@ -807,9 +807,9 @@ def send_weekly_report():
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                         f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA21/SMA55)\n"
                         f"\u2705 ST Context 2H: {ctx_txt}\n"
-                        f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI align茅)\n"
+                        f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (PYRAMIDING)\n"
-                        f"\U0001f6e1\ufe0f Guard: flip oppos茅 valid茅"
+                        f"\U0001f6e1\ufe0f Guard: flip opposé validé"
                         f"{get_market_context_info()}"
                     )
                     track_alert(symbol, 'TREND3D')
@@ -820,7 +820,7 @@ def send_weekly_report():
 
 
 def send_prep_report():
-    """Envoie un rapport group茅 des assets en pr茅paration 鈥?appel茅 toutes les heures."""
+    """Envoie un rapport groupé des assets en préparation — appelé toutes les heures."""
     global PREP_BUFFER
     with STATE_LOCK:
         entries = list(PREP_BUFFER)
@@ -840,16 +840,16 @@ def send_prep_report():
 
     for key in sorted(groups.keys()):
         strat, direction = key.split('_', 1)
-        emoji = "馃煝" if direction == "LONG" else "馃敶"
+        emoji = "🟢" if direction == "LONG" else "🔴"
         msg += '\n\n<b>' + strat + ' ' + direction + '</b>\n'
         msg += '\n'.join([emoji + ' ' + x for x in groups[key]]) + '\n'
     send_info(msg)
-    logger.info(f"[PREP REPORT] {len(entries)} assets envoy茅s")
+    logger.info(f"[PREP REPORT] {len(entries)} assets envoyés")
 
 
 def prep_report_scheduler():
-    """Envoie le rapport de pr茅paration 脿 HH:05 chaque heure."""
-    logger.info("鈴?Scheduler rapport pr茅paration d茅marr茅 (HH:05 UTC)")
+    """Envoie le rapport de préparation à HH:05 chaque heure."""
+    logger.info("⏰ Scheduler rapport préparation démarré (HH:05 UTC)")
     while True:
         now = datetime.now(timezone.utc)
         next_run = now.replace(minute=5, second=0, microsecond=0)
@@ -860,7 +860,7 @@ def prep_report_scheduler():
         send_prep_report()
 
 def weekly_report_scheduler():
-    logger.info("鈴?Scheduler rapport hebdomadaire d茅marr茅 (dimanche minuit Taiwan)")
+    logger.info("⏰ Scheduler rapport hebdomadaire démarré (dimanche minuit Taiwan)")
     while True:
         now = datetime.now(timezone(timedelta(hours=8)))
         if now.weekday() == 6 and now.hour == 0 and now.minute == 0:
@@ -871,10 +871,10 @@ def weekly_report_scheduler():
 
 
 def tv_alert_watchdog():
-    """V茅rifie toutes les heures que les webhooks TradingView arrivent bien."""
+    """Vérifie toutes les heures que les webhooks TradingView arrivent bien."""
     bot_start_time = time.time()
     time.sleep(6 * 3600)
-    logger.info("馃攳 TV Alert Watchdog d茅marr茅")
+    logger.info("🔍 TV Alert Watchdog démarré")
     MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
     while True:
         time.sleep(3600)
@@ -882,23 +882,23 @@ def tv_alert_watchdog():
         uptime = now - bot_start_time
         missing = []
         for tf, max_age in MAX_AGE.items():
-            # Ne pas alerter si le bot n'a pas encore tourn茅 assez longtemps
+            # Ne pas alerter si le bot n'a pas encore tourné assez longtemps
             # pour avoir eu une chance de recevoir ce TF
             if uptime < max_age + 3600:
                 continue
             last_ts = LAST_WEBHOOK_TS.get(tf)
             if last_ts is None:
-                missing.append(f"  鈥?TF {tf.upper()}: jamais re莽u")
+                missing.append(f"  — TF {tf.upper()}: jamais reçu")
             elif (now - last_ts) > max_age:
                 age_h = (now - last_ts) / 3600
-                missing.append(f"  鈥?TF {tf.upper()}: dernier re莽u il y a {age_h:.1f}H")
+                missing.append(f"  — TF {tf.upper()}: dernier reçu il y a {age_h:.1f}H")
         if missing:
             details = "\n".join(missing)
             send_info(
-                "馃毃 <b>[ALERTE] Webhooks TradingView manquants</b>\n"
-                "鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
+                "🚨 <b>[ALERTE] Webhooks TradingView manquants</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
                 f"{details}\n\n"
-                "鉃★笍 V茅rifier et red茅marrer les alertes sur TradingView"
+                "➡️ Vérifier et redémarrer les alertes sur TradingView"
             )
             logger.warning(f"[TV WATCHDOG] Alertes manquantes: {missing}")
 
@@ -911,10 +911,10 @@ def heartbeat_scheduler():
 # ============================================================================ #
 
 def require_admin_secret():
-    """V茅rifie le header X-Admin-Secret pour les endpoints d'administration."""
+    """Vérifie le header X-Admin-Secret pour les endpoints d'administration."""
     expected = os.environ.get('ADMIN_SECRET', '')
     if not expected:
-        logger.error("ADMIN_SECRET non d茅fini 鈥?endpoint admin refus茅")
+        logger.error("ADMIN_SECRET non défini — endpoint admin refusé")
         return False  # fail closed
     return request.headers.get('X-Admin-Secret') == expected
 
@@ -937,11 +937,11 @@ def get_exchange_for_symbol(symbol):
 def parse_st_context_value(val, trend_level=1.96):
     """
     Convertit la valeur brute du ST Context (plot_1 = Short time context) en 'buy', 'sell' ou None.
-    Accepte les strings 'buy'/'sell' (r茅trocompatibilit茅) et les valeurs num茅riques
-    envoy茅es par TradingView via {{plot_1}}.
-      plot_1 > +trend_level  鈫?zone baissi猫re 鈫?'sell'
-      plot_1 < -trend_level  鈫?zone haussi猫re 鈫?'buy'
-      entre les deux         鈫?neutre         鈫?None
+    Accepte les strings 'buy'/'sell' (rétrocompatibilité) et les valeurs numériques
+    envoyées par TradingView via {{plot_1}}.
+      plot_1 > +trend_level  → zone baissière →'sell'
+      plot_1 < -trend_level  → zone haussière →'buy'
+      entre les deux         → neutre         → None
     """
     if str(val).lower() in ['buy', 'sell', 'neutral']:
         return None if str(val).lower() == 'neutral' else str(val).lower()
@@ -955,7 +955,7 @@ def parse_st_context_value(val, trend_level=1.96):
         return None
 
 def is_signal_fresh(last_ts, max_age_seconds):
-    """Retourne True si un signal horodat茅 est encore frais."""
+    """Retourne True si un signal horodaté est encore frais."""
     try:
         if last_ts is None:
             return False
@@ -1054,7 +1054,7 @@ def should_send(symbol, key, event_id=None, cooldown=None):
             return True
     return False
 
-# 脡tats SCALP 鈥?ST AI 15min + contexte 15min
+# États SCALP — ST AI 15min + contexte 15min
 ST_AI_15M: dict = {}       # symbol -> 'buy' | 'sell' | None
 ST_AI_30M: dict = {}       # symbol -> 'buy' | 'sell' | None
 ST_AI_1D: dict = {}        # symbol -> 'buy' | 'sell' | None
@@ -1067,7 +1067,7 @@ ST_CONTEXT_LT_4H:  dict = {}  # Long term context 4H (plot_2)
 ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
 PREP_STATE: dict = {}
 WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
-PYRA_ENABLED: dict = {}  # f'{symbol}_{strat}' -> True si pyramiding activ茅  # strategy -> {'LONG': set(), 'SHORT': set()} 鈥?assets en pr茅paration
+PYRA_ENABLED: dict = {}  # f'{symbol}_{strat}' -> True si pyramiding activé  # strategy -> {'LONG': set(), 'SHORT': set()} — assets en préparation
 ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
 ST_CONTEXT_LT_10M: dict = {}  # Long term context 10m (plot_2)
@@ -1091,7 +1091,7 @@ def init_symbol_states(symbol):
             'last_st_6h': None,   # dernier flip 6H
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
-            # Nouveaux 茅tats pour CONTEXT v2 et SCALP
+            # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'st_context_2h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
@@ -1103,44 +1103,44 @@ def init_symbol_states(symbol):
 # ============================================================================ #
 
 def send_close_alert(symbol, strategy, direction, price, reason):
-    """Envoie une alerte de cl么ture, supprime la position et persiste l'茅tat."""
+    """Envoie une alerte de clôture, supprime la position et persiste l'état."""
     pos_key = f"{symbol}_{strategy}"
     with STATE_LOCK:
         pos = SCALP_POSITIONS.pop(pos_key, None)
         PYRA_ENABLED.pop(pos_key, None)
     if pos:
-        emoji = "馃敶" if direction == "LONG" else "馃煝"
+        emoji = "🔴" if direction == "LONG" else "🟢"
         send_telegram(
-            f"{emoji} <b>[{strategy} - CL脭TURE RAPPEL]</b> {symbol}\n"
-            f"鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-            f"馃搱 Direction 茅tait: {direction}\n"
-            f"馃挵 Price: ${format_price(price)}\n"
-            f"鈴?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-            f"馃搵 Raison: {reason}"
+            f"{emoji} <b>[{strategy} - CLÔTURE RAPPEL]</b> {symbol}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 Direction était: {direction}\n"
+            f"💰 Price: ${format_price(price)}\n"
+            f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+            f"📋 Raison: {reason}"
         )
         persist_runtime_state()
-        logger.info(f"[{strategy}] Position cl么tur茅e: {symbol} {direction} 鈥?{reason}")
+        logger.info(f"[{strategy}] Position clôturée: {symbol} {direction} —{reason}")
 
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json(silent=True)
     if not data:
-        logger.warning("鈿狅笍 Webhook sans donn茅es")
+        logger.warning("⚠️ Webhook sans données")
         return jsonify({'status': 'no_data'}), 400
-    # R茅pondre imm茅diatement 鈥?traitement asynchrone pour 茅viter timeout TV
+    # Répondre immédiatement — traitement asynchrone pour éviter timeout TV
     WEBHOOK_EXECUTOR.submit(run_webhook_job, data)
     return jsonify({'status': 'ok'}), 200
 
 
 def run_webhook_job(data):
-    """Wrapper avec contexte Flask pour l'ex茅cuteur."""
+    """Wrapper avec contexte Flask pour l'exécuteur."""
     with app.app_context():
         process_webhook(data)
 
 
 def process_webhook(data):
-    """Traitement asynchrone du webhook 鈥?appel茅 dans un thread s茅par茅."""
+    """Traitement asynchrone du webhook — appelé dans un thread séparé."""
     try:
 
         symbol      = format_tv_symbol(data.get('symbol', ''))
@@ -1162,10 +1162,10 @@ def process_webhook(data):
             else:
                 logger.warning(f"[WARN] BIAS valeur invalide pour {symbol}: value='{val_raw}' value2='{val2_raw}'")
 
-        logger.info(f"馃摜 Webhook: {symbol} | strat={strat} | tf={tf} | type={alert_type} | val={val} | price={price}")
-        # Tracker le dernier webhook re莽u par tf
+        logger.info(f"📥 Webhook: {symbol} | strat={strat} | tf={tf} | type={alert_type} | val={val} | price={price}")
+        # Tracker le dernier webhook reçu par tf
         LAST_WEBHOOK_TS[tf] = time.time()
-        audit_log(data, status="re莽u")
+        audit_log(data, status="reçu")
         event_id = build_event_id(data, symbol, strat, tf, alert_type, val)
         # Defaut de securite : toujours defini, meme si le bloc de mise a jour
         # ST AI 15m (gate par strat) ne s'execute pas pour cette alerte.
@@ -1174,8 +1174,8 @@ def process_webhook(data):
         ctx30m_zone_changed_this_call = False
 
         if symbol not in get_tracked_symbols():
-            logger.info(f"鈴笍 {symbol} non dans la watchlist")
-            audit_log(data, status="ignor茅_watchlist")
+            logger.info(f"⚠️ {symbol} non dans la watchlist")
+            audit_log(data, status="ignoré_watchlist")
             return jsonify({'status': 'ignored', 'reason': 'not_in_watchlist'}), 200
 
         trade_symbol = is_trade_symbol(symbol)
@@ -1183,7 +1183,7 @@ def process_webhook(data):
         exchange_name = get_symbol_config(symbol).get('exchange', 'okx')
         init_symbol_states(symbol)
 
-        # Mise 脿 jour globale des contextes (ind茅pendante de la strat茅gie du webhook)
+        # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
         m = MOMENTUM_STATE[symbol]
         now_ts = datetime.now(timezone.utc).timestamp()
         if alert_type == 'bias':
@@ -1197,13 +1197,13 @@ def process_webhook(data):
                     prev_bias_6h = m.get('bias_6h')
                     m['bias_6h'] = bias_val if bias_val != 'neutral' else None
                     logger.info(f"[BIAS TV] {symbol} bias_6h = {bias_val}")
-                    # Cl么ture PULSE si Bias 6H invers茅 (via alerte TV)
+                    # Clôture PULSE si Bias 6H inversé (via alerte TV)
                     pos_pulse = SCALP_POSITIONS.get(f'{symbol}_PULSE')
                     if pos_pulse and prev_bias_6h and bias_val != prev_bias_6h and bias_val != 'neutral':
                         dir_p = pos_pulse['direction']
                         exp_bias = 'bull' if dir_p == 'LONG' else 'bear'
                         if bias_val != exp_bias:
-                            send_close_alert(symbol, 'PULSE', dir_p, price, 'Bias 6H invers茅')
+                            send_close_alert(symbol, 'PULSE', dir_p, price, 'Bias 6H inversé')
                 elif tf == '1d':
                     prev_bias_1d = m.get('bias_1d')
                     m['bias_1d'] = bias_val if bias_val != 'neutral' else None
@@ -1230,16 +1230,16 @@ def process_webhook(data):
             m['st_2d'] = st_2d_val
             if flipped_2d:
                 direction_2d = "LONG" if st_2d_val == 'buy' else "SHORT"
-                emoji = "馃煝" if direction_2d == "LONG" else "馃敶"
+                emoji = "🟢" if direction_2d == "LONG" else "🔴"
                 send_telegram(
                     f"{emoji} <b>[ST AI 2D - FLIP]</b> {symbol}\n"
-                    f"鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-                    f"馃搱 Direction: {direction_2d}\n"
-                    f"馃挵 Price: ${format_price(price)}\n"
-                    f"鈴?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                    f"馃搳 SuperTrend AI 2D: {st_2d_val.upper()}"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 Direction: {direction_2d}\n"
+                    f"💰 Price: ${format_price(price)}\n"
+                    f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                    f"📊 SuperTrend AI 2D: {st_2d_val.upper()}"
                 )
-                logger.info(f"[ST2D] Flip: {symbol} 鈫?{direction_2d}")
+                logger.info(f"[ST2D] Flip: {symbol} →{direction_2d}")
 
 
 
@@ -1269,13 +1269,13 @@ def process_webhook(data):
                 prev_ctx_4h = m.get('st_context_4h')
                 m['st_context_4h'] = parsed_ctx
                 m['st_context_4h_ts'] = now_ts
-                # Cl么ture CONTEXT4H si ST Context 4H oppos茅
+                # Clôture CONTEXT4H si ST Context 4H opposé
                 pos_c4h = SCALP_POSITIONS.get(f'{symbol}_CONTEXT4H')
                 if False and pos_c4h and parsed_ctx and parsed_ctx != prev_ctx_4h:
                     dir_c4h = pos_c4h['direction']
                     exp_ctx = 'buy' if dir_c4h == 'LONG' else 'sell'
                     if parsed_ctx != exp_ctx:
-                        send_close_alert(symbol, 'CONTEXT4H', dir_c4h, price, 'ST Context 4H oppos茅')
+                        send_close_alert(symbol, 'CONTEXT4H', dir_c4h, price, 'ST Context 4H opposé')
             elif tf == '15m':
                 prev_ctx_15m_global = ST_CONTEXT_15M.get(symbol)
                 ctx15m_zone_changed_this_call = (parsed_ctx is not None and parsed_ctx != prev_ctx_15m_global)
@@ -1338,7 +1338,7 @@ def process_webhook(data):
 
         # ========================================================================
         # ========================================================================
-        # MISE 脌 JOUR DES 脡TATS (ST AI, relai Tapbit, guards)
+        # MISE À JOUR DES ÉTATS (ST AI, relai Tapbit, guards)
         # ========================================================================
         if strat in ['momentum', 'context', 'scalp', 'pulse', 'daily', 'trend3d', 'all']:
             m = MOMENTUM_STATE[symbol]
@@ -1357,7 +1357,7 @@ def process_webhook(data):
                     m['last_st_2h'] = prev_2h
             if alert_type == 'supertrend' and tf == '4h':
                 prev_4h = m.get('st_4h')
-                m['prev_st_4h'] = prev_4h  # sauvegarder avant mise 脿 jour
+                m['prev_st_4h'] = prev_4h  # sauvegarder avant mise à jour
                 m['st_4h'] = parse_supertrend_value(val)
                 m['st_4h_flipped'] = bool(prev_4h is not None and m['st_4h'] is not None and m['st_4h'] != prev_4h)
                 if m['st_4h_flipped']:
@@ -1372,7 +1372,7 @@ def process_webhook(data):
                                 'value': v, 'price': p, 'strategy': 'trend'
                             }, timeout=5)
                         except Exception as e:
-                            logger.debug(f"[TAPBIT] Relai 4H 茅chou茅 {sym}: {e}")
+                            logger.debug(f"[TAPBIT] Relai 4H échoué {sym}: {e}")
                     threading.Thread(target=_relay_4h, daemon=True).start()
             if alert_type == 'supertrend' and tf == '6h':
                 prev_6h = m.get('st_6h')
@@ -1393,7 +1393,7 @@ def process_webhook(data):
                 m['st_ai_15m'] = st_15m_val
                 st_ai_15m_flipped_this_call = bool(prev_15m and st_15m_val and st_15m_val != prev_15m)
                 if st_ai_15m_flipped_this_call:
-                    m['last_st_15m'] = prev_15m  # garde la valeur pr茅c茅dente pour le guard
+                    m['last_st_15m'] = prev_15m  # garde la valeur précédente pour le guard
                 ST_AI_15M[symbol] = st_15m_val
             if alert_type == 'supertrend' and tf == '30m':
                 prev_30m = m.get('st_ai_30m')
@@ -1406,8 +1406,8 @@ def process_webhook(data):
 
         # ========================================================================
         # ========================================================================
-        # LOGIQUE CONFLUENCE : ST Context 3D + ST Context 4H align茅 鈫?flip ST AI 4H
-        # Anti-chop : ST Context 3D oppos茅 OU ADX 1D DI oppos茅 dominant 鈫?annul茅
+        # LOGIQUE CONFLUENCE : ST Context 3D + ST Context 4H aligné → flip ST AI 4H
+        # Anti-chop : ST Context 3D opposé OU ADX 1D DI opposé dominant → annulé
         # ========================================================================
         # LOGIQUE CONTEXT4H - SUPPRIMEE :
         # Remplacee par DAILY. Bloc garde en reference mais desactive.
@@ -1463,7 +1463,7 @@ def process_webhook(data):
                     if is_entry_c and pos_c:
                         emoji = "\U0001f7e2" if direction_c == "LONG" else "\U0001f534"
                         bonus_10m_txt_c = (
-                            "\u2b50 <b>BONUS 10M ALIGN脡</b>\n"
+                            "\u2b50 <b>BONUS 10M ALIGNÉ</b>\n"
                             if ctx10m_bonus_c else ""
                         )
                         send_telegram_with_buttons(
@@ -2003,7 +2003,7 @@ def process_webhook(data):
 
 
         persist_runtime_state()
-        # 鈹€鈹€ Relay vers le Scalping Bot 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # ━━€ Relay vers le Scalping Bot ━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             (alert_type == 'supertrend' and tf == '2h')
@@ -2013,7 +2013,7 @@ def process_webhook(data):
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
             if symbol in scalp_symbols:
                 try:
-                    # Payload normalis茅 鈥?symbole et tf d茅j脿 normalis茅s par le bot principal
+                    # Payload normalisé — symbole et tf déjà normalisés par le bot principal
                     relay_payload = {
                         'symbol':   symbol,
                         'strategy': 'scalp',
@@ -2044,9 +2044,9 @@ def process_webhook(data):
                         except ValueError:
                             relay_result = {}
                         if relay_result.get('status') == 'ignored':
-                            logger.warning(f"[RELAY] {symbol} {tf} ignor茅 par scalpbot: {relay_result.get('reason', 'raison inconnue')}")
+                            logger.warning(f"[RELAY] {symbol} {tf} ignoré par scalpbot: {relay_result.get('reason', 'raison inconnue')}")
                         else:
-                            logger.info(f"[RELAY] {symbol} {tf} 鈫?scalpbot OK")
+                            logger.info(f"[RELAY] {symbol} {tf} → scalpbot OK")
                     else:
                         logger.warning(f"[RELAY] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
                 except Exception as e:
@@ -2063,7 +2063,7 @@ def telegram_callback():
         provided = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
         if provided != tg_secret:
             return jsonify({'ok': False}), 403
-    """Re莽oit les callbacks des boutons inline Telegram."""
+    """Reçoit les callbacks des boutons inline Telegram."""
     data = request.get_json(silent=True)
     if not data:
         return jsonify({'ok': True}), 200
@@ -2084,24 +2084,24 @@ def telegram_callback():
             key = callback_data[len('pyra_on:'):]
             with STATE_LOCK:
                 PYRA_ENABLED[key] = True
-            logger.info(f"[PYRA] Activ茅 par {user}: {key}")
+            logger.info(f"[PYRA] Activé par {user}: {key}")
             if tok and chat_id and msg_id:
                 requests.post(f"https://api.telegram.org/bot{tok}/editMessageReplyMarkup",
                              json={"chat_id": chat_id, "message_id": msg_id,
                                    "reply_markup": {"inline_keyboard": [[
-                                       {"text": "鉁?Pyramiding activ茅", "callback_data": "noop"}
+                                       {"text": "✅ Pyramiding activé", "callback_data": "noop"}
                                    ]]}}, timeout=5)
 
         elif callback_data.startswith('pyra_off:'):
             key = callback_data[len('pyra_off:'):]
             with STATE_LOCK:
                 PYRA_ENABLED.pop(key, None)
-            logger.info(f"[PYRA] D茅sactiv茅 par {user}: {key}")
+            logger.info(f"[PYRA] Désactivé par {user}: {key}")
             if tok and chat_id and msg_id:
                 requests.post(f"https://api.telegram.org/bot{tok}/editMessageReplyMarkup",
                              json={"chat_id": chat_id, "message_id": msg_id,
                                    "reply_markup": {"inline_keyboard": [[
-                                       {"text": "鉂?Pyramiding ignor茅", "callback_data": "noop"}
+                                       {"text": "❌ Pyramiding ignoré", "callback_data": "noop"}
                                    ]]}}, timeout=5)
 
         elif callback_data.startswith('journal_log:'):
@@ -2127,7 +2127,7 @@ def telegram_callback():
                                 },
                                 timeout=8
                             )
-                            logger.info(f"[JOURNAL] Relai log_entry 鈫?{resp.status_code}")
+                            logger.info(f"[JOURNAL] Relai log_entry →{resp.status_code}")
                         except Exception as e:
                             logger.error(f"[JOURNAL] Relai erreur: {e}")
                     threading.Thread(
@@ -2136,24 +2136,24 @@ def telegram_callback():
                               j_price_str, user_id_str, str(chat_id)),
                         daemon=True
                     ).start()
-                    # Mettre 脿 jour le bouton pour confirmer le clic
+                    # Mettre à jour le bouton pour confirmer le clic
                     if tok and chat_id and msg_id:
                         try:
-                            # Reconstruire le keyboard sans le bouton Journal (remplac茅)
+                            # Reconstruire le keyboard sans le bouton Journal (remplacé)
                             requests.post(
                                 f"https://api.telegram.org/bot{tok}/editMessageReplyMarkup",
                                 json={"chat_id": chat_id, "message_id": msg_id,
                                       "reply_markup": {"inline_keyboard": [[
-                                          {"text": "馃摀 鉁?Envoy茅 au journal", "callback_data": "noop"}
+                                          {"text": "📓 ✅ Envoyé au journal", "callback_data": "noop"}
                                       ]]}},
                                 timeout=5
                             )
                         except Exception:
                             pass
                 else:
-                    logger.warning("[JOURNAL] JOURNAL_BOT_URL non configur茅 鈥?callback ignor茅")
+                    logger.warning("[JOURNAL] JOURNAL_BOT_URL non configuré — callback ignoré")
             else:
-                logger.warning(f"[JOURNAL] callback_data mal form茅: {payload_str}")
+                logger.warning(f"[JOURNAL] callback_data mal formé: {payload_str}")
 
     except Exception as e:
         logger.error(f"[CALLBACK] Erreur: {e}")
@@ -2162,18 +2162,18 @@ def telegram_callback():
 
 @app.route('/prep_report', methods=['GET', 'POST'])
 def force_prep_report():
-    """Force l'envoi imm茅diat des listes PREP pour toutes les strat茅gies."""
+    """Force l'envoi immédiat des listes PREP pour toutes les stratégies."""
     global PREP_STATE
     PREP_STATE = {}  # Reset pour forcer le renvoi
     check_prep_alerts()
-    return jsonify({'status': 'ok', 'message': 'Rapport PREP envoy茅'}), 200
+    return jsonify({'status': 'ok', 'message': 'Rapport PREP envoyé'}), 200
 
 
 @app.route('/refresh', methods=['POST'])
 def refresh_indicators():
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
-    """Relance imm茅diatement le calcul des indicateurs OKX (Bias, ADX).
+    """Relance immédiatement le calcul des indicateurs OKX (Bias, ADX).
     Body optionnel: {"symbol": "BTC/USDT"} pour un seul asset.
     Sans body: relance pour tous les assets.
     """
@@ -2189,7 +2189,7 @@ def refresh_indicators():
         symbols = list(CONFIG['SYMBOLS'].keys()) + list(CONFIG.get('RADAR_SYMBOLS', {}).keys())
 
     def _run():
-        logger.info(f"[REFRESH] Calcul forc茅 pour {len(symbols)} assets...")
+        logger.info(f"[REFRESH] Calcul forcé pour {len(symbols)} assets...")
         for sym in symbols:
             try:
                 if is_radar_symbol(sym) and not is_trade_symbol(sym):
@@ -2200,10 +2200,10 @@ def refresh_indicators():
                 logger.error(f"[REFRESH] {sym}: {e}")
         persist_runtime_state()
         check_daily_radar_report()
-        logger.info("[REFRESH] Termin茅")
+        logger.info("[REFRESH] Terminé")
 
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify({'status': 'ok', 'message': f'Refresh lanc茅 pour {len(symbols)} assets'}), 200
+    return jsonify({'status': 'ok', 'message': f'Refresh lancé pour {len(symbols)} assets'}), 200
 
 
 @app.route('/sync_scalp', methods=['POST'])
@@ -2260,7 +2260,7 @@ def sync_scalp():
 def reset_state_all():
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
-    """Remet tout le state 脿 z茅ro."""
+    """Remet tout le state à zéro."""
     with STATE_LOCK:
         MOMENTUM_STATE.clear()
         LAST_SIGNALS.clear()
@@ -2283,17 +2283,17 @@ def reset_state_all():
         PREP_STATE.clear()
         PYRA_ENABLED.clear()
     persist_runtime_state()
-    logger.info("馃攧 State complet remis 脿 z茅ro")
-    return jsonify({'status': 'reset', 'message': '脡tat complet remis 脿 z茅ro'}), 200
+    logger.info("🔄 State complet remis à zéro")
+    return jsonify({'status': 'reset', 'message': 'État complet remis à zéro'}), 200
 
 @app.route('/reset_state/<path:symbol>', methods=['POST'])
 def reset_state_symbol(symbol):
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
-    """Remet 脿 z茅ro l'茅tat d'un seul asset. Ex: /reset_state/CVX/USDT"""
+    """Remet à zéro l'état d'un seul asset. Ex: /reset_state/CVX/USDT"""
     symbol = symbol.upper().replace('-', '/')
     if symbol not in get_tracked_symbols():
-        return jsonify({'status': 'error', 'message': f'{symbol} non trouv茅 dans la watchlist'}), 404
+        return jsonify({'status': 'error', 'message': f'{symbol} non trouvé dans la watchlist'}), 404
     with STATE_LOCK:
         MOMENTUM_STATE.pop(symbol, None)
         ST_AI_15M.pop(symbol, None)
@@ -2322,8 +2322,8 @@ def reset_state_symbol(symbol):
             LAST_SIGNALS.pop(k, None)
             LAST_SIGNAL_EVENTS.pop(k, None)
     persist_runtime_state()
-    logger.info(f"馃攧 State remis 脿 z茅ro pour {symbol}")
-    return jsonify({'status': 'reset', 'symbol': symbol, 'message': f'脡tat de {symbol} remis 脿 z茅ro'}), 200
+    logger.info(f"🔄 State remis à zéro pour {symbol}")
+    return jsonify({'status': 'reset', 'symbol': symbol, 'message': f'État de {symbol} remis à zéro'}), 200
 
 
 
@@ -2351,7 +2351,7 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
 
 
 def calc_adx_okx(df, length=11, threshold=20):
-    """Calcule ADX + DI sur les donn茅es OHLCV."""
+    """Calcule ADX + DI sur les données OHLCV."""
     try:
         high  = df['high']
         low   = df['low']
@@ -2379,7 +2379,7 @@ def calc_adx_okx(df, length=11, threshold=20):
         return None
 
 def calc_bias_okx(df, ema_len=13, sma_len=30):
-    """EMA13 vs SMA30 鈥?Carr茅Bias."""
+    """EMA13 vs SMA30 — CarréBias."""
     close   = df['close']
     ema_val = close.ewm(span=ema_len, adjust=False).mean().iloc[-1]
     sma_val = close.rolling(window=sma_len).mean().iloc[-1]
@@ -2391,7 +2391,7 @@ def calc_ema200_okx(df):
 
 
 def calc_bias_2d(symbol):
-    """Calcule le Bias 2D en agr茅geant les bougies 1D par paires."""
+    """Calcule le Bias 2D en agrégeant les bougies 1D par paires."""
     try:
         df_1d = fetch_ohlcv_okx(symbol, '1d', limit=100)
         if df_1d is None or len(df_1d) < 40:
@@ -2466,7 +2466,7 @@ def relay_scalp_bias_2h(symbol, bias_2h, price=0):
 
 def update_indicators_for_symbol(symbol):
     """Met a jour tous les indicateurs calculables pour un asset."""
-    # Assets sans donn茅es OKX directes 鈥?indicateurs via webhooks TV uniquement
+    # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
         return
@@ -2491,7 +2491,7 @@ def update_indicators_for_symbol(symbol):
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)
 
-        # Bias 3D 鈥?agreger bougies 1D par triplets
+        # Bias 3D — agreger bougies 1D par triplets
         try:
             df_3d_agg = df_3d.groupby(df_3d.index // 3).agg({
                 'open': 'first', 'high': 'max', 'low': 'min',
@@ -2550,7 +2550,7 @@ def update_indicators_for_symbol(symbol):
                 if bias_2h is not None: MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
 
 
-        logger.info(f"[OKX] {symbol} mis a jour 鈥?B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
@@ -2611,17 +2611,17 @@ def check_daily_radar_report():
     if new_radar['LONG'] == old_radar.get('LONG', set()) and new_radar['SHORT'] == old_radar.get('SHORT', set()):
         return
 
-    lines = ["馃攷 <b>[DAILY RADAR]</b>"]
+    lines = ["🔎 <b>[DAILY RADAR]</b>"]
     if new_radar['LONG']:
-        lines.append("馃煝 LONG  : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['LONG'])))
+        lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['LONG'])))
     if new_radar['SHORT']:
-        lines.append("馃敶 SHORT : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['SHORT'])))
+        lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['SHORT'])))
     if not new_radar['LONG'] and not new_radar['SHORT']:
-        lines.append("鈥?Aucun asset radar aligne")
+        lines.append("— Aucun asset radar aligne")
     if blocked['LONG'] or blocked['SHORT']:
         blocked_assets = sorted((blocked['LONG'] | blocked['SHORT']))
-        lines.append("馃洝锔?Bloques LT30m : " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
-    lines.append(f"鈴?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
+        lines.append("🛡️ Bloques LT30m : " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
+    lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
 
     send_info("\n".join(lines))
     PREP_STATE['DAILY_RADAR'] = {'LONG': new_radar['LONG'], 'SHORT': new_radar['SHORT']}
@@ -2630,13 +2630,13 @@ def check_daily_radar_report():
 
 
 def check_prep_alerts():
-    """Envoie alertes PREP CONTEXT4H et PULSE quand les conditions sont r茅unies."""
+    """Envoie alertes PREP CONTEXT4H et PULSE quand les conditions sont réunies."""
     global PREP_STATE
     with STATE_LOCK:
         state_copy  = dict(MOMENTUM_STATE)
         symbols_conf = CONFIG['SYMBOLS']
 
-    # 鈹€鈹€ PREP CONTEXT4H 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ━━€ PREP CONTEXT4H ━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€
     new_prep_c4h = {'LONG': set(), 'SHORT': set()}
 
     for symbol, m in state_copy.items():
@@ -2661,19 +2661,19 @@ def check_prep_alerts():
     new_long  = new_prep_c4h['LONG']
     new_short = new_prep_c4h['SHORT']
     if False and (new_long != old_c4h.get('LONG', set()) or new_short != old_c4h.get('SHORT', set())):
-        lines = ["鈴?<b>[PREP CONTEXT4H]</b>"]
+        lines = ["⏰<b>[PREP CONTEXT4H]</b>"]
         if new_long:
-            lines.append("馃煝 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_long)))
+            lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_long)))
         if new_short:
-            lines.append("馃敶 SHORT : " + "  ".join(sorted(s.replace('/USDT','') for s in new_short)))
+            lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT','') for s in new_short)))
         if not new_long and not new_short:
-            lines.append("鈥?Aucun asset en pr茅paration")
-        lines.append(f"鈴?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
+            lines.append("— Aucun asset en préparation")
+        lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
         send_info("\n".join(lines))
-        logger.info("[PREP] CONTEXT4H envoy茅")
+        logger.info("[PREP] CONTEXT4H envoyé")
     PREP_STATE['CONTEXT4H'] = {'LONG': set(), 'SHORT': set()}
 
-    # 鈹€鈹€ PREP PULSE 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ━━€ PREP PULSE ━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€━━€
     # Condition : principale ST AI 6H + Bias 2H + ST Context 5m
     # ou secondaire Bias 6H + ST Context 30m + ST Context 5m.
     new_prep_pulse = {'LONG': set(), 'SHORT': set()}
@@ -2699,23 +2699,23 @@ def check_prep_alerts():
     new_p_long  = new_prep_pulse['LONG']
     new_p_short = new_prep_pulse['SHORT']
     if new_p_long != old_pulse.get('LONG', set()) or new_p_short != old_pulse.get('SHORT', set()):
-        lines = ["鈴?<b>[PREP PULSE]</b>"]
+        lines = ["⏰<b>[PREP PULSE]</b>"]
         if new_p_long:
-            lines.append("馃煝 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_p_long)))
+            lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_p_long)))
         if new_p_short:
-            lines.append("馃敶 SHORT : " + "  ".join(sorted(s.replace('/USDT','') for s in new_p_short)))
+            lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT','') for s in new_p_short)))
         if not new_p_long and not new_p_short:
-            lines.append("鈥?Aucun asset en pr茅paration")
-        lines.append(f"鈴?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
+            lines.append("— Aucun asset en préparation")
+        lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
         send_info("\n".join(lines))
-        logger.info("[PREP] PULSE envoy茅")
+        logger.info("[PREP] PULSE envoyé")
     PREP_STATE['PULSE'] = {'LONG': new_p_long, 'SHORT': new_p_short}
 
 
 def bias4h_report_scheduler():
     """Envoie toutes les 4H un rapport de suivi des tendances PULSE."""
-    logger.info("馃搳 Scheduler rapport Bias 6H d茅marr茅 (toutes les 4H)")
-    # Attendre 10 minutes apr猫s d茅marrage pour que les donn茅es soient charg茅es
+    logger.info("📊 Scheduler rapport Bias 6H démarré (toutes les 4H)")
+    # Attendre 10 minutes après démarrage pour que les données soient chargées
     time.sleep(600)
     while True:
         try:
@@ -2743,7 +2743,7 @@ def bias4h_report_scheduler():
 
             # Bloc 2 (ex-ST Context 4H + ST AI 4H) : supprime, CONTEXT4H desactivee.
 
-            # Bloc 3 : ST AI 6H + Bias 2H align茅s
+            # Bloc 3 : ST AI 6H + Bias 2H alignés
             ai6h_bias_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
                                         if (m.get('st_6h') or m.get('st_ai_6h')) == 'buy' and m.get('bias_2h') == 'bull'])
             ai6h_bias_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
@@ -2760,20 +2760,20 @@ def bias4h_report_scheduler():
             bias6h_ctx5m_short_str = "  ".join(bias6h_ctx5m_short) if bias6h_ctx5m_short else "-"
 
             msg = (
-                f"馃搳 <b>[BIAS 6H+2H 鈥?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
-                f"鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-                f"馃煝 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
-                f"馃敶 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
-                f"猬?<b>MIXTE / NON ALIGN脡 ({len(mixed_assets)})</b> : {mixed_str}\n\n"
-                f"馃搱 <b>[ST AI 6H + BIAS 2H]</b>\n"
-                f"馃煝 <b>LONG ({len(ai6h_bias_long)})</b> : {ai6h_bias_long_str}\n\n"
-                f"馃敶 <b>SHORT ({len(ai6h_bias_short)})</b> : {ai6h_bias_short_str}\n\n"
-                f"馃搱 <b>[BIAS 6H + ST CONTEXT 30M + 5M]</b>\n"
-                f"馃煝 <b>LONG ({len(bias6h_ctx5m_long)})</b> : {bias6h_ctx5m_long_str}\n\n"
-                f"馃敶 <b>SHORT ({len(bias6h_ctx5m_short)})</b> : {bias6h_ctx5m_short_str}"
+                f"📊 <b>[BIAS 6H+2H —{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
+                f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
+                f"⬜<b>MIXTE / NON ALIGNÉ ({len(mixed_assets)})</b> : {mixed_str}\n\n"
+                f"📈 <b>[ST AI 6H + BIAS 2H]</b>\n"
+                f"🟢 <b>LONG ({len(ai6h_bias_long)})</b> : {ai6h_bias_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(ai6h_bias_short)})</b> : {ai6h_bias_short_str}\n\n"
+                f"📈 <b>[BIAS 6H + ST CONTEXT 30M + 5M]</b>\n"
+                f"🟢 <b>LONG ({len(bias6h_ctx5m_long)})</b> : {bias6h_ctx5m_long_str}\n\n"
+                f"🔴 <b>SHORT ({len(bias6h_ctx5m_short)})</b> : {bias6h_ctx5m_short_str}"
             )
             send_info(msg)
-            logger.info(f"[BIAS6H] Rapport envoy茅 鈥?{len(bull_assets)} bull, {len(bear_assets)} bear")
+            logger.info(f"[BIAS6H] Rapport envoyé —{len(bull_assets)} bull, {len(bear_assets)} bear")
         except Exception as e:
             logger.error(f"[BIAS6H] Erreur rapport: {e}")
 
@@ -2786,8 +2786,8 @@ def bias4h_report_scheduler():
 
 def indicators_scheduler():
     """Recalcule tous les indicateurs depuis OKX toutes les heures."""
-    logger.info("[OKX] Scheduler indicateurs d茅marr茅 (toutes les 15 minutes)")
-    # Premier calcul au d茅marrage apr猫s 30s
+    logger.info("[OKX] Scheduler indicateurs démarré (toutes les 15 minutes)")
+    # Premier calcul au démarrage après 30s
     time.sleep(30)
     while True:
         radar_symbols = CONFIG.get('RADAR_SYMBOLS', {})
@@ -2801,7 +2801,7 @@ def indicators_scheduler():
         persist_runtime_state()
         check_prep_alerts()
         check_daily_radar_report()
-        logger.info("[OKX] Mise a jour indicateurs termin茅e")
+        logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m
         now = datetime.now(timezone.utc)
         minutes_to_next = 15 - (now.minute % 15)
@@ -2813,7 +2813,7 @@ def indicators_scheduler():
 
 
 def send_market_sentiment():
-    """Calcule et envoie le sentiment de march茅 bas茅 sur les biais 2D et 4H."""
+    """Calcule et envoie le sentiment de marché basé sur les biais 2D et 4H."""
     try:
         with STATE_LOCK:
             state_copy = dict(MOMENTUM_STATE)
@@ -2831,22 +2831,22 @@ def send_market_sentiment():
         pct_4h   = round(bulls_4h / total * 100)
 
         def sentiment_label(pct):
-            if pct >= 60:   return "馃煝 BULLISH"
-            elif pct <= 40: return "馃敶 BEARISH"
-            else:           return "馃煛 NEUTRE"
+            if pct >= 60:   return "🟢 BULLISH"
+            elif pct <= 40: return "🔴 BEARISH"
+            else:           return "🟡 NEUTRE"
 
         label_2d = sentiment_label(pct_2d)
         label_4h = sentiment_label(pct_4h)
 
         msg = (
-            f"馃搳 <b>Sentiment de march茅</b>\n"
-            f"鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-            f"馃暞 <b>Long terme (2D)</b> : {label_2d}\n"
-            f"   {bulls_2d} bulls / {bears_2d} bears 鈥?{pct_2d}%\n\n"
-            f"鈿?<b>Court terme (4H)</b> : {label_4h}\n"
-            f"   {bulls_4h} bulls / {bears_4h} bears 鈥?{pct_4h}%\n"
-            f"鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n"
-            f"鈴?{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}"
+            f"📊 <b>Sentiment de marché</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🕯 <b>Long terme (2D)</b> : {label_2d}\n"
+            f"   {bulls_2d} bulls / {bears_2d} bears —{pct_2d}%\n\n"
+            f"⚡<b>Court terme (4H)</b> : {label_4h}\n"
+            f"   {bulls_4h} bulls / {bears_4h} bears —{pct_4h}%\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}"
         )
         send_info(msg)
         logger.info(f"[SENTIMENT] 2D: {pct_2d}% bull | 4H: {pct_4h}% bull")
@@ -2855,11 +2855,11 @@ def send_market_sentiment():
 
 
 def sentiment_scheduler():
-    """Envoie le sentiment de march茅 toutes les 4H (脿 00:02, 04:02, 08:02, 12:02, 16:02, 20:02 UTC)."""
-    logger.info("[SENTIMENT] Scheduler d茅marr茅 (toutes les 4H)")
+    """Envoie le sentiment de marché toutes les 4H (à 00:02, 04:02, 08:02, 12:02, 16:02, 20:02 UTC)."""
+    logger.info("[SENTIMENT] Scheduler démarré (toutes les 4H)")
     while True:
         now  = datetime.now(timezone.utc)
-        # Prochaine bougie 4H ferm茅e : 00, 04, 08, 12, 16, 20 + 2min
+        # Prochaine bougie 4H fermée : 00, 04, 08, 12, 16, 20 + 2min
         next_4h = now.replace(minute=2, second=0, microsecond=0)
         if next_4h.hour % 4 != 0:
             hours_ahead = 4 - (next_4h.hour % 4)
@@ -2877,7 +2877,7 @@ def sentiment_scheduler():
 
 def startup():
     try:
-        logger.info("馃殌 D茅marrage du bot...")
+        logger.info("🚀 Démarrage du bot...")
         init_redis()
         load_runtime_state()
         init_exchanges()
@@ -2903,14 +2903,14 @@ def startup():
                 telegram_result = resp_wh.json()
                 if resp_wh.status_code != 200 or not telegram_result.get('ok'):
                     raise RuntimeError(f"Telegram setWebhook HTTP {resp_wh.status_code}: {resp_wh.text[:200]}")
-                logger.info(f'鉁?Telegram webhook configur茅: {wh_url}')
+                logger.info(f'✅ Telegram webhook configuré: {wh_url}')
             elif tok and not base_url:
-                logger.warning('鈿狅笍 PUBLIC_BASE_URL non d茅fini 鈥?webhook Telegram non configur茅')
-                logger.warning('鈿狅笍 Les boutons Telegram (pyramiding, journal) ne fonctionneront PAS')
+                logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')
+                logger.warning('⚠️ Les boutons Telegram (pyramiding, journal) ne fonctionneront PAS')
                 # Envoyer un avertissement sur Telegram
-                send_info('鈿狅笍 <b>Bot d茅marr茅 sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont d茅sactiv茅s.\nConfigurer PUBLIC_BASE_URL sur Railway.')
+                send_info('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont désactivés.\nConfigurer PUBLIC_BASE_URL sur Railway.')
         except Exception as e:
-            logger.warning(f'鈿狅笍 Telegram webhook setup: {e}')
+            logger.warning(f'⚠️ Telegram webhook setup: {e}')
         bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)
         bias4h_thread.start()
 
@@ -2928,19 +2928,19 @@ def startup():
 
         scalp_url_check = os.environ.get('SCALP_BOT_URL', '')
         if not scalp_url_check:
-            logger.warning('鈿狅笍 SCALP_BOT_URL non d茅fini 鈥?relay scalpbot d茅sactiv茅')
+            logger.warning('⚠️ SCALP_BOT_URL non défini — relay scalpbot désactivé')
         else:
-            logger.info(f'鉁?Relay scalpbot activ茅 鈫?{scalp_url_check}')
-        logger.info("鈴?Schedulers d茅marr茅s (rapport hebdo + heartbeat + prep report + indicateurs OKX + sentiment 4H + TV watchdog)")
+            logger.info(f'✅ Relay scalpbot activé →{scalp_url_check}')
+        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX + sentiment 4H + TV watchdog)")
     except Exception as e:
-        logger.error(f"鉂?Erreur au d茅marrage: {e}")
+        logger.error(f"❌ Erreur au démarrage: {e}")
 
-# D茅marrer les schedulers seulement dans le worker principal
+# Démarrer les schedulers seulement dans le worker principal
 if os.environ.get('ENABLE_SCHEDULERS', '1') == '1':
     startup_thread = threading.Thread(target=startup, daemon=True)
     startup_thread.start()
 
 if __name__ == '__main__':
-    logger.info(f"鉁?Bot d茅marr茅 sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
+    logger.info(f"✅ Bot démarré sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
     app.run(host=CONFIG['WEBHOOK_HOST'], port=CONFIG['WEBHOOK_PORT'], debug=False)
 

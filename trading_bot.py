@@ -1092,7 +1092,7 @@ def init_symbol_states(symbol):
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
+            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'st_context_2h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
         }
@@ -1399,6 +1399,7 @@ def process_webhook(data):
                 prev_30m = m.get('st_ai_30m')
                 st_30m_val = parse_supertrend_value(val)
                 m['st_ai_30m'] = st_30m_val
+                m['st_ai_30m_ts'] = now_ts
                 st_ai_30m_flipped_this_call = bool(prev_30m and st_30m_val and st_30m_val != prev_30m)
                 if st_ai_30m_flipped_this_call:
                     m['last_st_30m'] = prev_30m
@@ -2006,7 +2007,7 @@ def process_webhook(data):
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
-            (alert_type == 'supertrend' and tf == '2h')
+            (alert_type == 'supertrend' and tf in ('2h', '30m'))
             or (alert_type == 'st_context' and tf in ('1m', '5m'))
         )
         if scalp_url and should_relay_scalp:
@@ -2249,6 +2250,28 @@ def sync_scalp():
         else:
             errors.append(f"{symbol}: etat ST AI 2H absent/invalide ({st_2h!r})")
 
+        st_30m = m.get('st_ai_30m')
+        if st_30m in ('buy', 'sell'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '30m',
+                    'type':     'supertrend',
+                    'value':    '1' if st_30m == 'buy' else '0',
+                    'price':    0,
+                    'event_id': f"sync_scalp_st30m_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('st30m')
+                else:
+                    errors.append(f"{symbol}: ST30M HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ST30M {e}")
+        else:
+            errors.append(f"{symbol}: etat ST AI 30M absent/invalide ({st_30m!r})")
+
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
 
@@ -2484,7 +2507,7 @@ def update_indicators_for_symbol(symbol):
         # Calculs
         bias_1h  = calc_bias_okx(df_1h, ema_len=13, sma_len=30)
         df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
-        bias_2h  = calc_bias_okx(df_2h, ema_len=13, sma_len=30) if df_2h is not None else None
+        bias_2h  = calc_bias_okx(df_2h, ema_len=17, sma_len=40) if df_2h is not None else None
         bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
         bias_1d  = calc_bias_okx(df_1d, ema_len=13, sma_len=30)
@@ -2943,4 +2966,3 @@ if os.environ.get('ENABLE_SCHEDULERS', '1') == '1':
 if __name__ == '__main__':
     logger.info(f"✅ Bot démarré sur {CONFIG['WEBHOOK_HOST']}:{CONFIG['WEBHOOK_PORT']}")
     app.run(host=CONFIG['WEBHOOK_HOST'], port=CONFIG['WEBHOOK_PORT'], debug=False)
-

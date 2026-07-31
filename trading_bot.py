@@ -642,6 +642,8 @@ def send_start_notification():
         "1️⃣ <b>DAILY</b>\n"
         "   — Bias 1D 13/30 + ST AI 1D + Zone ST Context 30m\n"
         "   — Signal: flip ST AI 30m / Bonus: ST Context 1D aligné\n"
+        "   — Secondaire: ST AI 1D + ST Context 2H + ST Context 30m\n"
+        "   — Info report: ST AI 1D + ST Context 2H\n"
         "   — Anti-chop: LT 30m même sens\n\n"
         "2️⃣ <b>PULSE</b>\n"
         "   — Principale: ST AI 6H + Bias 2H + Zone ST Context 5m, bonus/warning 30m\n"
@@ -1705,6 +1707,76 @@ def process_webhook(data):
                         track_alert(symbol, 'DAILY')
                         logger.info(f"[DAILY] Entree {signal_type_d}: {symbol} {direction_d}")
 
+            # Entree secondaire DAILY :
+            # ST AI 1D + ST Context 2H + ST Context 30m alignes.
+            if (
+                (alert_type == 'st_context' and tf in ('2h', '30m'))
+                or (alert_type == 'supertrend' and tf == '1d')
+            ):
+                st_1d_s = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+                ctx_2h_s = m.get('st_context_2h')
+                ctx_30m_s = ST_CONTEXT_30M.get(symbol)
+
+                st_1d_fresh_s = bool(st_1d_s) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+                ctx_2h_fresh_s = bool(ctx_2h_s) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
+                ctx_30m_fresh_s = bool(ctx_30m_s) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+
+                direction_s = None
+                if st_1d_s == 'buy' and ctx_2h_s == 'buy' and ctx_30m_s == 'buy':
+                    direction_s = 'LONG'
+                elif st_1d_s == 'sell' and ctx_2h_s == 'sell' and ctx_30m_s == 'sell':
+                    direction_s = 'SHORT'
+
+                daily_secondary_ok = bool(direction_s and st_1d_fresh_s and ctx_2h_fresh_s and ctx_30m_fresh_s)
+
+                logger.info(
+                    f"[DAILY CHECK SECONDAIRE] {symbol} dir={direction_s} "
+                    f"st1d={st_1d_s} fresh={st_1d_fresh_s} "
+                    f"ctx2h={ctx_2h_s} fresh={ctx_2h_fresh_s} "
+                    f"ctx30m={ctx_30m_s} fresh={ctx_30m_fresh_s} ok={daily_secondary_ok}"
+                )
+
+                if daily_secondary_ok:
+                    exp_ctx_s = 'buy' if direction_s == 'LONG' else 'sell'
+                    pos_key_s = f"{symbol}_DAILY"
+                    with STATE_LOCK:
+                        pos_s = SCALP_POSITIONS.get(pos_key_s)
+                        if pos_s and pos_s['direction'] != direction_s:
+                            SCALP_POSITIONS.pop(pos_key_s, None)
+                            PYRA_ENABLED.pop(pos_key_s, None)
+                            pos_s = None
+                        is_entry_s = bool(pos_s is None or pos_s.get('signal_type') != 'daily_secondaire')
+                        if is_entry_s and should_send(symbol, f"daily_entry_secondaire_{exp_ctx_s}", event_id=event_id, cooldown=14400):
+                            SCALP_POSITIONS[pos_key_s] = {
+                                'direction': direction_s,
+                                'entry_count': 1,
+                                'signal_type': 'daily_secondaire',
+                            }
+                            PYRA_ENABLED.pop(pos_key_s, None)
+                            pos_s = SCALP_POSITIONS[pos_key_s]
+                        else:
+                            is_entry_s = False
+
+                    if is_entry_s and pos_s:
+                        emoji = "\U0001f7e2" if direction_s == "LONG" else "\U0001f534"
+                        send_telegram_with_buttons(
+                            f"{emoji} <b>[DAILY - ENTREE SECONDAIRE]</b> {symbol}\n"
+                            f"--------------------\n"
+                            f"Direction: {direction_s}\n"
+                            f"Price: ${format_price(price)}\n"
+                            f"Exchange: {exchange_name.upper()}\n"
+                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                            f"[OK] ST AI 1D: {(st_1d_s or 'N/A').upper()}\n"
+                            f"[OK] Zone ST Context 2H: {(ctx_2h_s or 'N/A').upper()}\n"
+                            f"[OK] Zone ST Context 30m: {(ctx_30m_s or 'N/A').upper()}\n"
+                            f"{get_market_context_info()}",
+                            f"{symbol}_DAILY",
+                            journal_symbol=symbol, journal_strategy='DAILY',
+                            journal_direction=direction_s, journal_price=price
+                        )
+                        track_alert(symbol, 'DAILY')
+                        logger.info(f"[DAILY] Entree secondaire: {symbol} {direction_s}")
+
         # ========================================================================
         # ========================================================================
         # LOGIQUE PULSE :
@@ -2602,16 +2674,19 @@ def check_daily_radar_report():
     """Rapport info-only: Bias 1D + ST Context 30m alignes, bloque par LT 30m meme sens."""
     global PREP_STATE
     radar_symbols = set(CONFIG.get('RADAR_SYMBOLS', {}))
-    if not radar_symbols:
+    info_symbols = set(get_tracked_symbols())
+    if not radar_symbols and not info_symbols:
         return
 
     with STATE_LOCK:
-        state_copy = {s: dict(MOMENTUM_STATE.get(s, {})) for s in radar_symbols}
+        state_copy = {s: dict(MOMENTUM_STATE.get(s, {})) for s in (radar_symbols | info_symbols)}
 
     new_radar = {'LONG': set(), 'SHORT': set()}
     blocked = {'LONG': set(), 'SHORT': set()}
+    daily_info = {'LONG': set(), 'SHORT': set()}
 
-    for symbol, m in state_copy.items():
+    for symbol in radar_symbols:
+        m = state_copy.get(symbol, {})
         bias_1d = m.get('bias_1d')
         ctx_30m = ST_CONTEXT_30M.get(symbol)
         lt_30m = ST_CONTEXT_LT_30M.get(symbol)
@@ -2630,8 +2705,26 @@ def check_daily_radar_report():
             elif setup_ok:
                 new_radar[direction].add(symbol)
 
+    for symbol in info_symbols:
+        m = state_copy.get(symbol, {})
+        st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+        ctx_2h = m.get('st_context_2h')
+
+        st_fresh = bool(st_1d) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+        ctx_fresh = bool(ctx_2h) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
+
+        if st_fresh and ctx_fresh and st_1d == 'buy' and ctx_2h == 'buy':
+            daily_info['LONG'].add(symbol)
+        elif st_fresh and ctx_fresh and st_1d == 'sell' and ctx_2h == 'sell':
+            daily_info['SHORT'].add(symbol)
+
     old_radar = PREP_STATE.get('DAILY_RADAR', {'LONG': set(), 'SHORT': set()})
-    if new_radar['LONG'] == old_radar.get('LONG', set()) and new_radar['SHORT'] == old_radar.get('SHORT', set()):
+    if (
+        new_radar['LONG'] == old_radar.get('LONG', set())
+        and new_radar['SHORT'] == old_radar.get('SHORT', set())
+        and daily_info['LONG'] == old_radar.get('INFO_LONG', set())
+        and daily_info['SHORT'] == old_radar.get('INFO_SHORT', set())
+    ):
         return
 
     lines = ["🔎 <b>[DAILY RADAR]</b>"]
@@ -2644,11 +2737,26 @@ def check_daily_radar_report():
     if blocked['LONG'] or blocked['SHORT']:
         blocked_assets = sorted((blocked['LONG'] | blocked['SHORT']))
         lines.append("🛡️ Bloques LT30m : " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
+    if daily_info['LONG'] or daily_info['SHORT']:
+        lines.append("")
+        lines.append("<b>[INFO DAILY: ST AI 1D + ST Context 2H]</b>")
+        if daily_info['LONG']:
+            lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['LONG'])))
+        if daily_info['SHORT']:
+            lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['SHORT'])))
     lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
 
     send_info("\n".join(lines))
-    PREP_STATE['DAILY_RADAR'] = {'LONG': new_radar['LONG'], 'SHORT': new_radar['SHORT']}
-    logger.info(f"[DAILY RADAR] envoye long={len(new_radar['LONG'])} short={len(new_radar['SHORT'])}")
+    PREP_STATE['DAILY_RADAR'] = {
+        'LONG': new_radar['LONG'],
+        'SHORT': new_radar['SHORT'],
+        'INFO_LONG': daily_info['LONG'],
+        'INFO_SHORT': daily_info['SHORT'],
+    }
+    logger.info(
+        f"[DAILY RADAR] envoye long={len(new_radar['LONG'])} short={len(new_radar['SHORT'])} "
+        f"info_long={len(daily_info['LONG'])} info_short={len(daily_info['SHORT'])}"
+    )
 
 
 

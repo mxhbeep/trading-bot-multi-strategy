@@ -25,23 +25,23 @@ CONFIG = {
     'SYMBOLS': {
         'AAVE/USDT':   {'exchange': 'okx', 'scalp': False},
         'APT/USDT':    {'exchange': 'okx', 'scalp': False},
-        'AVAX/USDT':   {'exchange': 'okx', 'scalp': True},
+        'AVAX/USDT':   {'exchange': 'okx', 'scalp': False},
         'BONK/USDT':   {'exchange': 'okx', 'scalp': False},
         'BTC/USDT':    {'exchange': 'okx', 'scalp': True},
         'COMP/USDT':   {'exchange': 'okx', 'scalp': False},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': False},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True},
-        'INJ/USDT':    {'exchange': 'okx', 'scalp': True},
+        'INJ/USDT':    {'exchange': 'okx', 'scalp': False},
         'LINK/USDT':   {'exchange': 'okx', 'scalp': False},
-        'LTC/USDT':    {'exchange': 'okx', 'scalp': True},
+        'LTC/USDT':    {'exchange': 'okx', 'scalp': False},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': False},
-        'ONDO/USDT':   {'exchange': 'okx', 'scalp': True},
+        'ONDO/USDT':   {'exchange': 'okx', 'scalp': False},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False},
-        'SOL/USDT':    {'exchange': 'okx', 'scalp': True},
-        'SUI/USDT':    {'exchange': 'okx', 'scalp': True},
+        'SOL/USDT':    {'exchange': 'okx', 'scalp': False},
+        'SUI/USDT':    {'exchange': 'okx', 'scalp': False},
         'TAO/USDT':    {'exchange': 'okx', 'scalp': False},  # perp-only
-        'UNI/USDT':    {'exchange': 'okx', 'scalp': True},
+        'UNI/USDT':    {'exchange': 'okx', 'scalp': False},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True},
     },
 
@@ -2068,7 +2068,8 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             (alert_type == 'supertrend' and tf in ('2h', '30m'))
-            or (alert_type == 'st_context' and tf in ('1m', '5m'))
+            or (alert_type == 'st_context' and tf in ('5m', '2h'))
+            or (alert_type == 'st_context_lt' and tf == '5m')
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
@@ -2284,6 +2285,13 @@ def sync_scalp():
     with STATE_LOCK:
         state_copy = dict(MOMENTUM_STATE)
 
+    def ctx_to_sync_value(ctx):
+        if ctx == 'buy':
+            return '-2.0'
+        if ctx == 'sell':
+            return '2.0'
+        return '0'
+
     for symbol in sorted(scalp_symbols):
         m = state_copy.get(symbol, {})
         symbol_sent = []
@@ -2331,6 +2339,83 @@ def sync_scalp():
                 errors.append(f"{symbol}: ST30M {e}")
         else:
             errors.append(f"{symbol}: etat ST AI 30M absent/invalide ({st_30m!r})")
+
+        bias_2h = m.get('bias_2h')
+        if bias_2h in ('bull', 'bear', 'neutral', None):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '2h',
+                    'type':     'bias',
+                    'value':    bias_2h or 'neutral',
+                    'price':    0,
+                    'event_id': f"sync_scalp_bias2h_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('bias2h')
+                else:
+                    errors.append(f"{symbol}: Bias2H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: Bias2H {e}")
+
+        ctx_2h = m.get('st_context_2h')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '2h',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx_2h),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx2h_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx2h')
+            else:
+                errors.append(f"{symbol}: CTX2H HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX2H {e}")
+
+        ctx_5m = m.get('st_context_5m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '5m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx_5m),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx5m_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx5m')
+            else:
+                errors.append(f"{symbol}: CTX5M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX5M {e}")
+
+        lt_5m = m.get('st_context_lt_5m') or ST_CONTEXT_LT_5M.get(symbol)
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '5m',
+                'type':     'st_context_lt',
+                'value':    ctx_to_sync_value(lt_5m),
+                'price':    0,
+                'event_id': f"sync_scalp_lt5m_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('lt5m')
+            else:
+                errors.append(f"{symbol}: LT5M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: LT5M {e}")
 
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
@@ -2634,6 +2719,7 @@ def update_indicators_for_symbol(symbol):
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        relay_scalp_bias_2h(symbol, bias_2h, price)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

@@ -978,6 +978,16 @@ def parse_supertrend_value(val):
         logger.warning(f"[WARN] SuperTrend valeur invalide: '{val}'")
         return None
 
+def parse_range_filter_value(val):
+    """Convertit une valeur Range Filter en 'buy' ou 'sell'."""
+    s = str(val).strip().lower()
+    if s in ('buy', 'long', 'bull', '1'):
+        return 'buy'
+    if s in ('sell', 'short', 'bear', '-1', '0'):
+        return 'sell'
+    logger.warning(f"[WARN] Range Filter valeur invalide: '{val}'")
+    return None
+
 def parse_ema200_value(val):
     normalized = str(val).strip().lower()
     if normalized in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
@@ -1010,6 +1020,8 @@ def normalize_alert_type(alert_type_raw):
         'ema_200': 'ema200', 'ema': 'ema200',
         'super_trend': 'supertrend', 'st': 'supertrend',
         'stcontext': 'st_context',
+        'rangefilter': 'range_filter',
+        'range_filter_30m': 'range_filter',
     }
     return type_aliases.get(normalized, normalized)
 
@@ -1074,6 +1086,7 @@ ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
 ST_CONTEXT_LT_10M: dict = {}  # Long term context 10m (plot_2)
 ST_CONTEXT_LT_30M: dict = {}  # Long term context 30m (plot_2)
+RANGE_FILTER_30M: dict = {}  # symbol -> 'buy' | 'sell' | None
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
@@ -1098,6 +1111,7 @@ def init_symbol_states(symbol):
             'st_context_2h': None,
             'st_context_6h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
+            'range_filter_30m': None, 'range_filter_30m_ts': None, 'last_range_filter_30m_signal_ts': None,
         }
 
 
@@ -1792,7 +1806,7 @@ def process_webhook(data):
         # Qualite : ST AI 1D aligne
         # Pyramiding : ST AI 6H + Bias 2H + ST Context 5m
         # ========================================================================
-        if strat in ['pulse', 'all']:
+        if strat in ['pulse', 'all'] or (alert_type == 'range_filter' and tf == '30m'):
             m = MOMENTUM_STATE[symbol]
 
             if alert_type == 'supertrend' and tf == '30m' and st_ai_30m_flipped_this_call:
@@ -1977,6 +1991,24 @@ def process_webhook(data):
                             # Consomme le guard seulement une fois le pyramiding reellement declenche :
                             # tant qu'il est refuse (cooldown/bouton/bias/anti-chop), le flip reste disponible.
                             m['last_st_30m'] = st_30m_pu
+
+            # Entree PULSE Range Filter 30m :
+            # flip Range Filter 30m + ST AI 6H + Bias 2H.
+            if alert_type == 'range_filter' and tf == '30m':
+                range_30m_dir = parse_range_filter_value(val)
+                if range_30m_dir is not None:
+                    m['range_filter_30m'] = range_30m_dir
+                    m['range_filter_30m_ts'] = now_ts
+                    RANGE_FILTER_30M[symbol] = range_30m_dir
+                    evaluate_pulse_range_filter_30m(
+                        symbol,
+                        range_30m_dir,
+                        data.get('event_id') or event_id,
+                        price=price,
+                        exchange_name=exchange_name,
+                        event_id=event_id,
+                        source='webhook',
+                    )
 
             # Ancienne entree troisieme PULSE supprimee :
             # remplacee par la nouvelle strategie DAILY.
@@ -2518,6 +2550,170 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
         return None
 
 
+def calc_range_filter_signal(df, per=100, mult=2.0):
+    """Reproduit le Range Filter Pine et retourne le dernier signal confirme."""
+    try:
+        if df is None or len(df) < (per * 2 + 5):
+            return None
+
+        close = df['close'].astype(float).reset_index(drop=True)
+        wper = per * 2 - 1
+        avrng = close.diff().abs().ewm(span=per, adjust=False).mean()
+        smrng = avrng.ewm(span=wper, adjust=False).mean() * mult
+
+        filt = []
+        for i, x in enumerate(close):
+            prev = x if i == 0 else filt[-1]
+            r = smrng.iloc[i]
+            if pd.isna(r):
+                filt.append(prev)
+            elif x > prev:
+                filt.append(prev if x - r < prev else x - r)
+            else:
+                filt.append(prev if x + r > prev else x + r)
+        filt = pd.Series(filt)
+
+        upward = []
+        downward = []
+        for i, value in enumerate(filt):
+            if i == 0:
+                upward.append(0.0)
+                downward.append(0.0)
+                continue
+            prev_up = upward[-1]
+            prev_down = downward[-1]
+            prev_filt = filt.iloc[i - 1]
+            upward.append(prev_up + 1 if value > prev_filt else 0.0 if value < prev_filt else prev_up)
+            downward.append(prev_down + 1 if value < prev_filt else 0.0 if value > prev_filt else prev_down)
+
+        long_cond = (close > filt) & (pd.Series(upward) > 0)
+        short_cond = (close < filt) & (pd.Series(downward) > 0)
+
+        cond_ini = []
+        for long_ok, short_ok in zip(long_cond, short_cond):
+            prev = cond_ini[-1] if cond_ini else 0
+            cond_ini.append(1 if long_ok else -1 if short_ok else prev)
+
+        idx = len(close) - 1
+        prev_cond = cond_ini[idx - 1]
+        direction = None
+        if bool(long_cond.iloc[idx]) and prev_cond == -1:
+            direction = 'buy'
+        elif bool(short_cond.iloc[idx]) and prev_cond == 1:
+            direction = 'sell'
+
+        if direction is None:
+            return None
+
+        return {
+            'direction': direction,
+            'ts': str(df['ts'].iloc[idx]),
+            'price': float(close.iloc[idx]),
+        }
+    except Exception as e:
+        logger.info(f"[RANGE30M] calc failed: {e}")
+        logger.debug("[RANGE30M] calc exception", exc_info=True)
+        return None
+
+
+def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None, source='okx'):
+    """Nouvelle entree PULSE: Range Filter 30m + ST AI 6H + Bias 2H."""
+    if range_dir not in ('buy', 'sell'):
+        return False
+    if not is_trade_symbol(symbol):
+        return False
+
+    init_symbol_states(symbol)
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
+    exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+    opp_ctx = 'sell' if direction == 'LONG' else 'buy'
+    exp_bias = 'bull' if direction == 'LONG' else 'bear'
+
+    m = MOMENTUM_STATE[symbol]
+    now_ts = datetime.now(timezone.utc).timestamp()
+    st_6h_v = m.get('st_6h') or m.get('st_ai_6h')
+    bias_2h_v = m.get('bias_2h')
+    ctx_30m_v = ST_CONTEXT_30M.get(symbol)
+    ctx_6h_v = m.get('st_context_6h')
+    st_1d_v = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+
+    st_6h_fresh = bool(st_6h_v) and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
+    st_6h_ok = st_6h_fresh and st_6h_v == exp_ctx
+    bias_2h_ok = bias_2h_v == exp_bias
+    ctx30m_fresh = bool(ctx_30m_v) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+    ctx30m_opp_block = ctx30m_fresh and ctx_30m_v == opp_ctx
+    st_1d_fresh = bool(st_1d_v) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+    daily_quality = st_1d_fresh and st_1d_v == exp_ctx
+    entry_ok = st_6h_ok and bias_2h_ok and not ctx30m_opp_block
+
+    logger.info(
+        f"[PULSE RANGE30M CHECK] {symbol} dir={direction} source={source} "
+        f"range30m={range_dir} signal_ts={signal_ts} "
+        f"st6h={st_6h_v}/{exp_ctx} fresh={st_6h_fresh} "
+        f"bias2h={bias_2h_v}/{exp_bias} "
+        f"ctx30m={ctx_30m_v}/{opp_ctx} fresh={ctx30m_fresh} block={ctx30m_opp_block} "
+        f"daily_quality={daily_quality} ok={entry_ok}"
+    )
+    if not entry_ok:
+        logger.info(
+            f"[PULSE RANGE30M BLOCKED] {symbol} "
+            f"st6h:{st_6h_ok},bias2h:{bias_2h_ok},ctx30m_opp:{ctx30m_opp_block}"
+        )
+        return False
+
+    signal_type = 'range30m'
+    pos_key = f"{symbol}_PULSE"
+    event_key = event_id or f"range30m_{symbol}_{signal_ts}_{range_dir}"
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(pos_key)
+        if pos and pos.get('direction') != direction:
+            SCALP_POSITIONS.pop(pos_key, None)
+            PYRA_ENABLED.pop(pos_key, None)
+            pos = None
+        is_entry = bool(pos is None or pos.get('signal_type') != signal_type)
+        if is_entry and should_send(symbol, f"pulse_entry_{signal_type}_{exp_ctx}", event_id=event_key, cooldown=3600):
+            SCALP_POSITIONS[pos_key] = {
+                'direction': direction,
+                'entry_count': 1,
+                'signal_type': signal_type,
+            }
+            PYRA_ENABLED.pop(pos_key, None)
+            m['range_filter_30m'] = range_dir
+            m['range_filter_30m_ts'] = now_ts
+            RANGE_FILTER_30M[symbol] = range_dir
+        else:
+            is_entry = False
+
+    if not is_entry:
+        return False
+
+    emoji = "\U0001f7e2" if direction == "LONG" else "\U0001f534"
+    quality_txt = "\u2b50 <b>QUALITE DAILY</b> (ST AI 1D aligne)\n\n" if daily_quality else ""
+    send_telegram_with_buttons(
+        f"{emoji} <b>[PULSE - ENTREE RANGE 30M]</b> {symbol}\n"
+        f"--------------------\n"
+        f"{quality_txt}"
+        f"Direction: {direction}\n"
+        f"Price: ${format_price(price)}\n"
+        f"Exchange: {exchange_name.upper()}\n"
+        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+        f"[OK] Flip Range Filter 30m: {range_dir.upper()}\n"
+        f"[OK] ST AI 6H: {(st_6h_v or 'N/A').upper()}\n"
+        f"[OK] Bias 2H: {(bias_2h_v or 'N/A').upper()}\n"
+        f"[ANTI-CHOP] ST Context 30m oppose: {(ctx_30m_v or 'NEUTRE').upper()}\n"
+        f"[INFO] Derniere zone ST Context 6H: {(ctx_6h_v or 'NEUTRE').upper()}\n"
+        f"[INFO] ST AI 1D: {(st_1d_v or 'N/A').upper()}\n"
+        f"{get_market_context_info()}",
+        pos_key,
+        journal_symbol=symbol, journal_strategy='PULSE',
+        journal_direction=direction, journal_price=price
+    )
+    track_alert(symbol, 'PULSE')
+    logger.info(f"[PULSE] Entree Range 30m: {symbol} {direction}")
+    return True
+
+
 def calc_adx_okx(df, length=11, threshold=20):
     """Calcule ADX + DI sur les données OHLCV."""
     try:
@@ -2983,6 +3179,65 @@ def bias4h_report_scheduler():
         wait = (next_4h - now).total_seconds()
         time.sleep(max(300, wait))
 
+def range_filter_30m_scheduler():
+    """Calcule le Range Filter 30m depuis OKX et declenche l'entree PULSE dediee."""
+    logger.info("[RANGE30M] Scheduler demarre (per=100, mult=2.0)")
+    OKX_SKIP = {'TAO/USDT'}
+    time.sleep(45)
+    while True:
+        try:
+            for symbol in CONFIG['SYMBOLS']:
+                if symbol in OKX_SKIP:
+                    continue
+                try:
+                    df = fetch_ohlcv_okx(symbol, '30m', limit=260)
+                    signal = calc_range_filter_signal(df, per=100, mult=2.0)
+                    if signal is None:
+                        continue
+
+                    range_dir = signal['direction']
+                    signal_ts = signal['ts']
+                    signal_price = signal['price']
+                    should_process = False
+
+                    with STATE_LOCK:
+                        init_symbol_states(symbol)
+                        m = MOMENTUM_STATE[symbol]
+                        if m.get('last_range_filter_30m_signal_ts') != signal_ts:
+                            m['last_range_filter_30m_signal_ts'] = signal_ts
+                            m['range_filter_30m'] = range_dir
+                            m['range_filter_30m_ts'] = datetime.now(timezone.utc).timestamp()
+                            RANGE_FILTER_30M[symbol] = range_dir
+                            should_process = True
+
+                    if not should_process:
+                        continue
+
+                    logger.info(
+                        f"[RANGE30M] Nouveau signal {symbol} "
+                        f"dir={range_dir} ts={signal_ts} price={signal_price}"
+                    )
+                    evaluate_pulse_range_filter_30m(
+                        symbol,
+                        range_dir,
+                        signal_ts,
+                        price=signal_price,
+                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                        event_id=f"range30m_{symbol}_{signal_ts}_{range_dir}",
+                        source='okx',
+                    )
+                except Exception as e:
+                    logger.error(f"[RANGE30M] {symbol}: {e}")
+                time.sleep(0.3)
+        except Exception as e:
+            logger.error(f"[RANGE30M] Scheduler erreur: {e}")
+        now = datetime.now(timezone.utc)
+        minutes_to_next = 30 - (now.minute % 30)
+        next_30m = now + timedelta(minutes=minutes_to_next)
+        next_30m = next_30m.replace(second=20, microsecond=0)
+        time.sleep(max(60, (next_30m - now).total_seconds()))
+
+
 def indicators_scheduler():
     """Recalcule tous les indicateurs depuis OKX toutes les heures."""
     logger.info("[OKX] Scheduler indicateurs démarré (toutes les 15 minutes)")
@@ -3118,6 +3373,9 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
+
+        range30m_thread = threading.Thread(target=range_filter_30m_scheduler, daemon=True)
+        range30m_thread.start()
 
         sentiment_thread = threading.Thread(target=sentiment_scheduler, daemon=True)
         sentiment_thread.start()

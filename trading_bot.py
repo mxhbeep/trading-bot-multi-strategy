@@ -546,8 +546,6 @@ def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None,
                                journal_symbol=None, journal_strategy=None,
                                journal_direction=None, journal_price=None):
     """Envoie un message Telegram avec boutons Pyramiding / Ignorer / Journal + ntfy."""
-    if journal_symbol and journal_direction:
-        msg = append_williams_6h_confirmation(msg, journal_symbol, journal_direction)
     row1 = [
         {"text": "Activer pyramiding", "callback_data": f"pyra_on:{callback_key}"},
         {"text": "Ignorer",             "callback_data": f"pyra_off:{callback_key}"},
@@ -642,7 +640,7 @@ def send_start_notification():
         "📋 <b>STRATEGIES:</b>\n\n"
         
         "1️⃣ <b>DAILY</b>\n"
-        "   — Bias 1D 17/40 + ST AI 1D + Zone ST Context 30m\n"
+        "   — Bias 1D 13/30 + ST AI 1D + Zone ST Context 30m\n"
         "   — Signal: flip ST AI 30m / Bonus: ST Context 1D aligné\n"
         "   — Secondaire: Bias 1D + ST Context 2H + ST Context 30m\n"
         "   — Info report: ST AI 1D + ST Context 2H\n"
@@ -652,7 +650,7 @@ def send_start_notification():
         "   — Jackpot: ST Context 30m + ST Context 5m alignes\n"
         "   — Pyramiding: ST AI 6H + Bias 2H + ST Context 5m\n\n"
         "3️⃣ <b>TREND3D</b>\n"
-        "   — Bias 3D (EMA17/SMA40) + ST Context 2H aligné\n"
+        "   — Bias 3D (EMA21/SMA55) + ST Context 2H aligné\n"
         "   — Signal: Flip ST AI 1H / Pyramiding: ADX 4H + guard (4H) — 44 assets\n\n"
 
 
@@ -693,7 +691,6 @@ def send_weekly_report():
         f"  — SCALP: {total_scalp}\n"
         f"  — MOMENTUM: {total_momentum}\n\n"
     )
-
 
     assets_with_alerts = {
         symbol: stats for symbol, stats in WEEKLY_STATS.items()
@@ -788,13 +785,11 @@ def send_weekly_report():
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA17/SMA40)\n"
+                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA21/SMA55)\n"
                         f"\u2705 ST Context 2H: {ctx_txt} (zone)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (SIGNAL)"
                         f"{get_market_context_info()}",
-                        f"{symbol}_TREND3D",
-                        journal_symbol=symbol, journal_strategy='TREND3D',
-                        journal_direction=direction_t2, journal_price=price,
+                        f"{symbol}_TREND3D"
                     )
                     track_alert(symbol, 'TREND3D')
                     logger.info(f"[TREND3D] Entree: {symbol} {direction_t2}")
@@ -812,7 +807,7 @@ def send_weekly_report():
                         f"\U0001f4b0 Price: ${format_price(price)}\n"
                         f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
                         f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA17/SMA40)\n"
+                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA21/SMA55)\n"
                         f"\u2705 ST Context 2H: {ctx_txt}\n"
                         f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
                         f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (PYRAMIDING)\n"
@@ -1103,6 +1098,8 @@ def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
             'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_3d': None,
+            'williams_1d': None, 'williams_1d_ema': None, 'williams_1d_dir': None, 'williams_1d_ts': None,
+            'williams_2h': None, 'williams_2h_ema': None, 'williams_2h_dir': None, 'williams_2h_ts': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
@@ -1112,13 +1109,11 @@ def init_symbol_states(symbol):
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
+            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
-            'range_filter_10m': None, 'range_filter_10m_ts': None, 'last_range_filter_10m_signal_ts': None,
             'range_filter_30m': None, 'range_filter_30m_ts': None, 'last_range_filter_30m_signal_ts': None,
-            'williams_6h': None,
         }
 
 
@@ -1240,10 +1235,6 @@ def process_webhook(data):
                 elif tf == '2h':
                     m['bias_2h'] = bias_val if bias_val != 'neutral' else None
                     logger.info(f"[BIAS TV] {symbol} bias_2h = {bias_val}")
-                elif tf == '30m':
-                    m['bias_30m'] = bias_val if bias_val != 'neutral' else None
-                    m['bias_30m_ts'] = now_ts
-                    logger.info(f"[BIAS TV] {symbol} bias_30m = {bias_val}")
                 elif tf == '1h':
                     m['bias_1h'] = bias_val if bias_val != 'neutral' else None
                     logger.info(f"[BIAS TV] {symbol} bias_1h = {bias_val}")
@@ -1644,11 +1635,10 @@ def process_webhook(data):
         # Bonus tres haute qualite : ST Context 1D aligne
         # Anti-chop : ST Context LT 30m meme sens => bloque
         # ========================================================================
-        if False and strat in ['daily', 'all']:
+        if strat in ['daily', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            # Remplacee par l'entree DAILY sur Range Filter 30m.
-            if False and alert_type == 'supertrend' and tf == '30m' and st_ai_30m_flipped_this_call:
+            if alert_type == 'supertrend' and tf == '30m' and st_ai_30m_flipped_this_call:
                 st_30m_d = m.get('st_ai_30m')
                 if st_30m_d is not None:
                     direction_d = 'LONG' if st_30m_d == 'buy' else 'SHORT'
@@ -1662,25 +1652,31 @@ def process_webhook(data):
                     ctx_30m_d = ST_CONTEXT_30M.get(symbol)
                     ctx_lt_30m_d = ST_CONTEXT_LT_30M.get(symbol)
                     ctx_1d_d = ST_CONTEXT_1D.get(symbol)
+                    williams_1d_dir_d = m.get('williams_1d_dir')
+                    williams_1d_d = m.get('williams_1d')
+                    williams_1d_ema_d = m.get('williams_1d_ema')
 
                     ctx_2h_fresh_d = bool(ctx_2h_d) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
                     ctx_30m_fresh_d = bool(ctx_30m_d) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
                     ctx_lt_30m_fresh_d = bool(ctx_lt_30m_d) and is_signal_fresh(m.get('st_context_lt_30m_ts'), 90 * 60)
                     ctx_1d_fresh_d = bool(ctx_1d_d) and is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
                     st_1d_fresh_d = bool(st_1d_d) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+                    williams_1d_fresh_d = bool(williams_1d_dir_d) and is_signal_fresh(m.get('williams_1d_ts'), 36 * 3600)
 
                     bias_1d_ok_d = bias_1d_d == exp_bias_d
                     st_1d_ok_d = st_1d_fresh_d and st_1d_d == exp_ctx_d
+                    williams_1d_ok_d = williams_1d_fresh_d and williams_1d_dir_d == exp_ctx_d
                     ctx_30m_ok_d = ctx_30m_fresh_d and ctx_30m_d == exp_ctx_d
                     lt_30m_block_d = ctx_lt_30m_fresh_d and ctx_lt_30m_d == exp_ctx_d
                     ctx_2h_warning_d = ctx_2h_fresh_d and ctx_2h_d == opp_ctx_d
                     daily_plus_d = ctx_1d_fresh_d and ctx_1d_d == exp_ctx_d
-                    daily_ok_d = bias_1d_ok_d and st_1d_ok_d and ctx_30m_ok_d and not lt_30m_block_d
+                    daily_ok_d = bias_1d_ok_d and st_1d_ok_d and williams_1d_ok_d and ctx_30m_ok_d and not lt_30m_block_d
                     signal_type_d = 'daily_plus' if daily_plus_d else 'daily'
 
                     logger.info(
                         f"[DAILY CHECK] {symbol} dir={direction_d} "
                         f"bias1d={bias_1d_d}/{exp_bias_d} st1d={st_1d_d}/{exp_ctx_d} st1d_fresh={st_1d_fresh_d} "
+                        f"will1d={williams_1d_d}/{williams_1d_ema_d} dir={williams_1d_dir_d}/{exp_ctx_d} fresh={williams_1d_fresh_d} ok={williams_1d_ok_d} "
                         f"ctx30m={ctx_30m_d}/{exp_ctx_d} fresh={ctx_30m_fresh_d} "
                         f"ctx2h={ctx_2h_d}/{opp_ctx_d} fresh={ctx_2h_fresh_d} warning={ctx_2h_warning_d} "
                         f"lt30m={ctx_lt_30m_d} fresh={ctx_lt_30m_fresh_d} block={lt_30m_block_d} "
@@ -1725,8 +1721,9 @@ def process_webhook(data):
                             f"Price: ${format_price(price)}\n"
                             f"Exchange: {exchange_name.upper()}\n"
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"[OK] Bias 1D: {(bias_1d_d or 'N/A').upper()} (EMA17/SMA40)\n"
+                            f"[OK] Bias 1D: {(bias_1d_d or 'N/A').upper()} (EMA13/SMA30)\n"
                             f"[OK] ST AI 1D: {(st_1d_d or 'N/A').upper()}\n"
+                            f"[OK] Williams 1D: {williams_1d_d if williams_1d_d is not None else 'N/A'} / EMA {williams_1d_ema_d if williams_1d_ema_d is not None else 'N/A'}\n"
                             f"[OK] Zone ST Context 30m: {(ctx_30m_d or 'N/A').upper()}\n"
                             f"[OK] Flip ST AI 30m: {st_30m_d.upper()}\n"
                             f"{warning_2h_txt_d}"
@@ -1749,10 +1746,14 @@ def process_webhook(data):
                 bias_1d_s = m.get('bias_1d')
                 ctx_2h_s = m.get('st_context_2h')
                 ctx_30m_s = ST_CONTEXT_30M.get(symbol)
+                williams_1d_dir_s = m.get('williams_1d_dir')
+                williams_1d_s = m.get('williams_1d')
+                williams_1d_ema_s = m.get('williams_1d_ema')
 
                 bias_1d_fresh_s = bool(bias_1d_s) and is_signal_fresh(m.get('bias_1d_ts'), 36 * 3600)
                 ctx_2h_fresh_s = bool(ctx_2h_s) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
                 ctx_30m_fresh_s = bool(ctx_30m_s) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+                williams_1d_fresh_s = bool(williams_1d_dir_s) and is_signal_fresh(m.get('williams_1d_ts'), 36 * 3600)
 
                 direction_s = None
                 if bias_1d_s == 'bull' and ctx_2h_s == 'buy' and ctx_30m_s == 'buy':
@@ -1760,13 +1761,17 @@ def process_webhook(data):
                 elif bias_1d_s == 'bear' and ctx_2h_s == 'sell' and ctx_30m_s == 'sell':
                     direction_s = 'SHORT'
 
-                daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_30m_fresh_s)
+                exp_ctx_s_for_williams = 'buy' if direction_s == 'LONG' else 'sell' if direction_s == 'SHORT' else None
+                williams_1d_ok_s = bool(exp_ctx_s_for_williams and williams_1d_fresh_s and williams_1d_dir_s == exp_ctx_s_for_williams)
+                daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_30m_fresh_s and williams_1d_ok_s)
 
                 logger.info(
                     f"[DAILY CHECK SECONDAIRE] {symbol} dir={direction_s} "
                     f"bias1d={bias_1d_s} fresh={bias_1d_fresh_s} "
                     f"ctx2h={ctx_2h_s} fresh={ctx_2h_fresh_s} "
-                    f"ctx30m={ctx_30m_s} fresh={ctx_30m_fresh_s} ok={daily_secondary_ok}"
+                    f"ctx30m={ctx_30m_s} fresh={ctx_30m_fresh_s} "
+                    f"will1d={williams_1d_s}/{williams_1d_ema_s} dir={williams_1d_dir_s}/{exp_ctx_s_for_williams} fresh={williams_1d_fresh_s} ok={williams_1d_ok_s} "
+                    f"ok={daily_secondary_ok}"
                 )
 
                 if daily_secondary_ok:
@@ -1799,7 +1804,8 @@ def process_webhook(data):
                             f"Price: ${format_price(price)}\n"
                             f"Exchange: {exchange_name.upper()}\n"
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"[OK] Bias 1D: {(bias_1d_s or 'N/A').upper()} (EMA17/SMA40)\n"
+                            f"[OK] Bias 1D: {(bias_1d_s or 'N/A').upper()} (EMA13/SMA30)\n"
+                            f"[OK] Williams 1D: {williams_1d_s if williams_1d_s is not None else 'N/A'} / EMA {williams_1d_ema_s if williams_1d_ema_s is not None else 'N/A'}\n"
                             f"[OK] Zone ST Context 2H: {(ctx_2h_s or 'N/A').upper()}\n"
                             f"[OK] Zone ST Context 30m: {(ctx_30m_s or 'N/A').upper()}\n"
                             f"{get_market_context_info()}",
@@ -1818,7 +1824,7 @@ def process_webhook(data):
         # Qualite : ST AI 1D aligne
         # Pyramiding : ST AI 6H + Bias 2H + ST Context 5m
         # ========================================================================
-        if False and (strat in ['pulse', 'all'] or (alert_type == 'range_filter' and tf == '30m')):
+        if strat in ['pulse', 'all'] or (alert_type == 'range_filter' and tf == '30m'):
             m = MOMENTUM_STATE[symbol]
 
             if alert_type == 'supertrend' and tf == '30m' and st_ai_30m_flipped_this_call:
@@ -1835,6 +1841,9 @@ def process_webhook(data):
                     st_1d_v = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
                     ctx_6h_p = m.get('st_context_6h')
                     ctx_30m_p = ST_CONTEXT_30M.get(symbol)
+                    williams_2h_dir_p = m.get('williams_2h_dir')
+                    williams_2h_p = m.get('williams_2h')
+                    williams_2h_ema_p = m.get('williams_2h_ema')
 
                     ctx_5m_ok = ctx_5m_p == exp_ctx
                     ctx30m_fresh_p = bool(ctx_30m_p) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
@@ -1845,8 +1854,10 @@ def process_webhook(data):
                     daily_quality_p = st_1d_fresh_p and st_1d_v == exp_ctx
                     st_6h_fresh = bool(st_6h_v) and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
                     st_6h_ok = st_6h_fresh and st_6h_v == exp_ctx
+                    williams_2h_fresh_p = bool(williams_2h_dir_p) and is_signal_fresh(m.get('williams_2h_ts'), 6 * 3600)
+                    williams_2h_ok_p = williams_2h_fresh_p and williams_2h_dir_p == exp_ctx
 
-                    primary_ok = st_6h_ok and ctx30m_ok_p
+                    primary_ok = st_6h_ok and williams_2h_ok_p and ctx30m_ok_p
                     all_ok = primary_ok
                     signal_type_p = 'principal' if primary_ok else 'blocked'
 
@@ -1857,6 +1868,7 @@ def process_webhook(data):
                         f"ctx5m={ctx_5m_p}/{exp_ctx} jackpot={jackpot_p} "
                         f"ctx6h={ctx_6h_p} fresh={ctx6h_fresh_p} "
                         f"st6h={st_6h_v} fresh={st_6h_fresh} "
+                        f"will2h={williams_2h_p}/{williams_2h_ema_p} dir={williams_2h_dir_p}/{exp_ctx} fresh={williams_2h_fresh_p} ok={williams_2h_ok_p} "
                         f"st1d={st_1d_v} fresh={st_1d_fresh_p} daily_quality={daily_quality_p} "
                         f"primary={primary_ok}"
                     )
@@ -1904,6 +1916,7 @@ def process_webhook(data):
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                             f"[OK] Flip ST AI 30m: {(st_30m_signal_p or 'N/A').upper()}\n"
                             f"[OK] ST AI 6H: {(st_6h_v or 'N/A').upper()}\n"
+                            f"[OK] Williams 2H: {williams_2h_p if williams_2h_p is not None else 'N/A'} / EMA {williams_2h_ema_p if williams_2h_ema_p is not None else 'N/A'}\n"
                             f"[OK] Zone ST Context 30m: {(ctx_30m_p or 'N/A').upper()}\n"
                             f"[INFO] Zone ST Context 5m: {(ctx_5m_p or 'NEUTRE').upper()}\n"
                             f"[INFO] Derniere zone ST Context 6H: {(ctx_6h_p or 'NEUTRE').upper()}\n"
@@ -1938,11 +1951,16 @@ def process_webhook(data):
                     last_ctx_5m_pu = m.get('last_st_context_5m_dir')
                     last_ctx_5m_ts_pu = m.get('last_st_context_5m_ts')
                     ctx_6h_pu = m.get('st_context_6h')
+                    williams_2h_dir_pu = m.get('williams_2h_dir')
+                    williams_2h_pu = m.get('williams_2h')
+                    williams_2h_ema_pu = m.get('williams_2h_ema')
 
                     flip_30m_pu = bool(last_st_30m_pu and st_30m_pu == exp_ctx_pu and last_st_30m_pu != st_30m_pu)
                     st_6h_fresh_pu = bool(st_6h_pu) and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
                     st_6h_ok_pu = st_6h_fresh_pu and st_6h_pu == exp_ctx_pu
                     bias_2h_ok_pu = bias_2h_pu == exp_bias_pu
+                    williams_2h_fresh_pu = bool(williams_2h_dir_pu) and is_signal_fresh(m.get('williams_2h_ts'), 6 * 3600)
+                    williams_2h_ok_pu = williams_2h_fresh_pu and williams_2h_dir_pu == exp_ctx_pu
                     recent_ctx_5m_ok_pu = (
                         last_ctx_5m_pu == exp_ctx_pu
                         and is_signal_fresh(last_ctx_5m_ts_pu, 3600)
@@ -1955,7 +1973,8 @@ def process_webhook(data):
                         f"[PULSE PYRA CHECK] {symbol} dir={direction_pu} "
                         f"st30m={st_30m_pu} last_st30m={last_st_30m_pu} "
                         f"st6h={st_6h_pu} fresh={st_6h_fresh_pu} "
-                        f"bias2h={bias_2h_pu} ctx5m={ctx_5m_pu} recent_ctx5m={last_ctx_5m_pu} recent_ok={recent_ctx_5m_ok_pu} "
+                        f"bias2h={bias_2h_pu} will2h={williams_2h_pu}/{williams_2h_ema_pu} dir={williams_2h_dir_pu}/{exp_ctx_pu} fresh={williams_2h_fresh_pu} ok={williams_2h_ok_pu} "
+                        f"ctx5m={ctx_5m_pu} recent_ctx5m={last_ctx_5m_pu} recent_ok={recent_ctx_5m_ok_pu} "
                         f"ctx6h={ctx_6h_pu} st1d={st_1d_pu} daily_quality={daily_quality_pu} "
                         f"flip={flip_30m_pu}"
                     )
@@ -1964,6 +1983,7 @@ def process_webhook(data):
                         flip_30m_pu
                         and st_6h_ok_pu
                         and bias_2h_ok_pu
+                        and williams_2h_ok_pu
                         and ctx_5m_ok_pu
                         and PYRA_ENABLED.get(pos_key_pu, False)
                     )
@@ -1994,6 +2014,7 @@ def process_webhook(data):
                                 f"[OK] Flip ST AI 30m: {(st_30m_pu or 'N/A').upper()}\n"
                                 f"[OK] ST AI 6H: {(st_6h_pu or 'N/A').upper()}\n"
                                 f"[OK] Bias 2H: {(bias_2h_pu or 'N/A').upper()}\n"
+                                f"[OK] Williams 2H: {williams_2h_pu if williams_2h_pu is not None else 'N/A'} / EMA {williams_2h_ema_pu if williams_2h_ema_pu is not None else 'N/A'}\n"
                                 f"[OK] Zone ST Context 5m recente: {(last_ctx_5m_pu or ctx_5m_pu or 'N/A').upper()}\n"
                                 f"[INFO] Derniere zone ST Context 6H: {(ctx_6h_pu or 'NEUTRE').upper()}\n"
                                 f"[INFO] ST AI 1D: {(st_1d_pu or 'N/A').upper()}\n"
@@ -2004,23 +2025,15 @@ def process_webhook(data):
                             # tant qu'il est refuse (cooldown/bouton/bias/anti-chop), le flip reste disponible.
                             m['last_st_30m'] = st_30m_pu
 
-            # Range Filter 30m declenche STRATEGIE 2H et DAILY.
+            # Entree PULSE Range Filter 30m :
+            # flip Range Filter 30m + ST AI 6H + Bias 2H.
             if alert_type == 'range_filter' and tf == '30m':
                 range_30m_dir = parse_range_filter_value(val)
                 if range_30m_dir is not None:
                     m['range_filter_30m'] = range_30m_dir
                     m['range_filter_30m_ts'] = now_ts
                     RANGE_FILTER_30M[symbol] = range_30m_dir
-                    evaluate_strategy_2h_range_filter_30m(
-                        symbol,
-                        range_30m_dir,
-                        data.get('event_id') or event_id,
-                        price=price,
-                        exchange_name=exchange_name,
-                        event_id=event_id,
-                        source='webhook',
-                    )
-                    evaluate_daily_range_filter_30m(
+                    evaluate_pulse_range_filter_30m(
                         symbol,
                         range_30m_dir,
                         data.get('event_id') or event_id,
@@ -2114,31 +2127,13 @@ def process_webhook(data):
                     m['st_6h_ts'] = time.time()
                     MOMENTUM_STATE[symbol] = m
 
-        # Support optionnel des alertes TradingView Range Filter. Le calcul OKX
-        # local reste la source principale, mais ce chemin couvre notamment les
-        # actifs sans bougies OKX directes.
-        if alert_type == 'range_filter' and tf in ('10m', '30m'):
-            range_dir = parse_range_filter_value(val)
-            if range_dir is not None:
-                range_event = data.get('event_id') or event_id
-                if tf == '10m':
-                    evaluate_range_filter_10m(
-                        symbol, range_dir, range_event, price, exchange_name,
-                        event_id=event_id,
-                    )
-                else:
-                    evaluate_range_filter_30m_pyramiding(
-                        symbol, range_dir, range_event, price, exchange_name,
-                        event_id=event_id,
-                    )
-
 
         persist_runtime_state()
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             (alert_type == 'supertrend' and tf in ('2h', '30m'))
-            or (alert_type == 'st_context' and tf in ('5m', '2h', '30m'))
+            or (alert_type == 'st_context' and tf in ('5m', '2h'))
             or (alert_type == 'st_context_lt' and tf == '5m')
         )
         if scalp_url and should_relay_scalp:
@@ -2571,7 +2566,7 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
     try:
         inst_id = symbol.replace('/', '-')
-        tf_map = {'5m': '5m', '10m': '10m', '15m': '15m', '30m': '30m', '1h': '1H', '2h': '2H', '3h': '3H', '4h': '4H', '6h': '6H', '1d': '1D'}
+        tf_map = {'10m': '10m', '15m': '15m', '30m': '30m', '1h': '1H', '2h': '2H', '3h': '3H', '4h': '4H', '6h': '6H', '1d': '1D'}
         bar = tf_map.get(timeframe, timeframe.upper())
         url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={min(limit, 300)}'
         resp = requests.get(url, timeout=10)
@@ -2588,68 +2583,10 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
         return None
 
 
-def calc_williams_ema(df, length=21, ema_length=13):
-    """Calcule Williams %R et son EMA, selon Williams21EMA13."""
-    try:
-        if df is None or len(df) < length + ema_length:
-            return None
-        high = df['high'].astype(float)
-        low = df['low'].astype(float)
-        close = df['close'].astype(float)
-        upper = high.rolling(length).max()
-        lower = low.rolling(length).min()
-        spread = upper - lower
-        williams = 100.0 * (close - upper) / spread.where(spread != 0)
-        williams_ema = williams.ewm(span=ema_length, adjust=False).mean()
-        value = float(williams.iloc[-1])
-        ema_value = float(williams_ema.iloc[-1])
-        if pd.isna(value) or pd.isna(ema_value):
-            return None
-        return {
-            'value': value,
-            'ema': ema_value,
-            'trend': 'bull' if value > ema_value else 'bear' if value < ema_value else 'neutral',
-        }
-    except Exception as e:
-        logger.debug(f"[WILLIAMS 6H] Calcul impossible: {e}")
-        return None
-
-
-def append_williams_6h_confirmation(msg, symbol, direction):
-    """Ajoute Williams 6H a une alerte sans bloquer l'entree."""
-    normalized_direction = str(direction or '').upper()
-    with STATE_LOCK:
-        data = dict(MOMENTUM_STATE.get(symbol, {}).get('williams_6h') or {})
-
-    if not data:
-        line = "[INFO] Williams 6H indisponible - confirmation non bloquante"
-    else:
-        value = data.get('value')
-        ema_value = data.get('ema')
-        trend = data.get('trend')
-        confirms = (
-            (normalized_direction == 'LONG' and trend == 'bull')
-            or (normalized_direction == 'SHORT' and trend == 'bear')
-        )
-        relation = ">" if trend == 'bull' else "<" if trend == 'bear' else "="
-        values = f"W%R {value:.2f} {relation} EMA13 {ema_value:.2f}"
-        if confirms:
-            line = f"[OK] Williams 6H confirme le {normalized_direction} ({values})"
-        else:
-            line = (
-                f"[WARNING NON BLOQUANT] Williams 6H ne confirme pas "
-                f"le {normalized_direction} ({values})"
-            )
-
-    return f"{str(msg or '').rstrip()}\n{line}"
-
-
 def calc_range_filter_signal(df, per=100, mult=2.0):
     """Reproduit le Range Filter Pine et retourne le dernier signal confirme."""
     try:
-        # 100 periodes suffisent pour amorcer les deux EMA. Le scheduler 10m
-        # agrege 300 bougies 5m, soit environ 150 bougies 10m confirmees.
-        if df is None or len(df) < (per + 5):
+        if df is None or len(df) < (per * 2 + 5):
             return None
 
         close = df['close'].astype(float).reset_index(drop=True)
@@ -2712,8 +2649,8 @@ def calc_range_filter_signal(df, per=100, mult=2.0):
         return None
 
 
-def evaluate_strategy_2h_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None, source='okx'):
-    """Entree STRATEGIE 2H: Range Filter 30m + ST AI 2H + Bias 2H."""
+def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None, source='okx'):
+    """Nouvelle entree PULSE: Range Filter 30m + ST AI 6H + Bias 2H."""
     if range_dir not in ('buy', 'sell'):
         return False
     if not is_trade_symbol(symbol):
@@ -2728,32 +2665,44 @@ def evaluate_strategy_2h_range_filter_30m(symbol, range_dir, signal_ts, price=0.
 
     m = MOMENTUM_STATE[symbol]
     now_ts = datetime.now(timezone.utc).timestamp()
-    st_2h_v = m.get('st_ai_2h') or m.get('st_2h')
+    st_6h_v = m.get('st_6h') or m.get('st_ai_6h')
     bias_2h_v = m.get('bias_2h')
     ctx_30m_v = ST_CONTEXT_30M.get(symbol)
-    st_2h_ok = st_2h_v == exp_ctx
+    ctx_6h_v = m.get('st_context_6h')
+    st_1d_v = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+    williams_2h_dir = m.get('williams_2h_dir')
+    williams_2h = m.get('williams_2h')
+    williams_2h_ema = m.get('williams_2h_ema')
+
+    st_6h_fresh = bool(st_6h_v) and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
+    st_6h_ok = st_6h_fresh and st_6h_v == exp_ctx
     bias_2h_ok = bias_2h_v == exp_bias
+    williams_2h_fresh = bool(williams_2h_dir) and is_signal_fresh(m.get('williams_2h_ts'), 6 * 3600)
+    williams_2h_ok = williams_2h_fresh and williams_2h_dir == exp_ctx
     ctx30m_fresh = bool(ctx_30m_v) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
     ctx30m_opp_block = ctx30m_fresh and ctx_30m_v == opp_ctx
-    entry_ok = st_2h_ok and bias_2h_ok and not ctx30m_opp_block
+    st_1d_fresh = bool(st_1d_v) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+    daily_quality = st_1d_fresh and st_1d_v == exp_ctx
+    entry_ok = st_6h_ok and bias_2h_ok and williams_2h_ok and not ctx30m_opp_block
 
     logger.info(
-        f"[STRATEGIE 2H CHECK] {symbol} dir={direction} source={source} "
+        f"[PULSE RANGE30M CHECK] {symbol} dir={direction} source={source} "
         f"range30m={range_dir} signal_ts={signal_ts} "
-        f"st2h={st_2h_v}/{exp_ctx} "
+        f"st6h={st_6h_v}/{exp_ctx} fresh={st_6h_fresh} "
         f"bias2h={bias_2h_v}/{exp_bias} "
+        f"will2h={williams_2h}/{williams_2h_ema} dir={williams_2h_dir}/{exp_ctx} fresh={williams_2h_fresh} ok={williams_2h_ok} "
         f"ctx30m={ctx_30m_v}/{opp_ctx} fresh={ctx30m_fresh} block={ctx30m_opp_block} "
-        f"ok={entry_ok}"
+        f"daily_quality={daily_quality} ok={entry_ok}"
     )
     if not entry_ok:
         logger.info(
-            f"[STRATEGIE 2H BLOCKED] {symbol} "
-            f"st2h:{st_2h_ok},bias2h:{bias_2h_ok},ctx30m_opp:{ctx30m_opp_block}"
+            f"[PULSE RANGE30M BLOCKED] {symbol} "
+            f"st6h:{st_6h_ok},bias2h:{bias_2h_ok},will2h:{williams_2h_ok},ctx30m_opp:{ctx30m_opp_block}"
         )
         return False
 
     signal_type = 'range30m'
-    pos_key = f"{symbol}_2H"
+    pos_key = f"{symbol}_PULSE"
     event_key = event_id or f"range30m_{symbol}_{signal_ts}_{range_dir}"
     with STATE_LOCK:
         pos = SCALP_POSITIONS.get(pos_key)
@@ -2762,7 +2711,7 @@ def evaluate_strategy_2h_range_filter_30m(symbol, range_dir, signal_ts, price=0.
             PYRA_ENABLED.pop(pos_key, None)
             pos = None
         is_entry = bool(pos is None or pos.get('signal_type') != signal_type)
-        if is_entry and should_send(symbol, f"strategy_2h_entry_{signal_type}_{exp_ctx}", event_id=event_key, cooldown=3600):
+        if is_entry and should_send(symbol, f"pulse_entry_{signal_type}_{exp_ctx}", event_id=event_key, cooldown=3600):
             SCALP_POSITIONS[pos_key] = {
                 'direction': direction,
                 'entry_count': 1,
@@ -2779,350 +2728,29 @@ def evaluate_strategy_2h_range_filter_30m(symbol, range_dir, signal_ts, price=0.
         return False
 
     emoji = "\U0001f7e2" if direction == "LONG" else "\U0001f534"
+    quality_txt = "\u2b50 <b>QUALITE DAILY</b> (ST AI 1D aligne)\n\n" if daily_quality else ""
     send_telegram_with_buttons(
-        f"{emoji} <b>[STRATEGIE 2H - ENTREE]</b> {symbol}\n"
+        f"{emoji} <b>[PULSE - ENTREE RANGE 30M]</b> {symbol}\n"
         f"--------------------\n"
+        f"{quality_txt}"
         f"Direction: {direction}\n"
         f"Price: ${format_price(price)}\n"
         f"Exchange: {exchange_name.upper()}\n"
         f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
         f"[OK] Flip Range Filter 30m: {range_dir.upper()}\n"
-        f"[OK] ST AI 2H: {(st_2h_v or 'N/A').upper()}\n"
+        f"[OK] ST AI 6H: {(st_6h_v or 'N/A').upper()}\n"
         f"[OK] Bias 2H: {(bias_2h_v or 'N/A').upper()}\n"
+        f"[OK] Williams 2H: {williams_2h if williams_2h is not None else 'N/A'} / EMA {williams_2h_ema if williams_2h_ema is not None else 'N/A'}\n"
         f"[ANTI-CHOP] ST Context 30m oppose: {(ctx_30m_v or 'NEUTRE').upper()}\n"
+        f"[INFO] Derniere zone ST Context 6H: {(ctx_6h_v or 'NEUTRE').upper()}\n"
+        f"[INFO] ST AI 1D: {(st_1d_v or 'N/A').upper()}\n"
         f"{get_market_context_info()}",
         pos_key,
-        journal_symbol=symbol, journal_strategy='2H',
+        journal_symbol=symbol, journal_strategy='PULSE',
         journal_direction=direction, journal_price=price
     )
-    track_alert(symbol, '2H')
-    logger.info(f"[STRATEGIE 2H] Entree Range 30m: {symbol} {direction}")
-    return True
-
-
-def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None, source='okx'):
-    """Entree DAILY declenchee par Range Filter 30m, avec les filtres DAILY existants."""
-    if range_dir not in ('buy', 'sell') or not is_trade_symbol(symbol):
-        return False
-
-    init_symbol_states(symbol)
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-    opp_ctx = 'sell' if direction == 'LONG' else 'buy'
-    exp_bias = 'bull' if direction == 'LONG' else 'bear'
-
-    m = MOMENTUM_STATE[symbol]
-    bias_1d = m.get('bias_1d')
-    st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
-    ctx_2h = m.get('st_context_2h')
-    ctx_30m = ST_CONTEXT_30M.get(symbol)
-    ctx_lt_30m = ST_CONTEXT_LT_30M.get(symbol)
-    ctx_1d = ST_CONTEXT_1D.get(symbol)
-
-    bias_1d_fresh = bool(bias_1d) and is_signal_fresh(m.get('bias_1d_ts'), 36 * 3600)
-    st_1d_fresh = bool(st_1d) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
-    ctx_2h_fresh = bool(ctx_2h) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
-    ctx_30m_fresh = bool(ctx_30m) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-    ctx_lt_30m_fresh = bool(ctx_lt_30m) and is_signal_fresh(m.get('st_context_lt_30m_ts'), 90 * 60)
-    ctx_1d_fresh = bool(ctx_1d) and is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
-
-    # Conserve exactement le filtre DAILY precedent : le Bias 1D doit etre
-    # aligne, sans ajouter une nouvelle contrainte de fraicheur bloquante.
-    bias_1d_ok = bias_1d == exp_bias
-    st_1d_ok = st_1d_fresh and st_1d == exp_ctx
-    ctx_30m_ok = ctx_30m_fresh and ctx_30m == exp_ctx
-    lt_30m_block = ctx_lt_30m_fresh and ctx_lt_30m == exp_ctx
-    ctx_2h_warning = ctx_2h_fresh and ctx_2h == opp_ctx
-    daily_plus = ctx_1d_fresh and ctx_1d == exp_ctx
-    entry_ok = bias_1d_ok and st_1d_ok and ctx_30m_ok and not lt_30m_block
-    signal_type = 'daily_plus_range30m' if daily_plus else 'daily_range30m'
-
-    logger.info(
-        f"[DAILY RANGE30M CHECK] {symbol} dir={direction} source={source} "
-        f"range30m={range_dir} signal_ts={signal_ts} "
-        f"bias1d={bias_1d}/{exp_bias} fresh={bias_1d_fresh} "
-        f"st1d={st_1d}/{exp_ctx} fresh={st_1d_fresh} "
-        f"ctx30m={ctx_30m}/{exp_ctx} fresh={ctx_30m_fresh} "
-        f"lt30m={ctx_lt_30m} fresh={ctx_lt_30m_fresh} block={lt_30m_block} "
-        f"daily_plus={daily_plus} ok={entry_ok}"
-    )
-    if not entry_ok:
-        return False
-
-    pos_key = f"{symbol}_DAILY"
-    event_key = event_id or f"range30m_daily_{symbol}_{signal_ts}_{range_dir}"
-    with STATE_LOCK:
-        pos = SCALP_POSITIONS.get(pos_key)
-        if pos and pos.get('direction') != direction:
-            SCALP_POSITIONS.pop(pos_key, None)
-            PYRA_ENABLED.pop(pos_key, None)
-            pos = None
-        is_entry = bool(pos is None or pos.get('signal_type') != signal_type)
-        if is_entry and should_send(symbol, f"daily_entry_{signal_type}_{exp_ctx}", event_id=event_key, cooldown=14400):
-            SCALP_POSITIONS[pos_key] = {
-                'direction': direction,
-                'entry_count': 1,
-                'signal_type': signal_type,
-            }
-            PYRA_ENABLED.pop(pos_key, None)
-        else:
-            is_entry = False
-
-    if not is_entry:
-        return False
-
-    emoji = "\U0001f7e2" if direction == "LONG" else "\U0001f534"
-    title = "[DAILY++ - ENTREE RANGE 30M]" if daily_plus else "[DAILY - ENTREE RANGE 30M]"
-    plus_txt = "\u2b50 <b>DAILY++ / TRES HAUTE QUALITE</b> (ST Context 1D aligne)\n\n" if daily_plus else ""
-    warning_txt = "\u26a0\ufe0f <b>WARNING NON BLOQUANT</b> : ST Context 2H oppose\n" if ctx_2h_warning else ""
-    send_telegram_with_buttons(
-        f"{emoji} <b>{title}</b> {symbol}\n"
-        f"--------------------\n"
-        f"{plus_txt}"
-        f"Direction: {direction}\n"
-        f"Price: ${format_price(price)}\n"
-        f"Exchange: {exchange_name.upper()}\n"
-        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-        f"[OK] Range Filter 30m: {range_dir.upper()}\n"
-        f"[OK] Bias 1D: {(bias_1d or 'N/A').upper()} (EMA17/SMA40)\n"
-        f"[OK] ST AI 1D: {(st_1d or 'N/A').upper()}\n"
-        f"[OK] Zone ST Context 30m: {(ctx_30m or 'N/A').upper()}\n"
-        f"{warning_txt}"
-        f"[ANTI-CHOP] LT 30m: {(ctx_lt_30m or 'NEUTRE').upper()}\n"
-        f"[BONUS] ST Context 1D: {(ctx_1d or 'NEUTRE').upper()}\n"
-        f"{get_market_context_info()}",
-        pos_key,
-        journal_symbol=symbol, journal_strategy='DAILY',
-        journal_direction=direction, journal_price=price,
-    )
-    track_alert(symbol, 'DAILY')
-    logger.info(f"[DAILY] Entree Range 30m: {symbol} {direction}")
-    return True
-
-
-def evaluate_range_filter_10m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """Evalue DAILY sur un nouveau flip Range Filter 10m."""
-    if range_dir not in ('buy', 'sell') or not is_trade_symbol(symbol):
-        return
-    init_symbol_states(symbol)
-    m = MOMENTUM_STATE[symbol]
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exp_ctx = range_dir
-    exp_bias = 'bull' if direction == 'LONG' else 'bear'
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    event_key = event_id or f"range10m_{symbol}_{signal_ts}_{range_dir}"
-
-    # DAILY: ST AI 1D + Bias 6H + Bias 30m + ST Context 30m.
-    st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
-    bias_6h = m.get('bias_6h')
-    bias_30m = m.get('bias_30m')
-    ctx_30m = ST_CONTEXT_30M.get(symbol)
-    daily_ok = (
-        st_1d == exp_ctx
-        and bias_6h == exp_bias
-        and bias_30m == exp_bias
-        and ctx_30m == exp_ctx
-        and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
-        and is_signal_fresh(m.get('bias_30m_ts'), 2 * 3600)
-        and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-    )
-    logger.info(
-        f"[DAILY RANGE10M CHECK] {symbol} dir={direction} rf10={range_dir} "
-        f"st1d={st_1d}/{exp_ctx} bias6h={bias_6h}/{exp_bias} "
-        f"bias30m={bias_30m}/{exp_bias} ctx30m={ctx_30m}/{exp_ctx} ok={daily_ok}"
-    )
-    if daily_ok:
-        _open_strategy_entry(
-            symbol, 'DAILY', direction, 'range10m', event_key, price, exchange_name,
-            [
-                f"[OK] Flip Range Filter 10m (100/2.00): {range_dir.upper()}",
-                f"[OK] ST AI 1D: {st_1d.upper()}",
-                f"[OK] Bias 6H: {bias_6h.upper()} (EMA17/SMA40)",
-                f"[OK] Bias 30m: {bias_30m.upper()} (EMA17/SMA40)",
-                f"[OK] ST Context 30m: {ctx_30m.upper()}",
-            ],
-        )
-    _evaluate_daily_range10m_pyramiding(
-        symbol, range_dir, signal_ts, price, exchange_name, event_key,
-    )
-
-def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines):
-    """Cree une entree unique et envoie l'alerte Telegram correspondante."""
-    pos_key = f"{symbol}_{strategy}"
-    exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-    with STATE_LOCK:
-        pos = SCALP_POSITIONS.get(pos_key)
-        if pos and pos.get('direction') != direction:
-            SCALP_POSITIONS.pop(pos_key, None)
-            PYRA_ENABLED.pop(pos_key, None)
-            pos = None
-        if pos is not None or not should_send(
-            symbol, f"{strategy.lower()}_entry_{signal_type}_{exp_ctx}",
-            event_id=event_id, cooldown=3600,
-        ):
-            return False
-        SCALP_POSITIONS[pos_key] = {
-            'direction': direction, 'entry_count': 1, 'signal_type': signal_type,
-        }
-        PYRA_ENABLED.pop(pos_key, None)
-    emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
-    send_telegram_with_buttons(
-        f"{emoji} <b>[{strategy} - ENTREE]</b> {symbol}\n"
-        f"--------------------\nDirection: {direction}\n"
-        f"Price: ${format_price(price)}\nExchange: {exchange_name.upper()}\n"
-        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-        + "\n".join(detail_lines) + "\n" + get_market_context_info(),
-        pos_key, journal_symbol=symbol, journal_strategy=strategy,
-        journal_direction=direction, journal_price=price,
-    )
-    track_alert(symbol, strategy)
-    persist_runtime_state()
-    logger.info(f"[{strategy}] Entree {signal_type}: {symbol} {direction}")
-    return True
-
-
-def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exchange_name, event_id):
-    """Pyramiding DAILY: nouveau RF10 + ST AI 2H, bloque par Context 10m oppose."""
-    m = MOMENTUM_STATE.get(symbol, {})
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exp_ctx = range_dir
-    opp_ctx = 'sell' if range_dir == 'buy' else 'buy'
-    st_2h = m.get('st_2h') or m.get('st_ai_2h')
-    ctx_10m = m.get('st_context_10m')
-    antichop = ctx_10m == opp_ctx and is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
-    pos_key = f"{symbol}_DAILY"
-    with STATE_LOCK:
-        pos = SCALP_POSITIONS.get(pos_key)
-        can_pyra = bool(
-            pos and pos.get('direction') == direction
-            and PYRA_ENABLED.get(pos_key, False)
-            and st_2h == exp_ctx and not antichop
-        )
-        if not can_pyra or not should_send(
-            symbol, f"daily_pyra_range10m_{exp_ctx}", event_id=event_id, cooldown=1800,
-        ):
-            return False
-        pos['entry_count'] = int(pos.get('entry_count', 1)) + 1
-        count = pos['entry_count']
-    send_telegram(
-        f"<b>[DAILY - PYRAMIDING #{count}]</b> {symbol}\n--------------------\n"
-        f"Direction: {direction}\nPrice: ${format_price(price)}\nExchange: {exchange_name.upper()}\n"
-        f"[OK] Flip Range Filter 10m (100/2.00): {range_dir.upper()}\n"
-        f"[OK] ST AI 2H: {st_2h.upper()}\n"
-        f"[ANTI-CHOP] ST Context 10m oppose: {antichop}\n{get_market_context_info()}"
-    )
-    persist_runtime_state()
-    logger.info(f"[DAILY] Pyramiding Range10m #{count}: {symbol} {direction}")
-    return True
-
-
-def evaluate_range_filter_30m_pyramiding(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """Entree PULSE sur RF30, puis pyramiding RF30 si active."""
-    if range_dir not in ('buy', 'sell') or not is_trade_symbol(symbol):
-        return False
-    init_symbol_states(symbol)
-    m = MOMENTUM_STATE.get(symbol, {})
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exp_ctx = range_dir
-    opp_ctx = 'sell' if range_dir == 'buy' else 'buy'
-    exp_bias = 'bull' if direction == 'LONG' else 'bear'
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    range_event = event_id or f"range30m_{symbol}_{signal_ts}_{range_dir}"
-    pos_key = f"{symbol}_PULSE"
-
-    # Entree PULSE: RF30 + ST AI 6H + Bias 6H + Bias 2H.
-    # ST Context 10m aligne = qualite supplementaire, jamais bloquant.
-    # ST Context 30m oppose = warning non bloquant.
-    st_6h = m.get('st_6h') or m.get('st_ai_6h')
-    bias_6h = m.get('bias_6h')
-    bias_2h = m.get('bias_2h')
-    ctx_10m = m.get('st_context_10m')
-    ctx_30m = ST_CONTEXT_30M.get(symbol)
-    ctx10m_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
-    ctx30m_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-    quality_10m = ctx10m_fresh and ctx_10m == exp_ctx
-    warning_30m = ctx30m_fresh and ctx_30m == opp_ctx
-    st6h_ok = st_6h == exp_ctx and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
-    bias6h_ok = bias_6h == exp_bias
-    bias2h_ok = bias_2h == exp_bias
-    # Deux chemins d'entree PULSE :
-    # 1) ST AI 6H + Bias 6H + Bias 2H
-    # 2) ST AI 6H + Bias 6H + ST Context 10m aligne, meme sans Bias 2H
-    pulse_standard_ok = st6h_ok and bias6h_ok and bias2h_ok
-    pulse_context10_ok = st6h_ok and bias6h_ok and quality_10m
-    pulse_entry_ok = pulse_standard_ok or pulse_context10_ok
-    logger.info(
-        f"[PULSE RANGE30M CHECK] {symbol} dir={direction} rf30={range_dir} "
-        f"st6h={st_6h}/{exp_ctx} bias6h={bias_6h}/{exp_bias} "
-        f"bias2h={bias_2h}/{exp_bias} ctx10m={ctx_10m}/{exp_ctx} "
-        f"quality10m={quality_10m} ctx30m={ctx_30m}/{opp_ctx} "
-        f"warning30m={warning_30m} standard={pulse_standard_ok} "
-        f"alternative_ctx10={pulse_context10_ok} ok={pulse_entry_ok}"
-    )
-    if pulse_entry_ok:
-        if pulse_standard_ok and quality_10m:
-            setup_line = "[QUALITE ++] Bias 2H et ST Context 10m alignes"
-        elif pulse_standard_ok:
-            setup_line = "[OK] Entree standard validee par le Bias 2H"
-        else:
-            setup_line = "[QUALITE CONTEXT 10M] Entree validee sans Bias 2H aligne"
-        quality_line = (
-            f"[QUALITE] ST Context 10m aligne: {ctx_10m.upper()}"
-            if quality_10m else
-            f"[INFO] ST Context 10m non aligne: {(ctx_10m or 'NEUTRE').upper()}"
-        )
-        warning_line = (
-            f"[WARNING NON BLOQUANT] ST Context 30m oppose: {ctx_30m.upper()}"
-            if warning_30m else
-            f"[INFO] ST Context 30m: {(ctx_30m or 'NEUTRE').upper()}"
-        )
-        _open_strategy_entry(
-            symbol, 'PULSE', direction,
-            'range30m_standard' if pulse_standard_ok else 'range30m_context10',
-            range_event,
-            price, exchange_name,
-            [
-                f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}",
-                f"[OK] ST AI 6H: {st_6h.upper()}",
-                f"[OK] Bias 6H: {bias_6h.upper()} (EMA17/SMA40)",
-                setup_line,
-                f"[{'OK' if bias2h_ok else 'INFO'}] Bias 2H: {(bias_2h or 'N/A').upper()} (EMA17/SMA40)",
-                quality_line,
-                warning_line,
-            ],
-        )
-
-    # Les flips RF30 suivants peuvent pyramider si le bouton a ete active.
-    st_2h = m.get('st_2h') or m.get('st_ai_2h')
-    with STATE_LOCK:
-        pos = SCALP_POSITIONS.get(pos_key)
-        can_pyra = bool(
-            pos and pos.get('direction') == direction
-            and PYRA_ENABLED.get(pos_key, False)
-            and st_2h == exp_ctx
-        )
-        if not can_pyra or not should_send(
-            symbol, f"pulse_pyra_range30m_{exp_ctx}",
-            event_id=event_id or f"range30m_{symbol}_{signal_ts}_{range_dir}", cooldown=1800,
-        ):
-            logger.info(
-                f"[PULSE PYRA RANGE30M CHECK] {symbol} dir={direction} "
-                f"position={bool(pos)} enabled={PYRA_ENABLED.get(pos_key, False)} "
-                f"st2h={st_2h}/{exp_ctx} quality10m={quality_10m} ok=False"
-            )
-            return False
-        pos['entry_count'] = int(pos.get('entry_count', 1)) + 1
-        count = pos['entry_count']
-    send_telegram(
-        f"<b>[PULSE - PYRAMIDING #{count}]</b> {symbol}\n--------------------\n"
-        f"Direction: {direction}\nPrice: ${format_price(price)}\n"
-        f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}\n"
-        f"[OK] ST AI 2H: {st_2h.upper()}\n"
-        f"[QUALITE] ST Context 10m aligne: {quality_10m}\n{get_market_context_info()}"
-    )
-    persist_runtime_state()
-    logger.info(f"[PULSE] Pyramiding Range30m #{count}: {symbol} {direction}")
+    track_alert(symbol, 'PULSE')
+    logger.info(f"[PULSE] Entree Range 30m: {symbol} {direction}")
     return True
 
 
@@ -3154,12 +2782,45 @@ def calc_adx_okx(df, length=11, threshold=20):
     except Exception:
         return None
 
-def calc_bias_okx(df, ema_len=17, sma_len=40):
-    """EMA17 vs SMA40 — CarreBias uniforme."""
+def calc_bias_okx(df, ema_len=13, sma_len=30):
+    """EMA13 vs SMA30 — CarréBias."""
     close   = df['close']
     ema_val = close.ewm(span=ema_len, adjust=False).mean().iloc[-1]
     sma_val = close.rolling(window=sma_len).mean().iloc[-1]
     return 'bull' if ema_val > sma_val else 'bear'
+
+def calc_williams_okx(df, length=14, ema_len=14):
+    """Calcule Williams %R et son EMA. Long si %R > EMA, short si %R < EMA."""
+    try:
+        if df is None or len(df) < length + ema_len + 2:
+            return None
+        high = df['high'].astype(float)
+        low = df['low'].astype(float)
+        close = df['close'].astype(float)
+        highest = high.rolling(window=length).max()
+        lowest = low.rolling(window=length).min()
+        denom = highest - lowest
+        williams = -100 * (highest - close) / denom
+        williams = williams.replace([float('inf'), float('-inf')], pd.NA).dropna()
+        if len(williams) < ema_len + 2:
+            return None
+        williams_ema = williams.ewm(span=ema_len, adjust=False).mean()
+        value = float(williams.iloc[-1])
+        ema_value = float(williams_ema.iloc[-1])
+        if value > ema_value:
+            direction = 'buy'
+        elif value < ema_value:
+            direction = 'sell'
+        else:
+            direction = None
+        return {
+            'value': round(value, 2),
+            'ema': round(ema_value, 2),
+            'direction': direction,
+        }
+    except Exception as e:
+        logger.debug(f"[OKX] Williams calc error: {e}", exc_info=True)
+        return None
 
 def calc_ema200_okx(df):
     """EMA200 sur le close."""
@@ -3251,7 +2912,6 @@ def update_indicators_for_symbol(symbol):
         df_1h  = fetch_ohlcv_okx(symbol, '1h',  limit=250)
         df_4h  = fetch_ohlcv_okx(symbol, '4h',  limit=200)
         df_6h  = fetch_ohlcv_okx(symbol, '6h',  limit=200)
-        df_30m = fetch_ohlcv_okx(symbol, '30m', limit=100)
         df_1d  = fetch_ohlcv_okx(symbol, '1d',  limit=100)
         df_3d  = fetch_ohlcv_okx(symbol, '1d',  limit=200)  # aggregate pour 3D
 
@@ -3259,14 +2919,14 @@ def update_indicators_for_symbol(symbol):
             return
 
         # Calculs
-        bias_1h  = calc_bias_okx(df_1h, ema_len=17, sma_len=40)
+        bias_1h  = calc_bias_okx(df_1h, ema_len=13, sma_len=30)
         df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
         bias_2h  = calc_bias_okx(df_2h, ema_len=17, sma_len=40) if df_2h is not None else None
-        bias_4h  = calc_bias_okx(df_4h, ema_len=17, sma_len=40)
+        bias_4h  = calc_bias_okx(df_4h, ema_len=21, sma_len=55)
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
-        bias_30m = calc_bias_okx(df_30m, ema_len=17, sma_len=40) if df_30m is not None and len(df_30m) >= 40 else None
-        williams_6h = calc_williams_ema(df_6h, length=21, ema_length=13)
-        bias_1d  = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
+        bias_1d  = calc_bias_okx(df_1d, ema_len=13, sma_len=30)
+        williams_2h = calc_williams_okx(df_2h, length=14, ema_len=14) if df_2h is not None else None
+        williams_1d = calc_williams_okx(df_1d, length=14, ema_len=14)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)
 
@@ -3276,7 +2936,7 @@ def update_indicators_for_symbol(symbol):
                 'open': 'first', 'high': 'max', 'low': 'min',
                 'close': 'last', 'volume': 'sum'
             }).reset_index(drop=True)
-            bias_3d = calc_bias_okx(df_3d_agg, ema_len=17, sma_len=40)
+            bias_3d = calc_bias_okx(df_3d_agg, ema_len=21, sma_len=55)
         except Exception:
             bias_3d = None
 
@@ -3284,7 +2944,7 @@ def update_indicators_for_symbol(symbol):
         try:
             df_15m_bias = fetch_ohlcv_okx(symbol, '15m', limit=50)
             if df_15m_bias is not None and len(df_15m_bias) >= 30:
-                bias_15m = calc_bias_okx(df_15m_bias, ema_len=17, sma_len=40)
+                bias_15m = calc_bias_okx(df_15m_bias, ema_len=8, sma_len=20)
                 adx_data = calc_adx_okx(df_15m_bias)
                 if adx_data:
                     ADX_STATE[symbol] = adx_data
@@ -3327,10 +2987,16 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 if bias_6h is not None: MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
                 if bias_2h is not None: MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
-                if bias_30m is not None:
-                    MOMENTUM_STATE[symbol]['bias_30m'] = bias_30m
-                    MOMENTUM_STATE[symbol]['bias_30m_ts'] = datetime.now(timezone.utc).timestamp()
-                MOMENTUM_STATE[symbol]['williams_6h'] = williams_6h
+                if williams_1d is not None:
+                    MOMENTUM_STATE[symbol]['williams_1d'] = williams_1d['value']
+                    MOMENTUM_STATE[symbol]['williams_1d_ema'] = williams_1d['ema']
+                    MOMENTUM_STATE[symbol]['williams_1d_dir'] = williams_1d['direction']
+                    MOMENTUM_STATE[symbol]['williams_1d_ts'] = datetime.now(timezone.utc).timestamp()
+                if williams_2h is not None:
+                    MOMENTUM_STATE[symbol]['williams_2h'] = williams_2h['value']
+                    MOMENTUM_STATE[symbol]['williams_2h_ema'] = williams_2h['ema']
+                    MOMENTUM_STATE[symbol]['williams_2h_dir'] = williams_2h['direction']
+                    MOMENTUM_STATE[symbol]['williams_2h_ts'] = datetime.now(timezone.utc).timestamp()
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
@@ -3349,7 +3015,7 @@ def update_daily_radar_bias(symbol):
         if df_1d is None:
             logger.info(f"[RADAR] {symbol} bias1d=None reason=fetch_failed")
             return
-        bias_1d = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
+        bias_1d = calc_bias_okx(df_1d, ema_len=13, sma_len=30)
         with STATE_LOCK:
             init_symbol_states(symbol)
             MOMENTUM_STATE[symbol]['bias_1d'] = bias_1d
@@ -3599,7 +3265,7 @@ def bias4h_report_scheduler():
         time.sleep(max(300, wait))
 
 def range_filter_30m_scheduler():
-    """Calcule Range Filter 30m pour le pyramiding PULSE."""
+    """Calcule le Range Filter 30m depuis OKX et declenche l'entree PULSE dediee."""
     logger.info("[RANGE30M] Scheduler demarre (per=100, mult=2.0)")
     OKX_SKIP = {'TAO/USDT'}
     time.sleep(45)
@@ -3636,13 +3302,14 @@ def range_filter_30m_scheduler():
                         f"[RANGE30M] Nouveau signal {symbol} "
                         f"dir={range_dir} ts={signal_ts} price={signal_price}"
                     )
-                    evaluate_range_filter_30m_pyramiding(
+                    evaluate_pulse_range_filter_30m(
                         symbol,
                         range_dir,
                         signal_ts,
                         price=signal_price,
                         exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
                         event_id=f"range30m_{symbol}_{signal_ts}_{range_dir}",
+                        source='okx',
                     )
                 except Exception as e:
                     logger.error(f"[RANGE30M] {symbol}: {e}")
@@ -3654,65 +3321,6 @@ def range_filter_30m_scheduler():
         next_30m = now + timedelta(minutes=minutes_to_next)
         next_30m = next_30m.replace(second=20, microsecond=0)
         time.sleep(max(60, (next_30m - now).total_seconds()))
-
-
-def build_confirmed_10m_candles(df_5m):
-    """Agrege les bougies 5m confirmees par paires en bougies 10m."""
-    if df_5m is None or len(df_5m) < 2:
-        return None
-    df = df_5m.copy().sort_values('ts').reset_index(drop=True)
-    bucket_ms = 10 * 60 * 1000
-    df['bucket'] = (df['ts'].astype('int64') // bucket_ms) * bucket_ms
-    counts = df.groupby('bucket').size()
-    complete = counts[counts >= 2].index
-    df = df[df['bucket'].isin(complete)]
-    if df.empty:
-        return None
-    return df.groupby('bucket', as_index=False).agg(
-        ts=('bucket', 'first'), open=('open', 'first'), high=('high', 'max'),
-        low=('low', 'min'), close=('close', 'last'), volume=('volume', 'sum'),
-    )
-
-
-def range_filter_10m_scheduler():
-    """Calcule RF10 (Length 100, Multiplier 2.00) depuis les bougies OKX 5m."""
-    logger.info("[RANGE10M] Scheduler demarre (per=100, mult=2.0, source=5m agrege)")
-    time.sleep(50)
-    while True:
-        try:
-            for symbol in CONFIG['SYMBOLS']:
-                if symbol == 'TAO/USDT':
-                    continue
-                try:
-                    df_5m = fetch_ohlcv_okx(symbol, '5m', limit=300)
-                    df_10m = build_confirmed_10m_candles(df_5m)
-                    signal = calc_range_filter_signal(df_10m, per=100, mult=2.0)
-                    if signal is None:
-                        continue
-                    range_dir, signal_ts, signal_price = signal['direction'], signal['ts'], signal['price']
-                    with STATE_LOCK:
-                        init_symbol_states(symbol)
-                        m = MOMENTUM_STATE[symbol]
-                        if m.get('last_range_filter_10m_signal_ts') == signal_ts:
-                            continue
-                        m['last_range_filter_10m_signal_ts'] = signal_ts
-                        m['range_filter_10m'] = range_dir
-                        m['range_filter_10m_ts'] = datetime.now(timezone.utc).timestamp()
-                    logger.info(f"[RANGE10M] Nouveau signal {symbol} dir={range_dir} ts={signal_ts}")
-                    evaluate_range_filter_10m(
-                        symbol, range_dir, signal_ts, price=signal_price,
-                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-                        event_id=f"range10m_{symbol}_{signal_ts}_{range_dir}",
-                    )
-                except Exception as e:
-                    logger.error(f"[RANGE10M] {symbol}: {e}")
-                time.sleep(0.3)
-        except Exception as e:
-            logger.error(f"[RANGE10M] Scheduler erreur: {e}")
-        now = datetime.now(timezone.utc)
-        minutes_to_next = 10 - (now.minute % 10)
-        next_run = (now + timedelta(minutes=minutes_to_next)).replace(second=20, microsecond=0)
-        time.sleep(max(60, (next_run - now).total_seconds()))
 
 
 def indicators_scheduler():
@@ -3853,9 +3461,6 @@ def startup():
 
         range30m_thread = threading.Thread(target=range_filter_30m_scheduler, daemon=True)
         range30m_thread.start()
-
-        range10m_thread = threading.Thread(target=range_filter_10m_scheduler, daemon=True)
-        range10m_thread.start()
 
         sentiment_thread = threading.Thread(target=sentiment_scheduler, daemon=True)
         sentiment_thread.start()

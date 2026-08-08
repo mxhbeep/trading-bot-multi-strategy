@@ -3685,15 +3685,26 @@ def range_filter_30m_scheduler():
     OKX_SKIP = {'TAO/USDT'}
     time.sleep(45)
     while True:
+        checked_count = 0
+        skipped_count = 0
+        fetch_ok_count = 0
+        signal_count = 0
+        new_signal_count = 0
+        error_count = 0
         try:
             for symbol in CONFIG['SYMBOLS']:
                 if symbol in OKX_SKIP:
+                    skipped_count += 1
                     continue
+                checked_count += 1
                 try:
                     df = fetch_ohlcv_okx(symbol, '30m', limit=260)
+                    if df is not None:
+                        fetch_ok_count += 1
                     signal = calc_range_filter_signal(df, per=100, mult=2.0)
                     if signal is None:
                         continue
+                    signal_count += 1
 
                     range_dir = signal['direction']
                     signal_ts = signal['ts']
@@ -3712,6 +3723,7 @@ def range_filter_30m_scheduler():
 
                     if not should_process:
                         continue
+                    new_signal_count += 1
 
                     logger.info(
                         f"[RANGE30M] Nouveau signal {symbol} "
@@ -3726,10 +3738,16 @@ def range_filter_30m_scheduler():
                         event_id=f"range30m_{symbol}_{signal_ts}_{range_dir}",
                     )
                 except Exception as e:
+                    error_count += 1
                     logger.error(f"[RANGE30M] {symbol}: {e}")
                 time.sleep(0.3)
         except Exception as e:
             logger.error(f"[RANGE30M] Scheduler erreur: {e}")
+        logger.info(
+            f"[RANGE30M] Cycle termine: checked={checked_count}, skipped={skipped_count}, "
+            f"fetch_ok={fetch_ok_count}, signals={signal_count}, "
+            f"new_signals={new_signal_count}, errors={error_count}"
+        )
         now = datetime.now(timezone.utc)
         minutes_to_next = 30 - (now.minute % 30)
         next_30m = now + timedelta(minutes=minutes_to_next)

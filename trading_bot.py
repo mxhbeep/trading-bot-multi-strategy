@@ -2008,31 +2008,14 @@ def process_webhook(data):
                             # tant qu'il est refuse (cooldown/bouton/bias/anti-chop), le flip reste disponible.
                             m['last_st_30m'] = st_30m_pu
 
-            # Range Filter 30m declenche STRATEGIE 2H et DAILY.
+            # Range Filter 30m : stockage uniquement.
+            # Les entrees actives passent par le gestionnaire range_filter plus bas.
             if alert_type == 'range_filter' and tf == '30m':
                 range_30m_dir = parse_range_filter_value(val)
                 if range_30m_dir is not None:
                     m['range_filter_30m'] = range_30m_dir
                     m['range_filter_30m_ts'] = now_ts
                     RANGE_FILTER_30M[symbol] = range_30m_dir
-                    evaluate_strategy_2h_range_filter_30m(
-                        symbol,
-                        range_30m_dir,
-                        data.get('event_id') or event_id,
-                        price=price,
-                        exchange_name=exchange_name,
-                        event_id=event_id,
-                        source='webhook',
-                    )
-                    evaluate_daily_range_filter_30m(
-                        symbol,
-                        range_30m_dir,
-                        data.get('event_id') or event_id,
-                        price=price,
-                        exchange_name=exchange_name,
-                        event_id=event_id,
-                        source='webhook',
-                    )
 
             # Ancienne entree troisieme PULSE supprimee :
             # remplacee par la nouvelle strategie DAILY.
@@ -2718,6 +2701,18 @@ def calc_range_filter_signal(df, per=100, mult=2.0):
         logger.info(f"[RANGE30M] calc failed: {e}")
         logger.debug("[RANGE30M] calc exception", exc_info=True)
         return None
+
+
+def keep_confirmed_candles(df, timeframe_minutes):
+    """Retourne uniquement les bougies dont la cloture est deja passee."""
+    if df is None or df.empty:
+        return None
+    duration_ms = int(timeframe_minutes * 60 * 1000)
+    now_ms = int(time.time() * 1000)
+    confirmed = df[df['ts'].astype('int64') + duration_ms <= now_ms].copy()
+    if confirmed.empty:
+        return None
+    return confirmed.reset_index(drop=True)
 
 
 def evaluate_strategy_2h_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None, source='okx'):
@@ -3699,9 +3694,10 @@ def range_filter_30m_scheduler():
                 checked_count += 1
                 try:
                     df = fetch_ohlcv_okx(symbol, '30m', limit=260)
-                    if df is not None:
+                    df_confirmed = keep_confirmed_candles(df, 30)
+                    if df_confirmed is not None:
                         fetch_ok_count += 1
-                    signal = calc_range_filter_signal(df, per=100, mult=2.0)
+                    signal = calc_range_filter_signal(df_confirmed, per=100, mult=2.0)
                     if signal is None:
                         continue
                     signal_count += 1
@@ -3757,6 +3753,7 @@ def range_filter_30m_scheduler():
 
 def build_confirmed_10m_candles(df_5m):
     """Agrege les bougies 5m confirmees par paires en bougies 10m."""
+    df_5m = keep_confirmed_candles(df_5m, 5)
     if df_5m is None or len(df_5m) < 2:
         return None
     df = df_5m.copy().sort_values('ts').reset_index(drop=True)

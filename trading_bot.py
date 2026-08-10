@@ -30,6 +30,7 @@ CONFIG = {
         'BTC/USDT':    {'exchange': 'okx', 'scalp': True},
         'COMP/USDT':   {'exchange': 'okx', 'scalp': False},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': False},
+        'CVX/USDT':    {'exchange': 'okx', 'scalp': False},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': False},
@@ -53,7 +54,6 @@ CONFIG = {
         'BCH/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'BNB/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'CHZ/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
-        'CVX/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'DYDX/USDT':     {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'EIGEN/USDT':    {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'ENA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
@@ -1111,7 +1111,7 @@ def init_symbol_states(symbol):
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
-            'williams_1d': None, 'williams_1d_ts': None, 'williams_2h': None, 'williams_2h_ts': None,
+            'williams_1d': None, 'williams_1d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
@@ -2119,14 +2119,37 @@ def process_webhook(data):
                         event_id=event_id,
                     )
 
+        if strat in ['daily', 'all'] and (
+            (alert_type == 'supertrend' and tf in ('1d', '30m'))
+            or (alert_type == 'st_context' and tf == '30m')
+        ):
+            evaluate_daily_primary_confluence(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+                source=f"{alert_type}_{tf}",
+            )
+
+        if strat in ['pulse', 'all'] and (
+            (alert_type == 'st_context' and tf == '10m')
+            or (alert_type == 'supertrend' and tf == '6h')
+        ):
+            evaluate_pulse_context_10m_alert(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+            )
+
 
         persist_runtime_state()
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             (alert_type == 'supertrend' and tf in ('2h', '30m'))
-            or (alert_type == 'st_context' and tf in ('5m', '2h', '30m'))
-            or (alert_type == 'st_context_lt' and tf == '5m')
+            or (alert_type == 'st_context' and tf in ('1m', '5m', '2h', '30m'))
+            or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
@@ -2908,7 +2931,7 @@ def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
 
 
 def evaluate_range_filter_10m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """Evalue les entrees DAILY sur un nouveau flip Range Filter 10m."""
+    """Evalue le pyramiding DAILY sur un nouveau flip Range Filter 10m."""
     if range_dir not in ('buy', 'sell') or not is_trade_symbol(symbol):
         return
     init_symbol_states(symbol)
@@ -2919,43 +2942,13 @@ def evaluate_range_filter_10m(symbol, range_dir, signal_ts, price=0.0, exchange_
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
     event_key = event_id or f"range10m_{symbol}_{signal_ts}_{range_dir}"
 
-    # DAILY: ST AI 1D + Bias 6H + ST Context 30m.
-    st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
-    bias_6h = m.get('bias_6h')
-    ctx_30m = ST_CONTEXT_30M.get(symbol)
-    williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
-    daily_ok = (
-        st_1d == exp_ctx
-        and bias_6h == exp_bias
-        and ctx_30m == exp_ctx
-        and williams_1d['ok']
-        and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
-        and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-    )
-    logger.info(
-        f"[DAILY RANGE10M CHECK] {symbol} dir={direction} rf10={range_dir} "
-        f"st1d={st_1d}/{exp_ctx} bias6h={bias_6h}/{exp_bias} "
-        f"ctx30m={ctx_30m}/{exp_ctx} "
-        f"will1d={williams_1d['value']}/{williams_1d['ema']} trend={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
-        f"ok={daily_ok}"
-    )
-    if daily_ok:
-        _open_strategy_entry(
-            symbol, 'DAILY', direction, 'range10m', event_key, price, exchange_name,
-            [
-                f"[OK] Flip Range Filter 10m (100/2.00): {range_dir.upper()}",
-                f"[OK] ST AI 1D: {st_1d.upper()}",
-                f"[OK] Bias 6H: {bias_6h.upper()} (EMA17/SMA40)",
-                format_williams_filter_line('1D', williams_1d),
-                f"[OK] ST Context 30m: {ctx_30m.upper()}",
-            ],
-        )
+    logger.info(f"[DAILY RANGE10M CHECK] {symbol} dir={direction} rf10={range_dir} entry_disabled=True")
     _evaluate_daily_range10m_pyramiding(
         symbol, range_dir, signal_ts, price, exchange_name, event_key,
     )
 
 
-def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines):
+def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines, cooldown=3600):
     """Cree une entree unique et envoie l'alerte Telegram correspondante."""
     pos_key = f"{symbol}_{strategy}"
     exp_ctx = 'buy' if direction == 'LONG' else 'sell'
@@ -2967,7 +2960,7 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
             pos = None
         if pos is not None or not should_send(
             symbol, f"{strategy.lower()}_entry_{signal_type}_{exp_ctx}",
-            event_id=event_id, cooldown=3600,
+            event_id=event_id, cooldown=cooldown,
         ):
             return False
         SCALP_POSITIONS[pos_key] = {
@@ -3025,8 +3018,66 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
     return True
 
 
+def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, event_id=None, source='webhook'):
+    """Entree DAILY principale: ST AI 1D + W1D + Bias 6H + Context 30m + W2H + ST AI 30m."""
+    if not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+
+    st_30m = m.get('st_ai_30m')
+    if st_30m not in ('buy', 'sell'):
+        return False
+
+    direction = 'LONG' if st_30m == 'buy' else 'SHORT'
+    exp_ctx = st_30m
+    exp_bias = 'bull' if direction == 'LONG' else 'bear'
+    st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+    bias_6h = m.get('bias_6h')
+    ctx_30m = ST_CONTEXT_30M.get(symbol)
+    williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
+    williams_2h = get_williams_filter(symbol, '2h', direction, 6 * 3600)
+
+    st_1d_ok = st_1d == exp_ctx and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+    st_30m_ok = st_30m == exp_ctx and is_signal_fresh(m.get('st_ai_30m_ts'), 90 * 60)
+    bias_6h_ok = bias_6h == exp_bias
+    ctx_30m_ok = ctx_30m == exp_ctx and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+    daily_ok = st_1d_ok and st_30m_ok and bias_6h_ok and ctx_30m_ok and williams_1d['ok'] and williams_2h['ok']
+
+    logger.info(
+        f"[DAILY PRIMARY CHECK] {symbol} dir={direction} source={source} "
+        f"st1d={st_1d}/{exp_ctx} ok={st_1d_ok} "
+        f"st30m={st_30m}/{exp_ctx} ok={st_30m_ok} "
+        f"bias6h={bias_6h}/{exp_bias} ok={bias_6h_ok} "
+        f"ctx30m={ctx_30m}/{exp_ctx} ok={ctx_30m_ok} "
+        f"will1d={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
+        f"will2h={williams_2h['trend']} fresh={williams_2h['fresh']} ok={williams_2h['ok']} "
+        f"ok={daily_ok}"
+    )
+    if not daily_ok:
+        return False
+
+    event_key = event_id or f"daily_primary_{symbol}_{int(time.time())}_{exp_ctx}"
+    opened = _open_strategy_entry(
+        symbol, 'DAILY', direction, 'principal_st30m', event_key, price, exchange_name,
+        [
+            f"[OK] ST AI 1D: {(st_1d or 'N/A').upper()}",
+            format_williams_filter_line('1D', williams_1d),
+            f"[OK] Bias 6H: {(bias_6h or 'N/A').upper()} (EMA17/SMA40)",
+            f"[OK] ST Context 30m: {(ctx_30m or 'N/A').upper()}",
+            format_williams_filter_line('2H', williams_2h),
+            f"[OK] ST AI 30m: {(st_30m or 'N/A').upper()}",
+        ],
+        cooldown=14400,
+    )
+    if opened:
+        logger.info(f"[DAILY] Entree principale confluence: {symbol} {direction}")
+    return opened
+
+
 def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """Evalue les deux entrees PULSE sur un nouveau flip Range Filter 30m."""
+    """Evalue l'entree PULSE principale sur un nouveau flip Range Filter 30m."""
     if range_dir not in ('buy', 'sell'):
         return False
     m = MOMENTUM_STATE.get(symbol, {})
@@ -3037,60 +3088,35 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     event_key = event_id or f"range30m_pulse_{symbol}_{signal_ts}_{range_dir}"
 
     st_6h = m.get('st_6h') or m.get('st_ai_6h')
-    bias_6h = m.get('bias_6h')
     bias_2h = m.get('bias_2h')
-    ctx_30m = ST_CONTEXT_30M.get(symbol)
     ctx_10m = m.get('st_context_10m')
+    williams_6h = get_williams_filter(symbol, '6h', direction, 18 * 3600)
 
     st_6h_ok = (
         st_6h == exp_ctx
         and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
     )
-    bias_6h_ok = bias_6h == exp_bias
     bias_2h_ok = bias_2h == exp_bias
-    ctx_30m_ok = (
-        ctx_30m == exp_ctx
-        and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-    )
-    ctx_10m_ok = (
-        ctx_10m == exp_ctx
-        and is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
-    )
 
-    entry_bias2h_ok = st_6h_ok and bias_6h_ok and bias_2h_ok
-    entry_context_ok = st_6h_ok and bias_6h_ok and ctx_30m_ok and ctx_10m_ok
+    entry_main_ok = st_6h_ok and bias_2h_ok and williams_6h['ok']
 
     logger.info(
         f"[PULSE RANGE30M CHECK] {symbol} dir={direction} rf30={range_dir} "
         f"st6h={st_6h}/{exp_ctx} ok={st_6h_ok} "
-        f"bias6h={bias_6h}/{exp_bias} ok={bias_6h_ok} "
         f"bias2h={bias_2h}/{exp_bias} ok={bias_2h_ok} "
-        f"ctx30m={ctx_30m}/{exp_ctx} ok={ctx_30m_ok} "
-        f"ctx10m={ctx_10m}/{exp_ctx} ok={ctx_10m_ok} "
-        f"entry_bias2h={entry_bias2h_ok} entry_context={entry_context_ok}"
+        f"will6h={williams_6h['trend']} fresh={williams_6h['fresh']} ok={williams_6h['ok']} "
+        f"ctx10m_info={ctx_10m}/{exp_ctx} entry_main={entry_main_ok}"
     )
 
     opened = False
-    if entry_bias2h_ok:
+    if entry_main_ok:
         opened = _open_strategy_entry(
-            symbol, 'PULSE', direction, 'range30m_bias2h', event_key, price, exchange_name,
+            symbol, 'PULSE', direction, 'range30m_st6h_bias2h_w6h', event_key, price, exchange_name,
             [
                 f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}",
                 f"[OK] ST AI 6H: {st_6h.upper()}",
-                f"[OK] Bias 6H: {bias_6h.upper()} (EMA17/SMA40)",
                 f"[OK] Bias 2H: {bias_2h.upper()} (EMA17/SMA40)",
-            ],
-        )
-
-    if not opened and entry_context_ok:
-        opened = _open_strategy_entry(
-            symbol, 'PULSE', direction, 'range30m_context', event_key, price, exchange_name,
-            [
-                f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}",
-                f"[OK] ST AI 6H: {st_6h.upper()}",
-                f"[OK] Bias 6H: {bias_6h.upper()} (EMA17/SMA40)",
-                f"[OK] ST Context 30m: {ctx_30m.upper()}",
-                f"[OK] ST Context 10m: {ctx_10m.upper()}",
+                format_williams_filter_line('6H', williams_6h),
             ],
         )
 
@@ -3145,12 +3171,59 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     if not opened:
         logger.info(
             f"[PULSE RANGE30M BLOCKED] {symbol} dir={direction} "
-            f"entry_bias2h={entry_bias2h_ok} entry_context={entry_context_ok} "
+            f"entry_main={entry_main_ok} "
             f"pyra_pos={bool(SCALP_POSITIONS.get(pos_key))} "
             f"pyra_enabled={PYRA_ENABLED.get(pos_key, False)} "
             f"st2h={st_2h}/{exp_ctx} ok={st_2h_ok} "
             f"ctx10m_opp_block={ctx10m_opp_block}"
         )
+    return opened
+
+
+def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, event_id=None):
+    """Alerte PULSE quand ST AI 6H + Bias 2H + Williams 6H + ST Context 10m sont alignes."""
+    if not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    ctx_10m = m.get('st_context_10m')
+    if ctx_10m not in ('buy', 'sell') or not is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60):
+        return False
+
+    direction = 'LONG' if ctx_10m == 'buy' else 'SHORT'
+    exp_ctx = ctx_10m
+    exp_bias = 'bull' if direction == 'LONG' else 'bear'
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    st_6h = m.get('st_6h') or m.get('st_ai_6h')
+    bias_2h = m.get('bias_2h')
+    williams_6h = get_williams_filter(symbol, '6h', direction, 18 * 3600)
+
+    st_6h_ok = st_6h == exp_ctx and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
+    bias_2h_ok = bias_2h == exp_bias
+    entry_ok = st_6h_ok and bias_2h_ok and williams_6h['ok']
+
+    logger.info(
+        f"[PULSE CONTEXT10M CHECK] {symbol} dir={direction} "
+        f"st6h={st_6h}/{exp_ctx} ok={st_6h_ok} "
+        f"bias2h={bias_2h}/{exp_bias} ok={bias_2h_ok} "
+        f"will6h={williams_6h['trend']} fresh={williams_6h['fresh']} ok={williams_6h['ok']} "
+        f"ctx10m={ctx_10m}/{exp_ctx} ok=True entry={entry_ok}"
+    )
+    if not entry_ok:
+        return False
+
+    event_key = event_id or f"pulse_context10m_{symbol}_{int(time.time())}_{exp_ctx}"
+    opened = _open_strategy_entry(
+        symbol, 'PULSE', direction, 'context10m_st6h_bias2h_w6h', event_key, price, exchange_name,
+        [
+            f"[OK] ST Context 10m: {ctx_10m.upper()}",
+            f"[OK] ST AI 6H: {(st_6h or 'N/A').upper()}",
+            f"[OK] Bias 2H: {(bias_2h or 'N/A').upper()} (EMA17/SMA40)",
+            format_williams_filter_line('6H', williams_6h),
+        ],
+    )
+    if opened:
+        logger.info(f"[PULSE] Entree Context10m: {symbol} {direction}")
     return opened
 
 
@@ -3294,6 +3367,7 @@ def update_indicators_for_symbol(symbol):
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
         bias_30m = calc_bias_okx(df_30m, ema_len=13, sma_len=30) if df_30m is not None and len(df_30m) >= 30 else None
         williams_2h = calc_williams_ema(df_2h, length=14, ema_length=14) if df_2h is not None else None
+        williams_6h = calc_williams_ema(df_6h, length=14, ema_length=14) if df_6h is not None else None
         williams_1d = calc_williams_ema(df_1d, length=14, ema_length=14)
         bias_1d  = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
         bias_2d  = calc_bias_2d(symbol)
@@ -3365,9 +3439,25 @@ def update_indicators_for_symbol(symbol):
                 if williams_2h is not None:
                     MOMENTUM_STATE[symbol]['williams_2h'] = williams_2h
                     MOMENTUM_STATE[symbol]['williams_2h_ts'] = datetime.now(timezone.utc).timestamp()
+                if williams_6h is not None:
+                    MOMENTUM_STATE[symbol]['williams_6h'] = williams_6h
+                    MOMENTUM_STATE[symbol]['williams_6h_ts'] = datetime.now(timezone.utc).timestamp()
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        evaluate_daily_primary_confluence(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_daily_primary_{symbol}_{int(time.time())}",
+            source='okx_scheduler',
+        )
+        evaluate_pulse_context_10m_alert(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_pulse_ctx10m_{symbol}_{int(time.time())}",
+        )
         relay_scalp_bias_2h(symbol, bias_2h, price)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")

@@ -2241,6 +2241,14 @@ def process_webhook(data):
                 event_id=event_id,
             )
 
+        if strat in ['context', 'context2h10m', 'all'] and alert_type == 'st_context' and tf in ('2h', '10m'):
+            evaluate_context_2h_10m_alert(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+            )
+
 
         persist_runtime_state()
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3332,6 +3340,57 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
     return opened
 
 
+def evaluate_context_2h_10m_alert(symbol, price=0.0, exchange_name=None, event_id=None):
+    """Alerte quand ST Context 2H + ST Context 10m sont alignes, hors LT 10m meme sens."""
+    if not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    ctx_2h = m.get('st_context_2h')
+    ctx_10m = m.get('st_context_10m')
+    if ctx_2h not in ('buy', 'sell') or ctx_10m not in ('buy', 'sell'):
+        return False
+
+    direction = 'LONG' if ctx_10m == 'buy' else 'SHORT'
+    exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+    ctx_2h_fresh = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
+    ctx_10m_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
+    ctx_lt_10m = m.get('st_context_lt_10m')
+    ctx_lt_10m_fresh = is_signal_fresh(m.get('st_context_lt_10m_ts'), 30 * 60)
+    lt_10m_block = ctx_lt_10m_fresh and ctx_lt_10m == exp_ctx
+    all_ok = (
+        ctx_2h_fresh
+        and ctx_10m_fresh
+        and ctx_2h == exp_ctx
+        and ctx_10m == exp_ctx
+        and not lt_10m_block
+    )
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+
+    logger.info(
+        f"[CONTEXT2H10M CHECK] {symbol} dir={direction} "
+        f"ctx2h={ctx_2h}/{exp_ctx} fresh={ctx_2h_fresh} "
+        f"ctx10m={ctx_10m}/{exp_ctx} fresh={ctx_10m_fresh} "
+        f"lt10m={ctx_lt_10m} fresh={ctx_lt_10m_fresh} block={lt_10m_block} ok={all_ok}"
+    )
+    if not all_ok:
+        return False
+
+    event_key = event_id or f"context2h10m_{symbol}_{int(time.time())}_{exp_ctx}"
+    opened = _open_strategy_entry(
+        symbol, 'CONTEXT2H10M', direction, 'context_2h_10m', event_key, price, exchange_name,
+        [
+            f"[OK] ST Context 2H: {ctx_2h.upper()}",
+            f"[OK] ST Context 10m: {ctx_10m.upper()}",
+            f"[ANTI-CHOP] LT 10m: {fmt_sig(ctx_lt_10m)}",
+        ],
+        cooldown=3600,
+    )
+    if opened:
+        logger.info(f"[CONTEXT2H10M] Alerte: {symbol} {direction}")
+    return opened
+
+
 def calc_adx_okx(df, length=11, threshold=20):
     """Calcule ADX + DI sur les données OHLCV."""
     try:
@@ -3562,6 +3621,12 @@ def update_indicators_for_symbol(symbol):
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
             event_id=f"okx_pulse_ctx10m_{symbol}_{int(time.time())}",
+        )
+        evaluate_context_2h_10m_alert(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_context2h10m_{symbol}_{int(time.time())}",
         )
         relay_scalp_bias_2h(symbol, bias_2h, price)
     except Exception as e:

@@ -600,7 +600,7 @@ def normalize_base_url(url):
     return url
 
 
-def send_telegram(msg, ntfy=True):
+def send_telegram(msg, ntfy=False):
     result = send_notification(
         notification_title_from_message(msg),
         msg,
@@ -2099,7 +2099,8 @@ def process_webhook(data):
                                 f"[OK] Zone ST Context 5m recente: {(last_ctx_5m_pu or ctx_5m_pu or 'N/A').upper()}\n"
                                 f"[INFO] Derniere zone ST Context 6H: {(ctx_6h_pu or 'NEUTRE').upper()}\n"
                                 f"[INFO] ST AI 1D: {(st_1d_pu or 'N/A').upper()}\n"
-                                f"{get_market_context_info()}"
+                                f"{get_market_context_info()}",
+                                ntfy=True,
                             )
                             logger.info(f"[PULSE] Pyramiding #{entry_count_pu}: {symbol} {direction_pu}")
                             # Consomme le guard seulement une fois le pyramiding reellement declenche :
@@ -3113,7 +3114,8 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
         f"Direction: {direction}\nPrice: ${format_price(price)}\nExchange: {exchange_name.upper()}\n"
         f"[OK] Flip Range Filter 10m (100/2.00): {range_dir.upper()}\n"
         f"[OK] ST AI 2H: {st_2h.upper()}\n"
-        f"[ANTI-CHOP] ST Context 10m oppose: {antichop}\n{get_market_context_info()}"
+        f"[ANTI-CHOP] ST Context 10m oppose: {antichop}\n{get_market_context_info()}",
+        ntfy=True,
     )
     persist_runtime_state()
     logger.info(f"[DAILY] Pyramiding Range10m #{count}: {symbol} {direction}")
@@ -3264,7 +3266,8 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
             f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}\n"
             f"[OK] ST AI 2H: {(st_2h or 'N/A').upper()}\n"
             f"[ANTI-CHOP] ST Context 10m oppose: {ctx10m_opp_block}\n"
-            f"{get_market_context_info()}"
+            f"{get_market_context_info()}",
+            ntfy=True,
         )
         persist_runtime_state()
         logger.info(f"[PULSE] Pyramiding Range30m #{entry_count}: {symbol} {direction}")

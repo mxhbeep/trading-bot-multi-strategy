@@ -197,6 +197,7 @@ def persist_runtime_state():
             'st_context_lt_30m':  dict(ST_CONTEXT_LT_30M),
             'pyra_enabled':       dict(PYRA_ENABLED),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
+            'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -256,6 +257,7 @@ def load_runtime_state():
         LAST_SIGNALS        = payload.get('last_signals', {})
         LAST_SIGNAL_EVENTS  = payload.get('last_signal_events', {})
         LAST_WEBHOOK_TS.update(payload.get('last_webhook_ts', {}))
+        LAST_WEBHOOK_SIGNAL_TS.update(payload.get('last_webhook_signal_ts', {}))
         ST_AI_15M.update(payload.get('st_ai_15m', {}))
         ST_AI_30M.update(payload.get('st_ai_30m', {}))
         ST_AI_1D.update(payload.get('st_ai_1d', {}))
@@ -907,6 +909,100 @@ def tv_alert_watchdog():
             )
             logger.warning(f"[TV WATCHDOG] Alertes manquantes: {missing}")
 
+def tv_signal_key(symbol, alert_type, tf):
+    return f"{symbol}|{alert_type}|{tf}"
+
+
+def track_tv_signal(symbol, alert_type, tf):
+    if not symbol or not alert_type or not tf:
+        return
+    LAST_WEBHOOK_SIGNAL_TS[tv_signal_key(symbol, alert_type, tf)] = time.time()
+
+
+def tv_required_signals():
+    return [
+        {
+            'label': 'ST AI 6H',
+            'alert_type': 'supertrend',
+            'tf': '6h',
+            'max_age': 9 * 3600,
+            'warmup': 10 * 3600,
+        },
+        {
+            'label': 'ST AI 1D',
+            'alert_type': 'supertrend',
+            'tf': '1d',
+            'max_age': 36 * 3600,
+            'warmup': 37 * 3600,
+        },
+        {
+            'label': 'ST AI 30m',
+            'alert_type': 'supertrend',
+            'tf': '30m',
+            'max_age': 90 * 60,
+            'warmup': 2 * 3600,
+        },
+        {
+            'label': 'ST Context 10m',
+            'alert_type': 'st_context',
+            'tf': '10m',
+            'max_age': 30 * 60,
+            'warmup': 45 * 60,
+        },
+        {
+            'label': 'ST Context 30m',
+            'alert_type': 'st_context',
+            'tf': '30m',
+            'max_age': 90 * 60,
+            'warmup': 2 * 3600,
+        },
+    ]
+
+
+def tv_signal_watchdog():
+    """Surveille les webhooks TradingView critiques asset par asset."""
+    bot_start_time = time.time()
+    time.sleep(30 * 60)
+    logger.info("[TV SIGNAL WATCHDOG] Demarre")
+    while True:
+        time.sleep(15 * 60)
+        now = time.time()
+        uptime = now - bot_start_time
+        issues = []
+        with STATE_LOCK:
+            symbols = list(CONFIG['SYMBOLS'].keys())
+            signal_ts = dict(LAST_WEBHOOK_SIGNAL_TS)
+
+        for req in tv_required_signals():
+            if uptime < req['warmup']:
+                continue
+            missing = []
+            stale = []
+            for symbol in symbols:
+                ts = signal_ts.get(tv_signal_key(symbol, req['alert_type'], req['tf']))
+                if ts is None:
+                    missing.append(symbol.replace('/USDT', ''))
+                elif now - float(ts) > req['max_age']:
+                    stale.append((symbol.replace('/USDT', ''), (now - float(ts)) / 3600))
+            if missing or stale:
+                details = []
+                if missing:
+                    details.append("jamais recu: " + ", ".join(missing[:10]) + ("..." if len(missing) > 10 else ""))
+                if stale:
+                    stale_txt = ", ".join(f"{sym} {age:.1f}H" for sym, age in stale[:10])
+                    details.append("perime: " + stale_txt + ("..." if len(stale) > 10 else ""))
+                issues.append(f"- {req['label']}: " + " | ".join(details))
+
+        if issues and should_send('GLOBAL', 'tv_signal_watchdog', cooldown=3600):
+            send_info(
+                "<b>[ALERTE] Signaux TradingView critiques manquants</b>\n"
+                "--------------------\n"
+                + "\n".join(issues[:8])
+                + "\n\nVerifier les alertes TradingView concernees."
+            )
+            logger.warning(f"[TV SIGNAL WATCHDOG] Issues: {issues}")
+
+
 def heartbeat_scheduler():
     logger.info("Heartbeat Telegram desactive")
     return
@@ -1093,6 +1189,7 @@ RANGE_FILTER_30M: dict = {}  # symbol -> 'buy' | 'sell' | None
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
+LAST_WEBHOOK_SIGNAL_TS: dict = {}  # "symbol|type|tf" -> timestamp
 
 # Positions SCALP
 SCALP_POSITIONS: dict = {}      # pos_key -> position dict
@@ -1204,6 +1301,7 @@ def process_webhook(data):
         radar_only = is_radar_symbol(symbol) and not trade_symbol
         exchange_name = get_symbol_config(symbol).get('exchange', 'okx')
         init_symbol_states(symbol)
+        track_tv_signal(symbol, alert_type, tf)
 
         # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
         m = MOMENTUM_STATE[symbol]
@@ -2513,6 +2611,7 @@ def reset_state_all():
         MOMENTUM_STATE.clear()
         LAST_SIGNALS.clear()
         LAST_SIGNAL_EVENTS.clear()
+        LAST_WEBHOOK_SIGNAL_TS.clear()
         ST_AI_15M.clear()
         ST_AI_30M.clear()
         ST_AI_1D.clear()
@@ -2569,6 +2668,9 @@ def reset_state_symbol(symbol):
         for k in keys_to_remove:
             LAST_SIGNALS.pop(k, None)
             LAST_SIGNAL_EVENTS.pop(k, None)
+        signal_keys_to_remove = [k for k in LAST_WEBHOOK_SIGNAL_TS if k.startswith(f"{symbol}|")]
+        for k in signal_keys_to_remove:
+            LAST_WEBHOOK_SIGNAL_TS.pop(k, None)
     persist_runtime_state()
     logger.info(f"🔄 State remis à zéro pour {symbol}")
     return jsonify({'status': 'reset', 'symbol': symbol, 'message': f'État de {symbol} remis à zéro'}), 200
@@ -4048,6 +4150,8 @@ def startup():
 
         watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
         watchdog_thread.start()
+        signal_watchdog_thread = threading.Thread(target=tv_signal_watchdog, daemon=True)
+        signal_watchdog_thread.start()
 
         scalp_url_check = os.environ.get('SCALP_BOT_URL', '')
         if not scalp_url_check:

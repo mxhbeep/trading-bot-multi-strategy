@@ -1837,35 +1837,35 @@ def process_webhook(data):
                         logger.info(f"[DAILY] Entree {signal_type_d}: {symbol} {direction_d}")
 
             # Entree secondaire DAILY :
-            # Bias 1D + ST Context 2H + ST Context 30m alignes.
+            # Bias 1D + Williams 1D + ST Context 2H + ST Context 10m alignes.
             if (
-                (alert_type == 'st_context' and tf in ('2h', '30m'))
+                (alert_type == 'st_context' and tf in ('2h', '10m'))
                 or (alert_type == 'bias' and tf == '1d')
             ):
                 bias_1d_s = m.get('bias_1d')
                 ctx_2h_s = m.get('st_context_2h')
-                ctx_30m_s = ST_CONTEXT_30M.get(symbol)
+                ctx_10m_s = m.get('st_context_10m')
 
                 bias_1d_fresh_s = bool(bias_1d_s) and is_signal_fresh(m.get('bias_1d_ts'), 36 * 3600)
                 ctx_2h_fresh_s = bool(ctx_2h_s) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
-                ctx_30m_fresh_s = bool(ctx_30m_s) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+                ctx_10m_fresh_s = bool(ctx_10m_s) and is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
 
                 direction_s = None
-                if bias_1d_s == 'bull' and ctx_2h_s == 'buy' and ctx_30m_s == 'buy':
+                if bias_1d_s == 'bull' and ctx_2h_s == 'buy' and ctx_10m_s == 'buy':
                     direction_s = 'LONG'
-                elif bias_1d_s == 'bear' and ctx_2h_s == 'sell' and ctx_30m_s == 'sell':
+                elif bias_1d_s == 'bear' and ctx_2h_s == 'sell' and ctx_10m_s == 'sell':
                     direction_s = 'SHORT'
 
                 williams_1d_s = get_williams_filter(symbol, '1d', direction_s, 36 * 3600) if direction_s else {
                     'value': None, 'ema': None, 'trend': None, 'fresh': False, 'ok': False
                 }
-                daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_30m_fresh_s and williams_1d_s['ok'])
+                daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_10m_fresh_s and williams_1d_s['ok'])
 
                 logger.info(
                     f"[DAILY CHECK SECONDAIRE] {symbol} dir={direction_s} "
                     f"bias1d={bias_1d_s} fresh={bias_1d_fresh_s} "
                     f"ctx2h={ctx_2h_s} fresh={ctx_2h_fresh_s} "
-                    f"ctx30m={ctx_30m_s} fresh={ctx_30m_fresh_s} "
+                    f"ctx10m={ctx_10m_s} fresh={ctx_10m_fresh_s} "
                     f"will1d={williams_1d_s['value']}/{williams_1d_s['ema']} trend={williams_1d_s['trend']} fresh={williams_1d_s['fresh']} ok={williams_1d_s['ok']} "
                     f"ok={daily_secondary_ok}"
                 )
@@ -1903,7 +1903,7 @@ def process_webhook(data):
                             f"[OK] Bias 1D: {(bias_1d_s or 'N/A').upper()} (EMA17/SMA40)\n"
                             f"{format_williams_filter_line('1D', williams_1d_s)}\n"
                             f"[OK] Zone ST Context 2H: {(ctx_2h_s or 'N/A').upper()}\n"
-                            f"[OK] Zone ST Context 30m: {(ctx_30m_s or 'N/A').upper()}\n"
+                            f"[OK] Zone ST Context 10m: {(ctx_10m_s or 'N/A').upper()}\n"
                             f"{get_market_context_info()}",
                             f"{symbol}_DAILY",
                             journal_symbol=symbol, journal_strategy='DAILY',

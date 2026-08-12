@@ -1837,7 +1837,7 @@ def process_webhook(data):
                         logger.info(f"[DAILY] Entree {signal_type_d}: {symbol} {direction_d}")
 
             # Entree secondaire DAILY :
-            # Bias 1D + Williams 1D + ST Context 2H + ST Context 10m alignes.
+            # Bias 1D + ST Context 2H + ST Context 10m alignes. Williams 1D en bonus.
             if (
                 (alert_type == 'st_context' and tf in ('2h', '10m'))
                 or (alert_type == 'bias' and tf == '1d')
@@ -1859,7 +1859,7 @@ def process_webhook(data):
                 williams_1d_s = get_williams_filter(symbol, '1d', direction_s, 36 * 3600) if direction_s else {
                     'value': None, 'ema': None, 'trend': None, 'fresh': False, 'ok': False
                 }
-                daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_10m_fresh_s and williams_1d_s['ok'])
+                daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_10m_fresh_s)
 
                 logger.info(
                     f"[DAILY CHECK SECONDAIRE] {symbol} dir={direction_s} "
@@ -2973,7 +2973,7 @@ def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     lt_30m_block = ctx_lt_30m_fresh and ctx_lt_30m == exp_ctx
     ctx_2h_warning = ctx_2h_fresh and ctx_2h == opp_ctx
     daily_plus = ctx_1d_fresh and ctx_1d == exp_ctx
-    entry_ok = bias_1d_ok and st_1d_ok and williams_1d['ok'] and ctx_30m_ok and not lt_30m_block
+    entry_ok = bias_1d_ok and st_1d_ok and ctx_30m_ok and not lt_30m_block
     signal_type = 'daily_plus_range30m' if daily_plus else 'daily_range30m'
 
     logger.info(
@@ -3131,7 +3131,7 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
 
 
 def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, event_id=None, source='webhook'):
-    """Entree DAILY principale: ST AI 1D + W1D + Bias 6H + Context 30m + W2H + ST AI 30m."""
+    """Entree DAILY principale: ST AI 1D + Bias 6H + Context 30m + ST AI 30m. Williams en bonus."""
     if not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3148,6 +3148,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
     st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
     bias_6h = m.get('bias_6h')
     ctx_30m = ST_CONTEXT_30M.get(symbol)
+    ctx_10m = m.get('st_context_10m')
     williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
     williams_2h = get_williams_filter(symbol, '2h', direction, 6 * 3600)
 
@@ -3155,7 +3156,8 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
     st_30m_ok = st_30m == exp_ctx and is_signal_fresh(m.get('st_ai_30m_ts'), 90 * 60)
     bias_6h_ok = bias_6h == exp_bias
     ctx_30m_ok = ctx_30m == exp_ctx and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-    daily_ok = st_1d_ok and st_30m_ok and bias_6h_ok and ctx_30m_ok and williams_1d['ok'] and williams_2h['ok']
+    ctx_10m_quality = ctx_10m == exp_ctx and is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
+    daily_ok = st_1d_ok and st_30m_ok and bias_6h_ok and ctx_30m_ok
 
     logger.info(
         f"[DAILY PRIMARY CHECK] {symbol} dir={direction} source={source} "
@@ -3165,6 +3167,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
         f"ctx30m={ctx_30m}/{exp_ctx} ok={ctx_30m_ok} "
         f"will1d={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
         f"will2h={williams_2h['trend']} fresh={williams_2h['fresh']} ok={williams_2h['ok']} "
+        f"ctx10m_quality={ctx_10m}/{exp_ctx} ok={ctx_10m_quality} "
         f"ok={daily_ok}"
     )
     if not daily_ok:
@@ -3174,12 +3177,13 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
     opened = _open_strategy_entry(
         symbol, 'DAILY', direction, 'principal_st30m', event_key, price, exchange_name,
         [
+            f"[QUALITE] ST Context 10m: {(ctx_10m or 'NEUTRE').upper()}" if ctx_10m_quality else f"[INFO] ST Context 10m: {(ctx_10m or 'NEUTRE').upper()}",
             f"[OK] ST AI 1D: {(st_1d or 'N/A').upper()}",
-            format_williams_filter_line('1D', williams_1d),
             f"[OK] Bias 6H: {(bias_6h or 'N/A').upper()} (EMA17/SMA40)",
             f"[OK] ST Context 30m: {(ctx_30m or 'N/A').upper()}",
-            format_williams_filter_line('2H', williams_2h),
             f"[OK] ST AI 30m: {(st_30m or 'N/A').upper()}",
+            format_williams_filter_line('1D', williams_1d),
+            format_williams_filter_line('2H', williams_2h),
         ],
         cooldown=14400,
     )
@@ -3210,7 +3214,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     )
     bias_2h_ok = bias_2h == exp_bias
 
-    entry_main_ok = st_6h_ok and bias_2h_ok and williams_6h['ok']
+    entry_main_ok = st_6h_ok and bias_2h_ok
 
     logger.info(
         f"[PULSE RANGE30M CHECK] {symbol} dir={direction} rf30={range_dir} "
@@ -3223,7 +3227,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     opened = False
     if entry_main_ok:
         opened = _open_strategy_entry(
-            symbol, 'PULSE', direction, 'range30m_st6h_bias2h_w6h', event_key, price, exchange_name,
+            symbol, 'PULSE', direction, 'range30m_st6h_bias2h', event_key, price, exchange_name,
             [
                 f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}",
                 f"[OK] ST AI 6H: {st_6h.upper()}",
@@ -3294,7 +3298,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
 
 
 def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, event_id=None):
-    """Alerte PULSE quand ST AI 6H + Bias 2H + Williams 6H + ST Context 10m sont alignes."""
+    """Alerte PULSE quand ST AI 6H + Bias 2H + ST Context 10m sont alignes. Williams en bonus."""
     if not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3313,7 +3317,7 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
 
     st_6h_ok = st_6h == exp_ctx and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
     bias_2h_ok = bias_2h == exp_bias
-    entry_ok = st_6h_ok and bias_2h_ok and williams_6h['ok']
+    entry_ok = st_6h_ok and bias_2h_ok
 
     logger.info(
         f"[PULSE CONTEXT10M CHECK] {symbol} dir={direction} "
@@ -3327,7 +3331,7 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
 
     event_key = event_id or f"pulse_context10m_{symbol}_{int(time.time())}_{exp_ctx}"
     opened = _open_strategy_entry(
-        symbol, 'PULSE', direction, 'context10m_st6h_bias2h_w6h', event_key, price, exchange_name,
+        symbol, 'PULSE', direction, 'context10m_st6h_bias2h', event_key, price, exchange_name,
         [
             f"[OK] ST Context 10m: {ctx_10m.upper()}",
             f"[OK] ST AI 6H: {(st_6h or 'N/A').upper()}",
@@ -3806,7 +3810,6 @@ def check_prep_alerts():
                 st_1d == exp_ctx
                 and bias_6h == exp_bias
                 and ctx_30m == exp_ctx
-                and williams_1d['ok']
                 and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
                 and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
             )

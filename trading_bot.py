@@ -1201,13 +1201,13 @@ def init_symbol_states(symbol):
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
-            'st_1h': None, 'st_4h': None, 'st_6h': None,
+            'st_1h': None, 'st_1h_ts': None, 'st_4h': None, 'st_6h': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_6h': None,   # dernier flip 6H
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
+            'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'williams_1d': None, 'williams_1d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
@@ -1342,6 +1342,7 @@ def process_webhook(data):
                     logger.info(f"[BIAS TV] {symbol} bias_30m = {bias_val}")
                 elif tf == '1h':
                     m['bias_1h'] = bias_val if bias_val != 'neutral' else None
+                    m['bias_1h_ts'] = now_ts
                     logger.info(f"[BIAS TV] {symbol} bias_1h = {bias_val}")
                 elif tf == '15m':
                     m['bias_15m'] = bias_val if bias_val != 'neutral' else None
@@ -1476,6 +1477,7 @@ def process_webhook(data):
             if alert_type == 'supertrend' and tf == '1h':
                 prev_1h = m.get('st_1h')
                 m['st_1h'] = parse_supertrend_value(val)
+                m['st_1h_ts'] = now_ts
                 m['st_1h_flipped'] = bool(prev_1h is not None and m['st_1h'] is not None and m['st_1h'] != prev_1h)
                 if m['st_1h_flipped'] and prev_1h:
                     m['last_st_1h'] = prev_1h  # guard pyramiding CONTEXT4H
@@ -3641,6 +3643,7 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1d']  = bias_1d
                 MOMENTUM_STATE[symbol]['bias_1d_ts'] = datetime.now(timezone.utc).timestamp()
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
+                MOMENTUM_STATE[symbol]['bias_1h_ts'] = datetime.now(timezone.utc).timestamp()
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 if bias_6h is not None: MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
                 if bias_2h is not None: MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
@@ -3710,7 +3713,7 @@ def update_daily_radar_bias(symbol):
 
 
 def check_daily_radar_report():
-    """Rapport info-only: Bias 1D + ST Context 30m alignes, bloque par LT 30m meme sens."""
+    """Rapport info-only: radar daily + confluences informatives."""
     global PREP_STATE
     radar_symbols = set(CONFIG.get('RADAR_SYMBOLS', {}))
     info_symbols = set(get_tracked_symbols())
@@ -3723,6 +3726,7 @@ def check_daily_radar_report():
     new_radar = {'LONG': set(), 'SHORT': set()}
     blocked = {'LONG': set(), 'SHORT': set()}
     daily_info = {'LONG': set(), 'SHORT': set()}
+    intraday_confluence = {'LONG': set(), 'SHORT': set()}
 
     for symbol in radar_symbols:
         m = state_copy.get(symbol, {})
@@ -3757,33 +3761,65 @@ def check_daily_radar_report():
         elif st_fresh and ctx_fresh and st_1d == 'sell' and ctx_2h == 'sell':
             daily_info['SHORT'].add(symbol)
 
+        st_1h = m.get('st_1h')
+        bias_1h = m.get('bias_1h')
+        st_30m = m.get('st_ai_30m') or ST_AI_30M.get(symbol)
+        bias_30m = m.get('bias_30m')
+
+        st_1h_fresh = bool(st_1h) and is_signal_fresh(m.get('st_1h_ts'), 3 * 3600)
+        bias_1h_fresh = bool(bias_1h) and is_signal_fresh(m.get('bias_1h_ts'), 3 * 3600)
+        st_30m_fresh = bool(st_30m) and is_signal_fresh(m.get('st_ai_30m_ts'), 90 * 60)
+        bias_30m_fresh = bool(bias_30m) and is_signal_fresh(m.get('bias_30m_ts'), 90 * 60)
+
+        if (
+            st_1h_fresh and bias_1h_fresh and st_30m_fresh and bias_30m_fresh
+            and st_1h == 'buy' and bias_1h == 'bull'
+            and st_30m == 'buy' and bias_30m == 'bull'
+        ):
+            intraday_confluence['LONG'].add(symbol)
+        elif (
+            st_1h_fresh and bias_1h_fresh and st_30m_fresh and bias_30m_fresh
+            and st_1h == 'sell' and bias_1h == 'bear'
+            and st_30m == 'sell' and bias_30m == 'bear'
+        ):
+            intraday_confluence['SHORT'].add(symbol)
+
     old_radar = PREP_STATE.get('DAILY_RADAR', {'LONG': set(), 'SHORT': set()})
     if (
         new_radar['LONG'] == old_radar.get('LONG', set())
         and new_radar['SHORT'] == old_radar.get('SHORT', set())
         and daily_info['LONG'] == old_radar.get('INFO_LONG', set())
         and daily_info['SHORT'] == old_radar.get('INFO_SHORT', set())
+        and intraday_confluence['LONG'] == old_radar.get('INTRADAY_LONG', set())
+        and intraday_confluence['SHORT'] == old_radar.get('INTRADAY_SHORT', set())
     ):
         return
 
-    lines = ["🔎 <b>[DAILY RADAR]</b>"]
+    lines = ["<b>[DAILY RADAR]</b>"]
     if new_radar['LONG']:
-        lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['LONG'])))
+        lines.append("[LONG] " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['LONG'])))
     if new_radar['SHORT']:
-        lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['SHORT'])))
+        lines.append("[SHORT] " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['SHORT'])))
     if not new_radar['LONG'] and not new_radar['SHORT']:
-        lines.append("— Aucun asset radar aligne")
+        lines.append("- Aucun asset radar aligne")
     if blocked['LONG'] or blocked['SHORT']:
         blocked_assets = sorted((blocked['LONG'] | blocked['SHORT']))
-        lines.append("🛡️ Bloques LT30m : " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
+        lines.append("[BLOQUE LT30m] " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
     if daily_info['LONG'] or daily_info['SHORT']:
         lines.append("")
         lines.append("<b>[INFO DAILY: ST AI 1D + ST Context 2H]</b>")
         if daily_info['LONG']:
-            lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['LONG'])))
+            lines.append("[LONG] " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['LONG'])))
         if daily_info['SHORT']:
-            lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['SHORT'])))
-    lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
+            lines.append("[SHORT] " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['SHORT'])))
+    if intraday_confluence['LONG'] or intraday_confluence['SHORT']:
+        lines.append("")
+        lines.append("<b>[INFO INTRADAY: ST AI 1H + Bias 1H + ST AI 30m + Bias 30m]</b>")
+        if intraday_confluence['LONG']:
+            lines.append("[LONG] " + "  ".join(sorted(s.replace('/USDT', '') for s in intraday_confluence['LONG'])))
+        if intraday_confluence['SHORT']:
+            lines.append("[SHORT] " + "  ".join(sorted(s.replace('/USDT', '') for s in intraday_confluence['SHORT'])))
+    lines.append(f"{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
 
     send_info("\n".join(lines))
     PREP_STATE['DAILY_RADAR'] = {
@@ -3791,13 +3827,14 @@ def check_daily_radar_report():
         'SHORT': new_radar['SHORT'],
         'INFO_LONG': daily_info['LONG'],
         'INFO_SHORT': daily_info['SHORT'],
+        'INTRADAY_LONG': intraday_confluence['LONG'],
+        'INTRADAY_SHORT': intraday_confluence['SHORT'],
     }
     logger.info(
         f"[DAILY RADAR] envoye long={len(new_radar['LONG'])} short={len(new_radar['SHORT'])} "
-        f"info_long={len(daily_info['LONG'])} info_short={len(daily_info['SHORT'])}"
+        f"info_long={len(daily_info['LONG'])} info_short={len(daily_info['SHORT'])} "
+        f"intraday_long={len(intraday_confluence['LONG'])} intraday_short={len(intraday_confluence['SHORT'])}"
     )
-
-
 
 def check_prep_alerts():
     """Envoie alertes PREP CONTEXT4H et PULSE quand les conditions sont réunies."""

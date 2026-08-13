@@ -2241,6 +2241,14 @@ def process_webhook(data):
                 event_id=event_id,
             )
 
+        if strat in ['context', 'context1d', 'all'] and alert_type == 'st_context' and tf in ('1d', '10m'):
+            evaluate_context_1d_10m_alert(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+            )
+
         if strat in ['context', 'context2h10m', 'all'] and alert_type == 'st_context' and tf in ('2h', '10m'):
             evaluate_context_2h_10m_alert(
                 symbol,
@@ -3193,7 +3201,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
 
 
 def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """Evalue l'entree PULSE principale sur un nouveau flip Range Filter 30m."""
+    """Evalue uniquement le pyramiding PULSE sur un nouveau flip Range Filter 30m."""
     if range_dir not in ('buy', 'sell'):
         return False
     m = MOMENTUM_STATE.get(symbol, {})
@@ -3214,28 +3222,15 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     )
     bias_2h_ok = bias_2h == exp_bias
 
-    entry_main_ok = st_6h_ok and bias_2h_ok
-
     logger.info(
         f"[PULSE RANGE30M CHECK] {symbol} dir={direction} rf30={range_dir} "
         f"st6h={st_6h}/{exp_ctx} ok={st_6h_ok} "
         f"bias2h={bias_2h}/{exp_bias} ok={bias_2h_ok} "
         f"will6h={williams_6h['trend']} fresh={williams_6h['fresh']} ok={williams_6h['ok']} "
-        f"ctx10m_info={ctx_10m}/{exp_ctx} entry_main={entry_main_ok}"
+        f"ctx10m_info={ctx_10m}/{exp_ctx} entry_main=False"
     )
 
     opened = False
-    if entry_main_ok:
-        opened = _open_strategy_entry(
-            symbol, 'PULSE', direction, 'range30m_st6h_bias2h', event_key, price, exchange_name,
-            [
-                f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}",
-                f"[OK] ST AI 6H: {st_6h.upper()}",
-                f"[OK] Bias 2H: {bias_2h.upper()} (EMA17/SMA40)",
-                format_williams_filter_line('6H', williams_6h),
-            ],
-        )
-
     pos_key = f"{symbol}_PULSE"
     st_2h = m.get('st_2h') or m.get('st_ai_2h')
     ctx10m_opp_block = (
@@ -3288,7 +3283,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     if not opened:
         logger.info(
             f"[PULSE RANGE30M BLOCKED] {symbol} dir={direction} "
-            f"entry_main={entry_main_ok} "
+            f"entry_main=False "
             f"pyra_pos={bool(SCALP_POSITIONS.get(pos_key))} "
             f"pyra_enabled={PYRA_ENABLED.get(pos_key, False)} "
             f"st2h={st_2h}/{exp_ctx} ok={st_2h_ok} "
@@ -3341,6 +3336,57 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
     )
     if opened:
         logger.info(f"[PULSE] Entree Context10m: {symbol} {direction}")
+    return opened
+
+
+def evaluate_context_1d_10m_alert(symbol, price=0.0, exchange_name=None, event_id=None):
+    """Alerte quand ST Context 1D + ST Context 10m sont alignes, hors LT 10m meme sens."""
+    if not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    ctx_1d = ST_CONTEXT_1D.get(symbol)
+    ctx_10m = m.get('st_context_10m')
+    if ctx_1d not in ('buy', 'sell') or ctx_10m not in ('buy', 'sell'):
+        return False
+
+    direction = 'LONG' if ctx_10m == 'buy' else 'SHORT'
+    exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+    ctx_1d_fresh = is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
+    ctx_10m_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
+    ctx_lt_10m = m.get('st_context_lt_10m')
+    ctx_lt_10m_fresh = is_signal_fresh(m.get('st_context_lt_10m_ts'), 30 * 60)
+    lt_10m_block = ctx_lt_10m_fresh and ctx_lt_10m == exp_ctx
+    all_ok = (
+        ctx_1d_fresh
+        and ctx_10m_fresh
+        and ctx_1d == exp_ctx
+        and ctx_10m == exp_ctx
+        and not lt_10m_block
+    )
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+
+    logger.info(
+        f"[CONTEXT1D10M CHECK] {symbol} dir={direction} "
+        f"ctx1d={ctx_1d}/{exp_ctx} fresh={ctx_1d_fresh} "
+        f"ctx10m={ctx_10m}/{exp_ctx} fresh={ctx_10m_fresh} "
+        f"lt10m={ctx_lt_10m} fresh={ctx_lt_10m_fresh} block={lt_10m_block} ok={all_ok}"
+    )
+    if not all_ok:
+        return False
+
+    event_key = event_id or f"context1d10m_{symbol}_{int(time.time())}_{exp_ctx}"
+    opened = _open_strategy_entry(
+        symbol, 'CONTEXT1D', direction, 'context_1d_10m', event_key, price, exchange_name,
+        [
+            f"[OK] ST Context 1D: {ctx_1d.upper()}",
+            f"[OK] ST Context 10m: {ctx_10m.upper()}",
+            f"[ANTI-CHOP] LT 10m: {fmt_sig(ctx_lt_10m)}",
+        ],
+        cooldown=14400,
+    )
+    if opened:
+        logger.info(f"[CONTEXT1D10M] Alerte: {symbol} {direction}")
     return opened
 
 
@@ -3528,12 +3574,12 @@ def update_indicators_for_symbol(symbol):
             return
 
         # Calculs
-        bias_1h  = calc_bias_okx(df_1h, ema_len=17, sma_len=40)
+        bias_1h  = calc_bias_okx(df_1h, ema_len=13, sma_len=30)
         df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
         bias_2h  = calc_bias_okx(df_2h, ema_len=17, sma_len=40) if df_2h is not None else None
         bias_4h  = calc_bias_okx(df_4h, ema_len=17, sma_len=40)
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
-        bias_30m = calc_bias_okx(df_30m, ema_len=13, sma_len=30) if df_30m is not None and len(df_30m) >= 30 else None
+        bias_30m = calc_bias_okx(df_30m, ema_len=8, sma_len=21) if df_30m is not None and len(df_30m) >= 30 else None
         williams_2h = calc_williams_ema(df_2h, length=14, ema_length=14) if df_2h is not None else None
         williams_6h = calc_williams_ema(df_6h, length=14, ema_length=14) if df_6h is not None else None
         williams_1d = calc_williams_ema(df_1d, length=14, ema_length=14)
@@ -3625,6 +3671,12 @@ def update_indicators_for_symbol(symbol):
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
             event_id=f"okx_pulse_ctx10m_{symbol}_{int(time.time())}",
+        )
+        evaluate_context_1d_10m_alert(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_context1d10m_{symbol}_{int(time.time())}",
         )
         evaluate_context_2h_10m_alert(
             symbol,

@@ -1491,6 +1491,8 @@ def process_webhook(data):
             if alert_type == 'supertrend' and tf == '2h':
                 prev_2h = m.get('st_2h')
                 m['st_2h'] = parse_supertrend_value(val)
+                m['st_ai_2h'] = m['st_2h']
+                m['st_ai_2h_ts'] = now_ts
                 m['st_2h_flipped'] = bool(prev_2h is not None and m['st_2h'] is not None and m['st_2h'] != prev_2h)
                 if m['st_2h_flipped'] and prev_2h:
                     m['last_st_2h'] = prev_2h
@@ -2267,7 +2269,7 @@ def process_webhook(data):
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
-            (alert_type == 'supertrend' and tf in ('1h', '30m'))
+            (alert_type == 'supertrend' and tf in ('1h', '2h', '30m'))
             or (alert_type == 'st_context' and tf in ('1m', '5m', '10m', '1h', '30m'))
             or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
         )
@@ -2496,27 +2498,27 @@ def sync_scalp():
         m = state_copy.get(symbol, {})
         symbol_sent = []
 
-        st_1h = m.get('st_ai_1h') or m.get('st_1h')
-        if st_1h in ('buy', 'sell'):
+        st_2h = m.get('st_ai_2h') or m.get('st_2h')
+        if st_2h in ('buy', 'sell'):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
-                    'tf':       '1h',
+                    'tf':       '2h',
                     'type':     'supertrend',
-                    'value':    '1' if st_1h == 'buy' else '0',
+                    'value':    '1' if st_2h == 'buy' else '0',
                     'price':    0,
-                    'event_id': f"sync_scalp_st1h_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_st2h_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('st1h')
+                    symbol_sent.append('st2h')
                 else:
-                    errors.append(f"{symbol}: ST1H HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: ST2H HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: ST1H {e}")
+                errors.append(f"{symbol}: ST2H {e}")
         else:
-            errors.append(f"{symbol}: etat ST AI 1H absent/invalide ({st_1h!r})")
+            errors.append(f"{symbol}: etat ST AI 2H absent/invalide ({st_2h!r})")
 
         st_30m = m.get('st_ai_30m')
         if st_30m in ('buy', 'sell'):
@@ -2540,25 +2542,25 @@ def sync_scalp():
         else:
             errors.append(f"{symbol}: etat ST AI 30M absent/invalide ({st_30m!r})")
 
-        bias_1h = m.get('bias_1h')
-        if bias_1h in ('bull', 'bear', 'neutral', None):
+        bias_2h = m.get('bias_2h')
+        if bias_2h in ('bull', 'bear', 'neutral', None):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
-                    'tf':       '1h',
+                    'tf':       '2h',
                     'type':     'bias',
-                    'value':    bias_1h or 'neutral',
+                    'value':    bias_2h or 'neutral',
                     'price':    0,
-                    'event_id': f"sync_scalp_bias1h_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_bias2h_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('bias1h')
+                    symbol_sent.append('bias2h')
                 else:
-                    errors.append(f"{symbol}: Bias1H HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: Bias2H HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: Bias1H {e}")
+                errors.append(f"{symbol}: Bias2H {e}")
 
         ctx_1h = m.get('st_context_1h')
         try:
@@ -3736,6 +3738,7 @@ def update_indicators_for_symbol(symbol):
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
         )
         relay_scalp_bias_1h(symbol, bias_1h, price)
+        relay_scalp_bias_2h(symbol, bias_2h, price)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

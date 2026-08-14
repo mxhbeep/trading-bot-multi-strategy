@@ -646,7 +646,7 @@ def send_start_notification():
         "PULSE: ST Context 10m + ST AI 6H + Bias 2H\n"
         "PULSE pyramiding: RF30m + ST AI 2H, bloque si ST Context 10m oppose\n\n"
         "CONTEXT1D: RF30m + ST Context 1D + ST Context 30m + ST AI 1D\n"
-        "CONTEXT2H10M: RF30m + ST Context 2H + ST Context 10m + Bias 3D, bloque si ST Context 1D oppose\n\n"
+        "CONTEXT2H10M: RF30m + ST Context 2H + ST Context 10m + Bias 2D, bloque si ST Context 1D oppose\n\n"
         "TREND3D: Bias 3D + ST Context 2H, entree sur flip ST AI 1H\n"
         "--------------------\n"
         f"{now}"
@@ -1203,7 +1203,7 @@ SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_3d': None, 'bias_3d_ts': None,
+            'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_2d_ts': None, 'bias_3d': None, 'bias_3d_ts': None,
             'st_context_1h': None, 'st_context_4h': None,
             'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
@@ -3447,7 +3447,7 @@ def evaluate_context_1d_range_filter_30m(symbol, range_dir, signal_ts, price=0.0
 
 
 def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """CONTEXT2H10M: flip RF30m + Context 2H + Context 10m + Bias 3D, bloque par Context 1D oppose."""
+    """CONTEXT2H10M: flip RF30m + Context 2H + Context 10m + Bias 2D, bloque par Context 1D oppose."""
     if not is_trade_symbol(symbol):
         return False
     if range_dir not in ('buy', 'sell'):
@@ -3457,7 +3457,7 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
     ctx_2h = m.get('st_context_2h')
     ctx_10m = m.get('st_context_10m')
     ctx_1d = ST_CONTEXT_1D.get(symbol)
-    bias_3d = m.get('bias_3d')
+    bias_2d = m.get('bias_2d')
     direction = 'LONG' if range_dir == 'buy' else 'SHORT'
     exp_ctx = range_dir
     exp_bias = 'bull' if direction == 'LONG' else 'bear'
@@ -3465,15 +3465,15 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
     ctx_2h_fresh = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
     ctx_10m_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
     ctx_1d_fresh = is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
-    bias_3d_fresh = is_signal_fresh(m.get('bias_3d_ts'), 5 * 3600)
+    bias_2d_fresh = is_signal_fresh(m.get('bias_2d_ts'), 5 * 3600)
     ctx_1d_opp_block = ctx_1d_fresh and ctx_1d == opp_ctx
     all_ok = (
         ctx_2h_fresh
         and ctx_10m_fresh
-        and bias_3d_fresh
+        and bias_2d_fresh
         and ctx_2h == exp_ctx
         and ctx_10m == exp_ctx
-        and bias_3d == exp_bias
+        and bias_2d == exp_bias
         and not ctx_1d_opp_block
     )
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
@@ -3482,7 +3482,7 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
         f"[CONTEXT2H10M RF30M CHECK] {symbol} dir={direction} rf30={range_dir} signal_ts={signal_ts} "
         f"ctx2h={ctx_2h}/{exp_ctx} fresh={ctx_2h_fresh} "
         f"ctx10m={ctx_10m}/{exp_ctx} fresh={ctx_10m_fresh} "
-        f"bias3d={bias_3d}/{exp_bias} fresh={bias_3d_fresh} "
+        f"bias2d={bias_2d}/{exp_bias} fresh={bias_2d_fresh} "
         f"ctx1d_antichop={ctx_1d}/{opp_ctx} fresh={ctx_1d_fresh} block={ctx_1d_opp_block} ok={all_ok}"
     )
     if not all_ok:
@@ -3495,7 +3495,7 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
             f"[OK] Flip Range Filter 30m: {range_dir.upper()}",
             f"[OK] ST Context 2H: {ctx_2h.upper()}",
             f"[OK] ST Context 10m: {ctx_10m.upper()}",
-            f"[OK] Bias 3D: {bias_3d.upper()} (EMA17/SMA40)",
+            f"[OK] Bias 2D: {bias_2d.upper()} (EMA17/SMA40)",
             f"[ANTI-CHOP] ST Context 1D oppose: {fmt_sig(ctx_1d)}",
         ],
         cooldown=3600,
@@ -3700,7 +3700,9 @@ def update_indicators_for_symbol(symbol):
 
         with STATE_LOCK:
             if symbol in MOMENTUM_STATE:
-                if bias_2d: MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
+                if bias_2d:
+                    MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
+                    MOMENTUM_STATE[symbol]['bias_2d_ts'] = datetime.now(timezone.utc).timestamp()
                 if bias_3d:
                     MOMENTUM_STATE[symbol]['bias_3d'] = bias_3d
                     MOMENTUM_STATE[symbol]['bias_3d_ts'] = datetime.now(timezone.utc).timestamp()
@@ -3725,7 +3727,7 @@ def update_indicators_for_symbol(symbol):
                     MOMENTUM_STATE[symbol]['williams_6h_ts'] = datetime.now(timezone.utc).timestamp()
 
 
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
         evaluate_pulse_context_10m_alert(
             symbol,
             price=price,

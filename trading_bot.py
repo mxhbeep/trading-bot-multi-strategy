@@ -2267,7 +2267,7 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             (alert_type == 'supertrend' and tf in ('1h', '30m'))
-            or (alert_type == 'st_context' and tf in ('1m', '5m', '1h', '30m'))
+            or (alert_type == 'st_context' and tf in ('1m', '5m', '10m', '1h', '30m'))
             or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
         )
         if scalp_url and should_relay_scalp:
@@ -2596,6 +2596,25 @@ def sync_scalp():
                 errors.append(f"{symbol}: CTX5M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: CTX5M {e}")
+
+        ctx_10m = m.get('st_context_10m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '10m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx_10m),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx10m_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx10m')
+            else:
+                errors.append(f"{symbol}: CTX10M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX10M {e}")
 
         lt_5m = m.get('st_context_lt_5m') or ST_CONTEXT_LT_5M.get(symbol)
         try:

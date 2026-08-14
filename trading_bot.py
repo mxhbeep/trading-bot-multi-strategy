@@ -2800,6 +2800,14 @@ def format_williams_filter_line(label, williams_filter):
     return f"[OK] Williams {label}: W%R {value:.2f} {relation} EMA14 {ema_value:.2f}"
 
 
+def fmt_sig(value):
+    if value in ('buy', 'bull'):
+        return 'BUY'
+    if value in ('sell', 'bear'):
+        return 'SELL'
+    return 'NEUTRE'
+
+
 def calc_range_filter_signal(df, per=100, mult=2.0):
     """Reproduit le Range Filter Pine et retourne le dernier signal confirme."""
     try:

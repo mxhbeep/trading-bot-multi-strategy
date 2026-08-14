@@ -2220,16 +2220,18 @@ def process_webhook(data):
                         event_id=event_id,
                     )
 
-        if strat in ['daily', 'all'] and (
-            (alert_type == 'supertrend' and tf in ('1d', '30m'))
-            or (alert_type == 'st_context' and tf == '30m')
+        if (
+            strat in ['daily', 'all']
+            and alert_type == 'supertrend'
+            and tf == '30m'
+            and st_ai_30m_flipped_this_call
         ):
             evaluate_daily_primary_confluence(
                 symbol,
                 price=price,
                 exchange_name=exchange_name,
                 event_id=event_id,
-                source=f"{alert_type}_{tf}",
+                source="st_ai_30m_flip",
             )
 
         if strat in ['pulse', 'all'] and (
@@ -3141,7 +3143,7 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
 
 
 def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, event_id=None, source='webhook'):
-    """Entree DAILY principale: ST AI 1D + Bias 6H + Context 30m + ST AI 30m. Williams en bonus."""
+    """Entree DAILY principale: flip ST AI 30m + ST AI 1D + Bias 6H + Context 30m."""
     if not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3163,16 +3165,15 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
     williams_2h = get_williams_filter(symbol, '2h', direction, 6 * 3600)
 
     st_1d_ok = st_1d == exp_ctx and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
-    st_30m_ok = st_30m == exp_ctx and is_signal_fresh(m.get('st_ai_30m_ts'), 90 * 60)
     bias_6h_ok = bias_6h == exp_bias
     ctx_30m_ok = ctx_30m == exp_ctx and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
     ctx_10m_quality = ctx_10m == exp_ctx and is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
-    daily_ok = st_1d_ok and st_30m_ok and bias_6h_ok and ctx_30m_ok
+    daily_ok = st_1d_ok and bias_6h_ok and ctx_30m_ok
 
     logger.info(
         f"[DAILY PRIMARY CHECK] {symbol} dir={direction} source={source} "
         f"st1d={st_1d}/{exp_ctx} ok={st_1d_ok} "
-        f"st30m={st_30m}/{exp_ctx} ok={st_30m_ok} "
+        f"trigger_st30m={st_30m}/{exp_ctx} "
         f"bias6h={bias_6h}/{exp_bias} ok={bias_6h_ok} "
         f"ctx30m={ctx_30m}/{exp_ctx} ok={ctx_30m_ok} "
         f"will1d={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
@@ -3191,7 +3192,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
             f"[OK] ST AI 1D: {(st_1d or 'N/A').upper()}",
             f"[OK] Bias 6H: {(bias_6h or 'N/A').upper()} (EMA17/SMA40)",
             f"[OK] ST Context 30m: {(ctx_30m or 'N/A').upper()}",
-            f"[OK] ST AI 30m: {(st_30m or 'N/A').upper()}",
+            f"[OK] Flip ST AI 30m: {(st_30m or 'N/A').upper()}",
             format_williams_filter_line('1D', williams_1d),
             format_williams_filter_line('2H', williams_2h),
         ],
@@ -3662,13 +3663,6 @@ def update_indicators_for_symbol(symbol):
 
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
-        evaluate_daily_primary_confluence(
-            symbol,
-            price=price,
-            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_daily_primary_{symbol}_{int(time.time())}",
-            source='okx_scheduler',
-        )
         evaluate_pulse_context_10m_alert(
             symbol,
             price=price,

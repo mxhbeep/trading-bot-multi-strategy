@@ -1214,6 +1214,7 @@ def init_symbol_states(symbol):
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
+            'daily_st_ai_30m_flip_dir': None, 'daily_st_ai_30m_flip_ts': None, 'daily_st_ai_30m_flip_event_id': None,
             'williams_1d': None, 'williams_1d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
@@ -1541,6 +1542,9 @@ def process_webhook(data):
                 st_ai_30m_flipped_this_call = bool(prev_30m and st_30m_val and st_30m_val != prev_30m)
                 if st_ai_30m_flipped_this_call:
                     m['last_st_30m'] = prev_30m
+                    m['daily_st_ai_30m_flip_dir'] = st_30m_val
+                    m['daily_st_ai_30m_flip_ts'] = now_ts
+                    m['daily_st_ai_30m_flip_event_id'] = event_id or f"st_ai_30m_flip_{symbol}_{int(now_ts)}_{st_30m_val}"
                 ST_AI_30M[symbol] = st_30m_val
 
         # ========================================================================
@@ -3227,6 +3231,29 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
     return opened
 
 
+def evaluate_daily_primary_after_okx(symbol, price=0.0, exchange_name=None):
+    """Rejoue DAILY apres recalcul OKX seulement si un vrai flip ST AI 30m est encore recent."""
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    flip_dir = m.get('daily_st_ai_30m_flip_dir')
+    flip_ts = m.get('daily_st_ai_30m_flip_ts')
+    flip_event_id = m.get('daily_st_ai_30m_flip_event_id')
+
+    if flip_dir not in ('buy', 'sell') or not is_signal_fresh(flip_ts, 90 * 60):
+        return False
+    if m.get('st_ai_30m') != flip_dir:
+        return False
+
+    event_key = flip_event_id or f"daily_primary_st30m_flip_{symbol}_{int(flip_ts)}_{flip_dir}"
+    return evaluate_daily_primary_confluence(
+        symbol,
+        price=price,
+        exchange_name=exchange_name,
+        event_id=event_key,
+        source='okx_post_recalc_st_ai_30m_flip',
+    )
+
+
 def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
     """Evalue uniquement le pyramiding PULSE sur un nouveau flip Range Filter 30m."""
     if range_dir not in ('buy', 'sell'):
@@ -3702,6 +3729,11 @@ def update_indicators_for_symbol(symbol):
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
             event_id=f"okx_pulse_ctx10m_{symbol}_{int(time.time())}",
+        )
+        evaluate_daily_primary_after_okx(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
         )
         relay_scalp_bias_1h(symbol, bias_1h, price)
     except Exception as e:

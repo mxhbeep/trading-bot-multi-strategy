@@ -108,7 +108,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'DAILY': 0, 'TREND3D': 0, 'PULSE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -414,6 +414,21 @@ class TelegramChannel(NotificationChannel):
                 if resp.status_code == 200:
                     logger.info(f"Message {self.label} envoye apres retry")
                     return True
+            if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
+                plain = strip_html(message) or strip_html(title) or "Trading alert"
+                fallback_payload = {'chat_id': chat, 'text': plain}
+                if reply_markup:
+                    fallback_payload['reply_markup'] = reply_markup
+                logger.warning(f"Telegram HTML invalide ({self.label}) - fallback texte brut")
+                fallback_resp = requests.post(url, json=fallback_payload, timeout=10)
+                if fallback_resp.status_code == 200:
+                    logger.info(f"Message {self.label} envoye en texte brut")
+                    return True
+                logger.error(
+                    f"Telegram fallback erreur HTTP {fallback_resp.status_code} "
+                    f"({self.label}): {fallback_resp.text[:200]}"
+                )
+                return False
             logger.error(f"Telegram erreur HTTP {resp.status_code} ({self.label}): {resp.text[:200]}")
             return False
         except Exception as e:
@@ -622,9 +637,17 @@ def send_info(msg):
         return
     try:
         url  = f"https://api.telegram.org/bot{tok}/sendMessage"
-        resp = requests.post(url, json={'chat_id': chat, 'text': msg, 'parse_mode': 'HTML'}, timeout=10)
+        payload = {'chat_id': chat, 'text': msg, 'parse_mode': 'HTML'}
+        resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200:
             logger.info("✅ Message info envoyé")
+        elif resp.status_code == 400 and "can't parse entities" in resp.text.lower():
+            plain = strip_html(msg) or "Trading bot info"
+            fallback_resp = requests.post(url, json={'chat_id': chat, 'text': plain}, timeout=10)
+            if fallback_resp.status_code == 200:
+                logger.info("✅ Message info envoyé en texte brut")
+            else:
+                logger.error(f"❌ Info bot fallback erreur {fallback_resp.status_code}: {fallback_resp.text[:100]}")
         else:
             logger.error(f"❌ Info bot erreur {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
@@ -646,8 +669,7 @@ def send_start_notification():
         "PULSE: ST Context 10m + ST AI 6H + Bias 2H\n"
         "PULSE pyramiding: RF30m + ST AI 2H, bloque si ST Context 10m oppose\n\n"
         "CONTEXT1D: RF30m + ST Context 1D + ST Context 30m + ST AI 1D\n"
-        "CONTEXT2H10M: RF30m + ST Context 2H + ST Context 10m + Bias 2D, bloque si ST Context 1D oppose\n\n"
-        "TREND3D: Bias 3D + ST Context 2H, entree sur flip ST AI 1H\n"
+        "TREND2D: RF30m + ST Context 2H + ST Context 10m + Bias 2D, bloque si ST Context 1D oppose\n"
         "--------------------\n"
         f"{now}"
     )
@@ -669,7 +691,7 @@ def send_weekly_report():
     )
     total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_daily      = sum(s.get('DAILY', 0)       for s in WEEKLY_STATS.values())
-    total_trend      = sum(s.get('TREND3D', 0)      for s in WEEKLY_STATS.values())
+    total_trend      = sum(s.get('TREND2D', 0)      for s in WEEKLY_STATS.values())
     total_momentum   = sum(s.get('MOMENTUM', 0)     for s in WEEKLY_STATS.values())
     total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
     total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
@@ -701,7 +723,7 @@ def send_weekly_report():
             if stats.get('MOMENTUM', 0):    details.append(f"M:{stats['MOMENTUM']}")
             if stats.get('CONFLUENCE', 0):  details.append(f"CONF:{stats['CONFLUENCE']}")
             if stats.get('DAILY', 0):       details.append(f"D:{stats['DAILY']}")
-            if stats.get('TREND3D', 0):     details.append(f"T3D:{stats['TREND3D']}")
+            if stats.get('TREND2D', 0):     details.append(f"T2D:{stats['TREND2D']}")
             if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
             if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
             if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
@@ -715,104 +737,6 @@ def send_weekly_report():
 
     WEEKLY_STATS.clear()
     WEEKLY_START = datetime.now(timezone.utc)
-    # ========================================================================
-    # LOGIQUE TREND3D : Bias 3D + ST Context 2H aligne -> flip ST AI 1H
-    # Pyramiding renforcé : ADX 4H DI aligné + flip ST AI 1H + guard
-    # Cooldown entrée 4H / Pyramiding 4H
-    # ========================================================================
-    if strat in ['trend3d', 'trend2d', 'all']:
-        m = MOMENTUM_STATE[symbol]
-
-        if alert_type == 'supertrend' and tf == '1h':
-            st_1h_val_t2  = parse_supertrend_value(val)
-            prev_1h_t2    = m.get('st_1h_trend3d')
-            flipped_1h_t2 = (st_1h_val_t2 is not None and prev_1h_t2 is not None and st_1h_val_t2 != prev_1h_t2)
-            m['st_1h_trend3d'] = st_1h_val_t2
-            if flipped_1h_t2 and prev_1h_t2:
-                m['last_st_1h_trend3d'] = prev_1h_t2
-
-            if flipped_1h_t2:
-                bias_3d_v    = m.get('bias_3d')
-                ctx_2h_t2       = m.get('st_context_2h')
-                adx_4h_t2    = ADX_STATE.get(f'{symbol}_4h', {})
-                di_plus_4h   = adx_4h_t2.get('di_plus', 0)
-                di_minus_4h  = adx_4h_t2.get('di_minus', 0)
-
-                direction_t2 = "LONG" if st_1h_val_t2 == 'buy' else "SHORT"
-                exp_bias_t2  = 'bull' if direction_t2 == 'LONG' else 'bear'
-
-                # Filtres entrée
-                bias_3d_ok  = bias_3d_v == exp_bias_t2
-                ctx_2h_fresh_t2 = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
-                ctx_2h_ok       = ctx_2h_t2 == st_1h_val_t2 and ctx_2h_fresh_t2
-
-                # ADX 4H pour pyramiding
-                adx_4h_ok_t2 = (di_plus_4h >= di_minus_4h and direction_t2 == 'LONG') or \
-                               (di_minus_4h >= di_plus_4h and direction_t2 == 'SHORT')
-
-                pos_key_t2 = f"{symbol}_TREND3D"
-                with STATE_LOCK:
-                    pos_t2 = SCALP_POSITIONS.get(pos_key_t2)
-                    if pos_t2 and pos_t2['direction'] != direction_t2:
-                        SCALP_POSITIONS.pop(pos_key_t2, None)
-                        pos_t2 = None; is_entry_t2 = False; is_pyra_t2 = False
-                    else:
-                        is_entry_t2 = (bias_3d_ok and ctx_2h_ok and pos_t2 is None)
-                        opp_1h_t2   = 'sell' if st_1h_val_t2 == 'buy' else 'buy'
-                        guard_ok_t2 = m.get('last_st_1h_trend3d') == opp_1h_t2
-                        is_pyra_t2  = bool(
-                            pos_t2 and pos_t2['direction'] == direction_t2
-                            and ctx_2h_ok and adx_4h_ok_t2 and guard_ok_t2
-                        )
-                    if is_entry_t2 and should_send(symbol, f"trend3d_entry_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
-                        SCALP_POSITIONS[pos_key_t2] = {'direction': direction_t2, 'entry_count': 1}
-                        pos_t2 = SCALP_POSITIONS[pos_key_t2]
-                    else:
-                        is_entry_t2 = False
-
-                if is_entry_t2 and pos_t2:
-                    emoji   = "\U0001f7e2" if direction_t2 == "LONG" else "\U0001f534"
-                    ctx_txt = ctx_2h_t2.upper() if ctx_2h_t2 else "NEUTRE"
-                    send_telegram_with_buttons(
-                        f"{emoji} <b>[TREND3D - ENTREE]</b> {symbol}\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Direction: {direction_t2}\n"
-                        f"\U0001f4b0 Price: ${format_price(price)}\n"
-                        f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                        f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA17/SMA40)\n"
-                        f"\u2705 ST Context 2H: {ctx_txt} (zone)\n"
-                        f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (SIGNAL)"
-                        f"{get_market_context_info()}",
-                        f"{symbol}_TREND3D",
-                        journal_symbol=symbol, journal_strategy='TREND3D',
-                        journal_direction=direction_t2, journal_price=price,
-                    )
-                    track_alert(symbol, 'TREND3D')
-                    logger.info(f"[TREND3D] Entree: {symbol} {direction_t2}")
-
-                elif is_pyra_t2 and PYRA_ENABLED.get(f"{symbol}_TREND3D", False) and should_send(symbol, f"trend3d_pyra_{st_1h_val_t2}", event_id=event_id, cooldown=14400):
-                    with STATE_LOCK:
-                        pos_t2['entry_count'] += 1
-                        entry_count_t2 = pos_t2['entry_count']
-                    emoji   = "\U0001f7e2" if direction_t2 == "LONG" else "\U0001f534"
-                    ctx_txt = ctx_2h_t2.upper() if ctx_2h_t2 else "NEUTRE"
-                    send_telegram_ttmtf(
-                        f"{emoji} <b>[TREND3D - PYRAMIDING #{entry_count_t2}]</b> {symbol}\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                        f"\U0001f4c8 Direction: {direction_t2}\n"
-                        f"\U0001f4b0 Price: ${format_price(price)}\n"
-                        f"\U0001f3e6 Exchange: {exchange_name.upper()}\n"
-                        f"\u23f0 {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                        f"\u2705 Bias 3D: {(bias_3d_v or '?').upper()} (EMA17/SMA40)\n"
-                        f"\u2705 ST Context 2H: {ctx_txt}\n"
-                        f"\u2705 ADX 4H: +DI={di_plus_4h:.1f} | -DI={di_minus_4h:.1f} (DI aligné)\n"
-                        f"\u2705 SuperTrend AI 1H: {st_1h_val_t2.upper()} (PYRAMIDING)\n"
-                        f"\U0001f6e1\ufe0f Guard: flip opposé validé"
-                        f"{get_market_context_info()}"
-                    )
-                    track_alert(symbol, 'TREND3D')
-                    logger.info(f"[TREND3D] Pyramiding #{entry_count_t2}: {symbol} {direction_t2}")
 
     persist_runtime_state()
 
@@ -1478,7 +1402,7 @@ def process_webhook(data):
         # ========================================================================
         # MISE À JOUR DES ÉTATS (ST AI, relai Tapbit, guards)
         # ========================================================================
-        if strat in ['momentum', 'context', 'scalp', 'pulse', 'daily', 'trend3d', 'all']:
+        if strat in ['momentum', 'context', 'scalp', 'pulse', 'daily', 'trend2d', 'all']:
             m = MOMENTUM_STATE[symbol]
 
             if alert_type == 'supertrend' and tf == '1h':
@@ -2235,7 +2159,7 @@ def process_webhook(data):
                         symbol, range_dir, range_event, price, exchange_name,
                         event_id=event_id,
                     )
-                    evaluate_context_2h_10m_range_filter_30m(
+                    evaluate_trend_2d_range_filter_30m(
                         symbol, range_dir, range_event, price, exchange_name,
                         event_id=event_id,
                     )
@@ -2703,7 +2627,7 @@ def reset_state_symbol(symbol):
         for k in ['', '_1h', '_4h', '_1d']:
             ADX_STATE.pop(f'{symbol}{k}', None)
 
-        for strat in ['PULSE', 'DAILY', 'CONTEXT4H', 'TREND3D']:
+        for strat in ['PULSE', 'DAILY', 'CONTEXT4H', 'TREND2D']:
             PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 
@@ -3446,8 +3370,8 @@ def evaluate_context_1d_range_filter_30m(symbol, range_dir, signal_ts, price=0.0
     return opened
 
 
-def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """CONTEXT2H10M: flip RF30m + Context 2H + Context 10m + Bias 2D, bloque par Context 1D oppose."""
+def evaluate_trend_2d_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
+    """TREND2D: flip RF30m + Context 2H + Context 10m + Bias 2D, bloque par Context 1D oppose."""
     if not is_trade_symbol(symbol):
         return False
     if range_dir not in ('buy', 'sell'):
@@ -3479,7 +3403,7 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
 
     logger.info(
-        f"[CONTEXT2H10M RF30M CHECK] {symbol} dir={direction} rf30={range_dir} signal_ts={signal_ts} "
+        f"[TREND2D RF30M CHECK] {symbol} dir={direction} rf30={range_dir} signal_ts={signal_ts} "
         f"ctx2h={ctx_2h}/{exp_ctx} fresh={ctx_2h_fresh} "
         f"ctx10m={ctx_10m}/{exp_ctx} fresh={ctx_10m_fresh} "
         f"bias2d={bias_2d}/{exp_bias} fresh={bias_2d_fresh} "
@@ -3488,9 +3412,9 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
     if not all_ok:
         return False
 
-    event_key = event_id or f"context2h10m_rf30m_{symbol}_{signal_ts}_{exp_ctx}"
+    event_key = event_id or f"trend2d_rf30m_{symbol}_{signal_ts}_{exp_ctx}"
     opened = _open_strategy_entry(
-        symbol, 'CONTEXT2H10M', direction, 'context_2h_10m_rf30m', event_key, price, exchange_name,
+        symbol, 'TREND2D', direction, 'trend_2d_rf30m', event_key, price, exchange_name,
         [
             f"[OK] Flip Range Filter 30m: {range_dir.upper()}",
             f"[OK] ST Context 2H: {ctx_2h.upper()}",
@@ -3501,7 +3425,7 @@ def evaluate_context_2h_10m_range_filter_30m(symbol, range_dir, signal_ts, price
         cooldown=3600,
     )
     if opened:
-        logger.info(f"[CONTEXT2H10M] Entree RF30m: {symbol} {direction}")
+        logger.info(f"[TREND2D] Entree RF30m: {symbol} {direction}")
     return opened
 
 
@@ -4146,13 +4070,13 @@ def range_filter_30m_scheduler():
                         exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
                         event_id=f"range30m_context1d_{symbol}_{signal_ts}_{range_dir}",
                     )
-                    evaluate_context_2h_10m_range_filter_30m(
+                    evaluate_trend_2d_range_filter_30m(
                         symbol,
                         range_dir,
                         signal_ts,
                         price=signal_price,
                         exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-                        event_id=f"range30m_context2h10m_{symbol}_{signal_ts}_{range_dir}",
+                        event_id=f"range30m_trend2d_{symbol}_{signal_ts}_{range_dir}",
                     )
                 except Exception as e:
                     error_count += 1

@@ -2178,9 +2178,27 @@ def process_webhook(data):
                 source="st_ai_30m_flip",
             )
 
+        if (
+            alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend')
+            and tf in ('1d', '2d', '2h', '10m', '30m', '6h')
+        ):
+            evaluate_daily_primary_after_okx(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+            )
+            replay_recent_range_filter_30m(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=f"webhook_rf30_replay_{symbol}_{tf}_{alert_type}_{event_id}",
+                source=f"webhook_{alert_type}_{tf}",
+            )
+
         if strat in ['pulse', 'all'] and (
             (alert_type == 'st_context' and tf == '10m')
             or (alert_type == 'supertrend' and tf == '6h')
+            or (alert_type == 'bias' and tf == '2h')
         ):
             evaluate_pulse_context_10m_alert(
                 symbol,
@@ -3319,6 +3337,41 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
     return opened
 
 
+def replay_recent_range_filter_30m(symbol, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+    """Rejoue le dernier RF30 frais quand un filtre arrive apres le flip."""
+    if not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    range_dir = m.get('range_filter_30m') or RANGE_FILTER_30M.get(symbol)
+    range_ts = m.get('range_filter_30m_ts')
+    signal_ts = m.get('last_range_filter_30m_signal_ts') or int(range_ts or time.time())
+
+    if range_dir not in ('buy', 'sell') or not is_signal_fresh(range_ts, 90 * 60):
+        return False
+
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    event_base = event_id or f"{source}_rf30_replay_{symbol}_{signal_ts}_{range_dir}"
+    logger.info(
+        f"[RF30 REPLAY] {symbol} source={source} rf30={range_dir} "
+        f"signal_ts={signal_ts} age_ok=True"
+    )
+    opened = False
+    opened = evaluate_pulse_range_filter_30m(
+        symbol, range_dir, signal_ts, price, exchange_name,
+        event_id=f"{event_base}_pulse",
+    ) or opened
+    opened = evaluate_context_1d_range_filter_30m(
+        symbol, range_dir, signal_ts, price, exchange_name,
+        event_id=f"{event_base}_context1d",
+    ) or opened
+    opened = evaluate_trend_2d_range_filter_30m(
+        symbol, range_dir, signal_ts, price, exchange_name,
+        event_id=f"{event_base}_trend2d",
+    ) or opened
+    return opened
+
+
 def evaluate_context_1d_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
     """CONTEXT1D: flip RF30m + ST Context 1D + ST Context 30m + ST AI 1D alignes."""
     if not is_trade_symbol(symbol):
@@ -3662,6 +3715,13 @@ def update_indicators_for_symbol(symbol):
             symbol,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+        )
+        replay_recent_range_filter_30m(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_rf30_replay_{symbol}_{int(time.time())}",
+            source='okx_post_recalc',
         )
         relay_scalp_bias_1h(symbol, bias_1h, price)
         relay_scalp_bias_2h(symbol, bias_2h, price)

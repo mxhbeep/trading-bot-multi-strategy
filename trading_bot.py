@@ -34,7 +34,7 @@ CONFIG = {
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': False},
-        'LINK/USDT':   {'exchange': 'okx', 'scalp': False},
+        'LINK/USDT':   {'exchange': 'okx', 'scalp': True},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': False},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': False},
         'ONDO/USDT':   {'exchange': 'okx', 'scalp': False},

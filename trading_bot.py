@@ -1139,7 +1139,7 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'daily_st_ai_30m_flip_dir': None, 'daily_st_ai_30m_flip_ts': None, 'daily_st_ai_30m_flip_event_id': None,
-            'williams_1d': None, 'williams_1d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
+            'williams_1d': None, 'williams_1d_ts': None, 'williams_2d': None, 'williams_2d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
@@ -1775,7 +1775,7 @@ def process_webhook(data):
                         logger.info(f"[DAILY] Entree {signal_type_d}: {symbol} {direction_d}")
 
             # Entree secondaire DAILY :
-            # Bias 1D + ST Context 2H + ST Context 10m alignes. Williams 1D en bonus.
+            # Bias 1D + ST Context 2H + ST Context 10m alignes. Williams 2D en bonus.
             if (
                 (alert_type == 'st_context' and tf in ('2h', '10m'))
                 or (alert_type == 'bias' and tf == '1d')
@@ -1794,7 +1794,7 @@ def process_webhook(data):
                 elif bias_1d_s == 'bear' and ctx_2h_s == 'sell' and ctx_10m_s == 'sell':
                     direction_s = 'SHORT'
 
-                williams_1d_s = get_williams_filter(symbol, '1d', direction_s, 36 * 3600) if direction_s else {
+                williams_2d_s = get_williams_filter(symbol, '2d', direction_s, 72 * 3600) if direction_s else {
                     'value': None, 'ema': None, 'trend': None, 'fresh': False, 'ok': False
                 }
                 daily_secondary_ok = bool(direction_s and bias_1d_fresh_s and ctx_2h_fresh_s and ctx_10m_fresh_s)
@@ -1804,7 +1804,7 @@ def process_webhook(data):
                     f"bias1d={bias_1d_s} fresh={bias_1d_fresh_s} "
                     f"ctx2h={ctx_2h_s} fresh={ctx_2h_fresh_s} "
                     f"ctx10m={ctx_10m_s} fresh={ctx_10m_fresh_s} "
-                    f"will1d={williams_1d_s['value']}/{williams_1d_s['ema']} trend={williams_1d_s['trend']} fresh={williams_1d_s['fresh']} ok={williams_1d_s['ok']} "
+                    f"will2d={williams_2d_s['value']}/{williams_2d_s['ema']} trend={williams_2d_s['trend']} fresh={williams_2d_s['fresh']} ok={williams_2d_s['ok']} "
                     f"ok={daily_secondary_ok}"
                 )
 
@@ -1839,7 +1839,7 @@ def process_webhook(data):
                             f"Exchange: {exchange_name.upper()}\n"
                             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
                             f"[OK] Bias 1D: {(bias_1d_s or 'N/A').upper()} (EMA17/SMA40)\n"
-                            f"{format_williams_filter_line('1D', williams_1d_s)}\n"
+                            f"{format_optional_williams_line('2D', williams_2d_s)}\n"
                             f"[OK] Zone ST Context 2H: {(ctx_2h_s or 'N/A').upper()}\n"
                             f"[OK] Zone ST Context 10m: {(ctx_10m_s or 'N/A').upper()}\n"
                             f"{get_market_context_info()}",
@@ -2745,6 +2745,14 @@ def format_williams_filter_line(label, williams_filter):
     return f"[OK] Williams {label}: W%R {value:.2f} {relation} EMA14 {ema_value:.2f}"
 
 
+def format_optional_williams_line(label, williams_filter):
+    """Formate un Williams optionnel : qualite si aligne, warning sinon."""
+    base = format_williams_filter_line(label, williams_filter).replace("[OK]", "").strip()
+    if williams_filter.get('ok'):
+        return f"[QUALITE] {base}"
+    return f"[WARNING NON BLOQUANT] {base} pas aligne"
+
+
 def fmt_sig(value):
     if value in ('buy', 'bull'):
         return 'BUY'
@@ -2941,6 +2949,7 @@ def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     ctx_lt_30m = ST_CONTEXT_LT_30M.get(symbol)
     ctx_1d = ST_CONTEXT_1D.get(symbol)
     williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
+    williams_2d = get_williams_filter(symbol, '2d', direction, 72 * 3600)
 
     bias_1d_fresh = bool(bias_1d) and is_signal_fresh(m.get('bias_1d_ts'), 36 * 3600)
     st_1d_fresh = bool(st_1d) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
@@ -2966,6 +2975,7 @@ def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
         f"bias1d={bias_1d}/{exp_bias} fresh={bias_1d_fresh} "
         f"st1d={st_1d}/{exp_ctx} fresh={st_1d_fresh} "
         f"will1d={williams_1d['value']}/{williams_1d['ema']} trend={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
+        f"will2d={williams_2d['value']}/{williams_2d['ema']} trend={williams_2d['trend']} fresh={williams_2d['fresh']} ok={williams_2d['ok']} "
         f"ctx30m={ctx_30m}/{exp_ctx} fresh={ctx_30m_fresh} "
         f"lt30m={ctx_lt_30m} fresh={ctx_lt_30m_fresh} block={lt_30m_block} "
         f"daily_plus={daily_plus} ok={entry_ok}"
@@ -3011,6 +3021,7 @@ def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
         f"[OK] Bias 1D: {(bias_1d or 'N/A').upper()} (EMA17/SMA40)\n"
         f"[OK] ST AI 1D: {(st_1d or 'N/A').upper()}\n"
         f"{format_williams_filter_line('1D', williams_1d)}\n"
+        f"{format_optional_williams_line('2D', williams_2d)}\n"
         f"[OK] Zone ST Context 30m: {(ctx_30m or 'N/A').upper()}\n"
         f"{warning_txt}"
         f"[ANTI-CHOP] LT 30m: {(ctx_lt_30m or 'NEUTRE').upper()}\n"
@@ -3086,6 +3097,7 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
     opp_ctx = 'sell' if range_dir == 'buy' else 'buy'
     st_2h = m.get('st_2h') or m.get('st_ai_2h')
     ctx_10m = m.get('st_context_10m')
+    williams_2d = get_williams_filter(symbol, '2d', direction, 72 * 3600)
     antichop = ctx_10m == opp_ctx and is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
     pos_key = f"{symbol}_DAILY"
     with STATE_LOCK:
@@ -3106,6 +3118,7 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
         f"Direction: {direction}\nPrice: ${format_price(price)}\nExchange: {exchange_name.upper()}\n"
         f"[OK] Flip Range Filter 10m (100/2.00): {range_dir.upper()}\n"
         f"[OK] ST AI 2H: {st_2h.upper()}\n"
+        f"{format_optional_williams_line('2D', williams_2d)}\n"
         f"[ANTI-CHOP] ST Context 10m oppose: {antichop}\n{get_market_context_info()}",
         ntfy=True,
     )
@@ -3134,6 +3147,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
     ctx_30m = ST_CONTEXT_30M.get(symbol)
     ctx_10m = m.get('st_context_10m')
     williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
+    williams_2d = get_williams_filter(symbol, '2d', direction, 72 * 3600)
     williams_2h = get_williams_filter(symbol, '2h', direction, 6 * 3600)
 
     st_1d_ok = st_1d == exp_ctx and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
@@ -3149,6 +3163,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
         f"bias6h={bias_6h}/{exp_bias} ok={bias_6h_ok} "
         f"ctx30m={ctx_30m}/{exp_ctx} ok={ctx_30m_ok} "
         f"will1d={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
+        f"will2d={williams_2d['trend']} fresh={williams_2d['fresh']} ok={williams_2d['ok']} "
         f"will2h={williams_2h['trend']} fresh={williams_2h['fresh']} ok={williams_2h['ok']} "
         f"ctx10m_quality={ctx_10m}/{exp_ctx} ok={ctx_10m_quality} "
         f"ok={daily_ok}"
@@ -3166,6 +3181,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
             f"[OK] ST Context 30m: {(ctx_30m or 'N/A').upper()}",
             f"[OK] Flip ST AI 30m: {(st_30m or 'N/A').upper()}",
             format_williams_filter_line('1D', williams_1d),
+            format_optional_williams_line('2D', williams_2d),
             format_williams_filter_line('2H', williams_2h),
         ],
         cooldown=14400,
@@ -3213,6 +3229,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
     bias_2h = m.get('bias_2h')
     ctx_10m = m.get('st_context_10m')
     williams_6h = get_williams_filter(symbol, '6h', direction, 18 * 3600)
+    williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
 
     st_6h_ok = (
         st_6h == exp_ctx
@@ -3225,6 +3242,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
         f"st6h={st_6h}/{exp_ctx} ok={st_6h_ok} "
         f"bias2h={bias_2h}/{exp_bias} ok={bias_2h_ok} "
         f"will6h={williams_6h['trend']} fresh={williams_6h['fresh']} ok={williams_6h['ok']} "
+        f"will1d={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
         f"ctx10m_info={ctx_10m}/{exp_ctx} entry_main=False"
     )
 
@@ -3270,6 +3288,7 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
             f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
             f"[OK] Flip Range Filter 30m (100/2.00): {range_dir.upper()}\n"
             f"[OK] ST AI 2H: {(st_2h or 'N/A').upper()}\n"
+            f"{format_optional_williams_line('1D', williams_1d)}\n"
             f"[ANTI-CHOP] ST Context 10m oppose: {ctx10m_opp_block}\n"
             f"{get_market_context_info()}",
             ntfy=True,
@@ -3307,6 +3326,7 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
     st_6h = m.get('st_6h') or m.get('st_ai_6h')
     bias_2h = m.get('bias_2h')
     williams_6h = get_williams_filter(symbol, '6h', direction, 18 * 3600)
+    williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
 
     st_6h_ok = st_6h == exp_ctx and is_signal_fresh(m.get('st_6h_ts'), 9 * 3600)
     bias_2h_ok = bias_2h == exp_bias
@@ -3317,6 +3337,7 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
         f"st6h={st_6h}/{exp_ctx} ok={st_6h_ok} "
         f"bias2h={bias_2h}/{exp_bias} ok={bias_2h_ok} "
         f"will6h={williams_6h['trend']} fresh={williams_6h['fresh']} ok={williams_6h['ok']} "
+        f"will1d={williams_1d['trend']} fresh={williams_1d['fresh']} ok={williams_1d['ok']} "
         f"ctx10m={ctx_10m}/{exp_ctx} ok=True entry={entry_ok}"
     )
     if not entry_ok:
@@ -3330,6 +3351,7 @@ def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, even
             f"[OK] ST AI 6H: {(st_6h or 'N/A').upper()}",
             f"[OK] Bias 2H: {(bias_2h or 'N/A').upper()} (EMA17/SMA40)",
             format_williams_filter_line('6H', williams_6h),
+            format_optional_williams_line('1D', williams_1d),
         ],
     )
     if opened:
@@ -3620,10 +3642,18 @@ def update_indicators_for_symbol(symbol):
         bias_2h  = calc_bias_okx(df_2h, ema_len=17, sma_len=40) if df_2h is not None else None
         bias_4h  = calc_bias_okx(df_4h, ema_len=17, sma_len=40)
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
-        bias_30m = calc_bias_okx(df_30m, ema_len=8, sma_len=21) if df_30m is not None and len(df_30m) >= 30 else None
+        bias_30m = calc_bias_okx(df_30m, ema_len=13, sma_len=30) if df_30m is not None and len(df_30m) >= 30 else None
         williams_2h = calc_williams_ema(df_2h, length=14, ema_length=14) if df_2h is not None else None
         williams_6h = calc_williams_ema(df_6h, length=14, ema_length=14) if df_6h is not None else None
         williams_1d = calc_williams_ema(df_1d, length=14, ema_length=14)
+        try:
+            df_2d_w = df_1d.groupby(df_1d.index // 2).agg({
+                'open': 'first', 'high': 'max', 'low': 'min',
+                'close': 'last', 'volume': 'sum'
+            }).reset_index(drop=True)
+            williams_2d = calc_williams_ema(df_2d_w, length=14, ema_length=14)
+        except Exception:
+            williams_2d = None
         bias_1d  = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)
@@ -3696,6 +3726,9 @@ def update_indicators_for_symbol(symbol):
                 if williams_1d is not None:
                     MOMENTUM_STATE[symbol]['williams_1d'] = williams_1d
                     MOMENTUM_STATE[symbol]['williams_1d_ts'] = datetime.now(timezone.utc).timestamp()
+                if williams_2d is not None:
+                    MOMENTUM_STATE[symbol]['williams_2d'] = williams_2d
+                    MOMENTUM_STATE[symbol]['williams_2d_ts'] = datetime.now(timezone.utc).timestamp()
                 if williams_2h is not None:
                     MOMENTUM_STATE[symbol]['williams_2h'] = williams_2h
                     MOMENTUM_STATE[symbol]['williams_2h_ts'] = datetime.now(timezone.utc).timestamp()

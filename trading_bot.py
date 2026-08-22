@@ -3783,128 +3783,8 @@ def update_daily_radar_bias(symbol):
 
 
 def check_daily_radar_report():
-    """Rapport info-only: radar daily + confluences informatives."""
-    global PREP_STATE
-    radar_symbols = set(CONFIG.get('RADAR_SYMBOLS', {}))
-    info_symbols = set(get_tracked_symbols())
-    if not radar_symbols and not info_symbols:
-        return
-
-    with STATE_LOCK:
-        state_copy = {s: dict(MOMENTUM_STATE.get(s, {})) for s in (radar_symbols | info_symbols)}
-
-    new_radar = {'LONG': set(), 'SHORT': set()}
-    blocked = {'LONG': set(), 'SHORT': set()}
-    daily_info = {'LONG': set(), 'SHORT': set()}
-    intraday_confluence = {'LONG': set(), 'SHORT': set()}
-
-    for symbol in radar_symbols:
-        m = state_copy.get(symbol, {})
-        bias_1d = m.get('bias_1d')
-        ctx_30m = ST_CONTEXT_30M.get(symbol)
-        lt_30m = ST_CONTEXT_LT_30M.get(symbol)
-
-        bias_fresh = bool(bias_1d) and is_signal_fresh(m.get('bias_1d_ts'), 36 * 3600)
-        ctx_fresh = bool(ctx_30m) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-        lt_fresh = bool(lt_30m) and is_signal_fresh(m.get('st_context_lt_30m_ts'), 90 * 60)
-
-        for direction in ('LONG', 'SHORT'):
-            exp_bias = 'bull' if direction == 'LONG' else 'bear'
-            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-            setup_ok = bias_fresh and ctx_fresh and bias_1d == exp_bias and ctx_30m == exp_ctx
-            antichop = lt_fresh and lt_30m == exp_ctx
-            if setup_ok and antichop:
-                blocked[direction].add(symbol)
-            elif setup_ok:
-                new_radar[direction].add(symbol)
-
-    for symbol in info_symbols:
-        m = state_copy.get(symbol, {})
-        st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
-        ctx_2h = m.get('st_context_2h')
-
-        st_fresh = bool(st_1d) and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
-        ctx_fresh = bool(ctx_2h) and is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
-
-        if st_fresh and ctx_fresh and st_1d == 'buy' and ctx_2h == 'buy':
-            daily_info['LONG'].add(symbol)
-        elif st_fresh and ctx_fresh and st_1d == 'sell' and ctx_2h == 'sell':
-            daily_info['SHORT'].add(symbol)
-
-        st_1h = m.get('st_1h')
-        bias_1h = m.get('bias_1h')
-        st_30m = m.get('st_ai_30m') or ST_AI_30M.get(symbol)
-        bias_30m = m.get('bias_30m')
-
-        st_1h_fresh = bool(st_1h) and is_signal_fresh(m.get('st_1h_ts'), 3 * 3600)
-        bias_1h_fresh = bool(bias_1h) and is_signal_fresh(m.get('bias_1h_ts'), 3 * 3600)
-        st_30m_fresh = bool(st_30m) and is_signal_fresh(m.get('st_ai_30m_ts'), 90 * 60)
-        bias_30m_fresh = bool(bias_30m) and is_signal_fresh(m.get('bias_30m_ts'), 90 * 60)
-
-        if (
-            st_1h_fresh and bias_1h_fresh and st_30m_fresh and bias_30m_fresh
-            and st_1h == 'buy' and bias_1h == 'bull'
-            and st_30m == 'buy' and bias_30m == 'bull'
-        ):
-            intraday_confluence['LONG'].add(symbol)
-        elif (
-            st_1h_fresh and bias_1h_fresh and st_30m_fresh and bias_30m_fresh
-            and st_1h == 'sell' and bias_1h == 'bear'
-            and st_30m == 'sell' and bias_30m == 'bear'
-        ):
-            intraday_confluence['SHORT'].add(symbol)
-
-    old_radar = PREP_STATE.get('DAILY_RADAR', {'LONG': set(), 'SHORT': set()})
-    if (
-        new_radar['LONG'] == old_radar.get('LONG', set())
-        and new_radar['SHORT'] == old_radar.get('SHORT', set())
-        and daily_info['LONG'] == old_radar.get('INFO_LONG', set())
-        and daily_info['SHORT'] == old_radar.get('INFO_SHORT', set())
-        and intraday_confluence['LONG'] == old_radar.get('INTRADAY_LONG', set())
-        and intraday_confluence['SHORT'] == old_radar.get('INTRADAY_SHORT', set())
-    ):
-        return
-
-    lines = ["<b>[DAILY RADAR]</b>"]
-    if new_radar['LONG']:
-        lines.append("[LONG] " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['LONG'])))
-    if new_radar['SHORT']:
-        lines.append("[SHORT] " + "  ".join(sorted(s.replace('/USDT', '') for s in new_radar['SHORT'])))
-    if not new_radar['LONG'] and not new_radar['SHORT']:
-        lines.append("- Aucun asset radar aligne")
-    if blocked['LONG'] or blocked['SHORT']:
-        blocked_assets = sorted((blocked['LONG'] | blocked['SHORT']))
-        lines.append("[BLOQUE LT30m] " + "  ".join(s.replace('/USDT', '') for s in blocked_assets))
-    if daily_info['LONG'] or daily_info['SHORT']:
-        lines.append("")
-        lines.append("<b>[INFO DAILY: ST AI 1D + ST Context 2H]</b>")
-        if daily_info['LONG']:
-            lines.append("[LONG] " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['LONG'])))
-        if daily_info['SHORT']:
-            lines.append("[SHORT] " + "  ".join(sorted(s.replace('/USDT', '') for s in daily_info['SHORT'])))
-    if intraday_confluence['LONG'] or intraday_confluence['SHORT']:
-        lines.append("")
-        lines.append("<b>[INFO INTRADAY: ST AI 1H + Bias 1H + ST AI 30m + Bias 30m]</b>")
-        if intraday_confluence['LONG']:
-            lines.append("[LONG] " + "  ".join(sorted(s.replace('/USDT', '') for s in intraday_confluence['LONG'])))
-        if intraday_confluence['SHORT']:
-            lines.append("[SHORT] " + "  ".join(sorted(s.replace('/USDT', '') for s in intraday_confluence['SHORT'])))
-    lines.append(f"{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
-
-    send_info("\n".join(lines))
-    PREP_STATE['DAILY_RADAR'] = {
-        'LONG': new_radar['LONG'],
-        'SHORT': new_radar['SHORT'],
-        'INFO_LONG': daily_info['LONG'],
-        'INFO_SHORT': daily_info['SHORT'],
-        'INTRADAY_LONG': intraday_confluence['LONG'],
-        'INTRADAY_SHORT': intraday_confluence['SHORT'],
-    }
-    logger.info(
-        f"[DAILY RADAR] envoye long={len(new_radar['LONG'])} short={len(new_radar['SHORT'])} "
-        f"info_long={len(daily_info['LONG'])} info_short={len(daily_info['SHORT'])} "
-        f"intraday_long={len(intraday_confluence['LONG'])} intraday_short={len(intraday_confluence['SHORT'])}"
-    )
+    """Rapport daily/intraday desactive."""
+    return
 
 def check_prep_alerts():
     """Envoie alertes PREP CONTEXT4H et PULSE quand les conditions sont réunies."""
@@ -3991,103 +3871,70 @@ def check_prep_alerts():
         logger.info("[PREP] DAILY envoye")
     PREP_STATE['DAILY'] = {'LONG': new_d_long, 'SHORT': new_d_short}
 
-    # ━━ PREP PULSE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # Condition : ST AI 6H + ST Context 30m.
-    new_prep_pulse = {'LONG': set(), 'SHORT': set()}
-
-    for symbol, m in state_copy.items():
-        if symbol not in symbols_conf:
-            continue
-        st_6h     = m.get('st_6h') or m.get('st_ai_6h')
-        ctx_30m   = ST_CONTEXT_30M.get(symbol)
-
-        for direction in ('LONG', 'SHORT'):
-            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-            prep_ok = st_6h == exp_ctx and ctx_30m == exp_ctx
-            if prep_ok:
-                new_prep_pulse[direction].add(symbol)
-
-    old_pulse  = PREP_STATE.get('PULSE', {'LONG': set(), 'SHORT': set()})
-    new_p_long  = new_prep_pulse['LONG']
-    new_p_short = new_prep_pulse['SHORT']
-    if new_p_long != old_pulse.get('LONG', set()) or new_p_short != old_pulse.get('SHORT', set()):
-        lines = ["⏰<b>[PREP PULSE]</b>"]
-        if new_p_long:
-            lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_p_long)))
-        if new_p_short:
-            lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT','') for s in new_p_short)))
-        if not new_p_long and not new_p_short:
-            lines.append("— Aucun asset en préparation")
-        lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
-        send_info("\n".join(lines))
-        logger.info("[PREP] PULSE envoyé")
-    PREP_STATE['PULSE'] = {'LONG': new_p_long, 'SHORT': new_p_short}
-
 
 def bias4h_report_scheduler():
-    """Envoie toutes les 4H un rapport de suivi des tendances PULSE."""
-    logger.info("📊 Scheduler rapport Bias 6H démarré (toutes les 4H)")
+    """Envoie toutes les 4H le rapport des confluences conservees."""
+    logger.info("📊 Scheduler rapport confluences demarre (toutes les 4H)")
     # Attendre 10 minutes après démarrage pour que les données soient chargées
     time.sleep(600)
     while True:
         try:
             with STATE_LOCK:
                 state_copy  = dict(MOMENTUM_STATE)
-                ctx_5m_copy = {s: m.get('st_context_5m') for s, m in state_copy.items()}
-                ctx_30m_copy = dict(ST_CONTEXT_30M)
-                bull_assets = sorted([
-                    s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_6h') == 'bull' and m.get('bias_2h') == 'bull'
+                ai2h_bias2h_long = sorted([
+                    s.replace('/USDT', '') for s, m in state_copy.items()
+                    if (m.get('st_2h') or m.get('st_ai_2h')) == 'buy' and m.get('bias_2h') == 'bull'
                 ])
-                bear_assets = sorted([
-                    s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if m.get('bias_6h') == 'bear' and m.get('bias_2h') == 'bear'
+                ai2h_bias2h_short = sorted([
+                    s.replace('/USDT', '') for s, m in state_copy.items()
+                    if (m.get('st_2h') or m.get('st_ai_2h')) == 'sell' and m.get('bias_2h') == 'bear'
                 ])
-                mixed_assets = sorted([
-                    s.replace('/USDT', '') for s, m in MOMENTUM_STATE.items()
-                    if not (m.get('bias_6h') == 'bull' and m.get('bias_2h') == 'bull')
-                    and not (m.get('bias_6h') == 'bear' and m.get('bias_2h') == 'bear')
+                ai6h_bias2h_long = sorted([
+                    s.replace('/USDT', '') for s, m in state_copy.items()
+                    if (m.get('st_6h') or m.get('st_ai_6h')) == 'buy' and m.get('bias_2h') == 'bull'
+                ])
+                ai6h_bias2h_short = sorted([
+                    s.replace('/USDT', '') for s, m in state_copy.items()
+                    if (m.get('st_6h') or m.get('st_ai_6h')) == 'sell' and m.get('bias_2h') == 'bear'
+                ])
+                ai1d_bias6h_long = sorted([
+                    s.replace('/USDT', '') for s, m in state_copy.items()
+                    if (m.get('st_ai_1d') or ST_AI_1D.get(s)) == 'buy' and m.get('bias_6h') == 'bull'
+                ])
+                ai1d_bias6h_short = sorted([
+                    s.replace('/USDT', '') for s, m in state_copy.items()
+                    if (m.get('st_ai_1d') or ST_AI_1D.get(s)) == 'sell' and m.get('bias_6h') == 'bear'
                 ])
 
-            bull_str = "  ".join(bull_assets) if bull_assets else "-"
-            bear_str = "  ".join(bear_assets) if bear_assets else "-"
-            mixed_str = "  ".join(mixed_assets) if mixed_assets else "-"
-
-            # Bloc 2 (ex-ST Context 4H + ST AI 4H) : supprime, CONTEXT4H desactivee.
-
-            # Bloc 3 : ST AI 6H + ST Context 30m alignes
-            ai6h_ctx30m_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if (m.get('st_6h') or m.get('st_ai_6h')) == 'buy' and ctx_30m_copy.get(s) == 'buy'])
-            ai6h_ctx30m_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                        if (m.get('st_6h') or m.get('st_ai_6h')) == 'sell' and ctx_30m_copy.get(s) == 'sell'])
-            ai6h_ctx30m_long_str  = "  ".join(ai6h_ctx30m_long)  if ai6h_ctx30m_long  else "-"
-            ai6h_ctx30m_short_str = "  ".join(ai6h_ctx30m_short) if ai6h_ctx30m_short else "-"
-
-            # Bloc 4 : Jackpot ST Context 30m + ST Context 5m alignes
-            jackpot_long  = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                    if ctx_30m_copy.get(s) == 'buy' and ctx_5m_copy.get(s) == 'buy'])
-            jackpot_short = sorted([s.replace('/USDT','') for s, m in state_copy.items()
-                                    if ctx_30m_copy.get(s) == 'sell' and ctx_5m_copy.get(s) == 'sell'])
-            jackpot_long_str  = "  ".join(jackpot_long)  if jackpot_long  else "-"
-            jackpot_short_str = "  ".join(jackpot_short) if jackpot_short else "-"
+            ai2h_bias2h_long_str = "  ".join(ai2h_bias2h_long) if ai2h_bias2h_long else "-"
+            ai2h_bias2h_short_str = "  ".join(ai2h_bias2h_short) if ai2h_bias2h_short else "-"
+            ai6h_bias2h_long_str = "  ".join(ai6h_bias2h_long) if ai6h_bias2h_long else "-"
+            ai6h_bias2h_short_str = "  ".join(ai6h_bias2h_short) if ai6h_bias2h_short else "-"
+            ai1d_bias6h_long_str = "  ".join(ai1d_bias6h_long) if ai1d_bias6h_long else "-"
+            ai1d_bias6h_short_str = "  ".join(ai1d_bias6h_short) if ai1d_bias6h_short else "-"
 
             msg = (
-                f"📊 <b>[BIAS 6H+2H —{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
+                f"📊 <b>[CONFLUENCES — {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}]</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🟢 <b>BULL ({len(bull_assets)})</b> : {bull_str}\n\n"
-                f"🔴 <b>BEAR ({len(bear_assets)})</b> : {bear_str}\n\n"
-                f"⬜<b>MIXTE / NON ALIGNÉ ({len(mixed_assets)})</b> : {mixed_str}\n\n"
-                f"📈 <b>[ST AI 6H + ST CONTEXT 30M]</b>\n"
-                f"🟢 <b>LONG ({len(ai6h_ctx30m_long)})</b> : {ai6h_ctx30m_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(ai6h_ctx30m_short)})</b> : {ai6h_ctx30m_short_str}\n\n"
-                f"📈 <b>[JACKPOT CONTEXT 30M + 5M]</b>\n"
-                f"🟢 <b>LONG ({len(jackpot_long)})</b> : {jackpot_long_str}\n\n"
-                f"🔴 <b>SHORT ({len(jackpot_short)})</b> : {jackpot_short_str}"
+                f"📈 <b>[ST AI 2H + BIAS 2H]</b>\n"
+                f"🟢 <b>LONG ({len(ai2h_bias2h_long)})</b> : {ai2h_bias2h_long_str}\n"
+                f"🔴 <b>SHORT ({len(ai2h_bias2h_short)})</b> : {ai2h_bias2h_short_str}\n\n"
+                f"📈 <b>[ST AI 6H + BIAS 2H]</b>\n"
+                f"🟢 <b>LONG ({len(ai6h_bias2h_long)})</b> : {ai6h_bias2h_long_str}\n"
+                f"🔴 <b>SHORT ({len(ai6h_bias2h_short)})</b> : {ai6h_bias2h_short_str}\n\n"
+                f"📈 <b>[ST AI 1D + BIAS 6H]</b>\n"
+                f"🟢 <b>LONG ({len(ai1d_bias6h_long)})</b> : {ai1d_bias6h_long_str}\n"
+                f"🔴 <b>SHORT ({len(ai1d_bias6h_short)})</b> : {ai1d_bias6h_short_str}"
             )
             send_info(msg)
-            logger.info(f"[BIAS6H] Rapport envoyé —{len(bull_assets)} bull, {len(bear_assets)} bear")
+            logger.info(
+                f"[CONFLUENCES] Rapport envoye "
+                f"ai2h_bias2h={len(ai2h_bias2h_long) + len(ai2h_bias2h_short)} "
+                f"ai6h_bias2h={len(ai6h_bias2h_long) + len(ai6h_bias2h_short)} "
+                f"ai1d_bias6h={len(ai1d_bias6h_long) + len(ai1d_bias6h_short)}"
+            )
         except Exception as e:
-            logger.error(f"[BIAS6H] Erreur rapport: {e}")
+            logger.error(f"[CONFLUENCES] Erreur rapport: {e}")
 
         # Attendre la prochaine heure multiple de 4
         now = datetime.now(timezone.utc)

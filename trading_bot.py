@@ -33,8 +33,8 @@ CONFIG = {
         'CVX/USDT':    {'exchange': 'okx', 'scalp': True},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': True},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True},
-        'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': True},
-        'HYPE/USDT':   {'exchange': 'okx', 'scalp': True},
+        'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
+        'HYPE/USDT':   {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'HYPE-USDT-SWAP'},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': False},
         'LINK/USDT':   {'exchange': 'okx', 'scalp': True},
         'PENGU/USDT':  {'exchange': 'okx', 'scalp': True},
@@ -47,8 +47,8 @@ CONFIG = {
         'SUI/USDT':    {'exchange': 'okx', 'scalp': False},
         'TAO/USDT':    {'exchange': 'okx', 'scalp': False},  # perp-only
         'UNI/USDT':    {'exchange': 'okx', 'scalp': False},
-        'USELESS/USDT': {'exchange': 'okx', 'scalp': True},
-        'XPL/USDT':    {'exchange': 'okx', 'scalp': True},
+        'USELESS/USDT': {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
+        'XPL/USDT':    {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True},
         'ZEC/USDT':    {'exchange': 'okx', 'scalp': True},
     },
@@ -798,7 +798,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '1h': 3*3600, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
+    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -1266,6 +1266,7 @@ def process_webhook(data):
                     logger.info(f"[BIAS TV] {symbol} bias_2d = {bias_val}")
                 elif tf == '2h':
                     m['bias_2h'] = bias_val if bias_val != 'neutral' else None
+                    m['bias_2h_ts'] = now_ts
                     logger.info(f"[BIAS TV] {symbol} bias_2h = {bias_val}")
                 elif tf == '30m':
                     m['bias_30m'] = bias_val if bias_val != 'neutral' else None
@@ -2214,6 +2215,7 @@ def process_webhook(data):
             (alert_type == 'supertrend' and tf in ('1h', '2h', '30m'))
             or (alert_type == 'st_context' and tf in ('1m', '5m', '10m', '1h', '30m'))
             or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
+            or (alert_type == 'bias' and tf == '2h')
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
@@ -2667,7 +2669,8 @@ def reset_state_symbol(symbol):
 def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
     try:
-        inst_id = symbol.replace('/', '-')
+        cfg = get_symbol_config(symbol)
+        inst_id = cfg.get('okx_inst_id') or symbol.replace('/', '-')
         tf_map = {'5m': '5m', '10m': '10m', '15m': '15m', '30m': '30m', '1h': '1H', '2h': '2H', '3h': '3H', '4h': '4H', '6h': '6H', '1d': '1D'}
         bar = tf_map.get(timeframe, timeframe.upper())
         url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={min(limit, 300)}'
@@ -3719,7 +3722,9 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1h_ts'] = datetime.now(timezone.utc).timestamp()
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
                 if bias_6h is not None: MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
-                if bias_2h is not None: MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
+                if bias_2h is not None:
+                    MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
+                    MOMENTUM_STATE[symbol]['bias_2h_ts'] = datetime.now(timezone.utc).timestamp()
                 if bias_30m is not None:
                     MOMENTUM_STATE[symbol]['bias_30m'] = bias_30m
                     MOMENTUM_STATE[symbol]['bias_30m_ts'] = datetime.now(timezone.utc).timestamp()

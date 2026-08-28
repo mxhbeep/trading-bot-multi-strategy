@@ -86,6 +86,8 @@ CONFIG = {
     'JOURNAL_BOT_URL': os.environ.get('JOURNAL_BOT_URL', ''),  # ex: https://journal-bot.up.railway.app
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
+    'ENABLE_PULSE_LEGACY': False,
+    'ENABLE_PULSE_V2': True,
 }
 
 # ============================================================================ #
@@ -108,7 +110,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'PULSEV2': 0, 'TTI1D': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -666,8 +668,10 @@ def send_start_notification():
         "DAILY principale: flip ST AI 30m + ST AI 1D + Bias 6H + ST Context 30m\n"
         "DAILY secondaire: Bias 1D + ST Context 2H + ST Context 10m\n"
         "DAILY pyramiding: RF10m + ST AI 2H, bloque si ST Context 10m oppose\n\n"
-        "PULSE: ST Context 10m + ST AI 6H + Bias 2H\n"
-        "PULSE pyramiding: RF30m + ST AI 2H, bloque si ST Context 10m oppose\n\n"
+        "PULSE V2 principale: RMI 6H + TTI 6H/2H + ST Context 3m\n"
+        "PULSE V2 secondaire: Bias 6H + RMI 2H + TTI 6H/2H + ST Context 3m\n"
+        "PULSE V2 TP: rappel si TTI oppose apparait pendant une position\n\n"
+        "TTI 1D: alerte zone bull/bear, qualite si ST Context 1D aligne\n\n"
         "CONTEXT1D: RF30m + ST Context 1D + ST Context 30m + ST AI 1D\n"
         "TREND2D: RF30m + ST Context 2H + ST Context 10m + Bias 2D, bloque si ST Context 1D oppose\n"
         "--------------------\n"
@@ -695,6 +699,8 @@ def send_weekly_report():
     total_momentum   = sum(s.get('MOMENTUM', 0)     for s in WEEKLY_STATS.values())
     total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
     total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
+    total_pulse_v2   = sum(s.get('PULSEV2', 0)      for s in WEEKLY_STATS.values())
+    total_tti_1d     = sum(s.get('TTI1D', 0)        for s in WEEKLY_STATS.values())
     total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
     msg += (
@@ -704,6 +710,8 @@ def send_weekly_report():
         f"  — TREND: {total_trend}\n"
         f"  — SWING: {total_swing}\n"
         f"  — PULSE: {total_pulse}\n"
+        f"  — PULSEV2: {total_pulse_v2}\n"
+        f"  — TTI1D: {total_tti_1d}\n"
         f"  — SCALP: {total_scalp}\n"
         f"  — MOMENTUM: {total_momentum}\n\n"
     )
@@ -726,6 +734,8 @@ def send_weekly_report():
             if stats.get('TREND2D', 0):     details.append(f"T2D:{stats['TREND2D']}")
             if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
             if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
+            if stats.get('PULSEV2', 0):     details.append(f"PL2:{stats['PULSEV2']}")
+            if stats.get('TTI1D', 0):       details.append(f"TTI1D:{stats['TTI1D']}")
             if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
             msg += f"  —{base}: {sum(stats.values())} ({', '.join(details)})\n"
     else:
@@ -798,7 +808,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'5m': 15*60, '10m': 30*60, '30m': 90*60, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
+    MAX_AGE = {'3m': 10*60, '5m': 15*60, '10m': 30*60, '30m': 90*60, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -859,6 +869,13 @@ def tv_required_signals():
             'warmup': 2 * 3600,
         },
         {
+            'label': 'ST Context 3m',
+            'alert_type': 'st_context',
+            'tf': '3m',
+            'max_age': 10 * 60,
+            'warmup': 20 * 60,
+        },
+        {
             'label': 'ST Context 10m',
             'alert_type': 'st_context',
             'tf': '10m',
@@ -885,6 +902,27 @@ def tv_required_signals():
             'tf': '1d',
             'max_age': 36 * 3600,
             'warmup': 37 * 3600,
+        },
+        {
+            'label': 'TTI 1D',
+            'alert_type': 'tti',
+            'tf': '1d',
+            'max_age': 36 * 3600,
+            'warmup': 37 * 3600,
+        },
+        {
+            'label': 'TTI 6H',
+            'alert_type': 'tti',
+            'tf': '6h',
+            'max_age': 18 * 3600,
+            'warmup': 19 * 3600,
+        },
+        {
+            'label': 'TTI 2H',
+            'alert_type': 'tti',
+            'tf': '2h',
+            'max_age': 6 * 3600,
+            'warmup': 7 * 3600,
         },
     ]
 
@@ -1017,6 +1055,34 @@ def parse_range_filter_value(val):
     logger.warning(f"[WARN] Range Filter valeur invalide: '{val}'")
     return None
 
+def parse_directional_trend_value(val, allow_sideways=False):
+    """Convertit RMI/TTI en 'bull', 'bear' ou 'sideways'."""
+    s = str(val).strip().lower()
+    if s in ('bull', 'buy', 'long', 'up', 'positive', 'green', '1', '2'):
+        return 'bull'
+    if s in ('bear', 'sell', 'short', 'down', 'negative', 'red', '-1', '-2'):
+        return 'bear'
+    if allow_sideways and s in ('sideways', 'sideway', 'neutral', 'range', 'chop', 'flat', '0', '0.0'):
+        return 'sideways'
+    try:
+        numeric = float(s)
+        if numeric > 0:
+            return 'bull'
+        if numeric < 0:
+            return 'bear'
+        if allow_sideways:
+            return 'sideways'
+    except (ValueError, TypeError):
+        pass
+    logger.warning(f"[WARN] Trend direction valeur invalide: '{val}'")
+    return None
+
+def parse_rmi_value(val):
+    return parse_directional_trend_value(val, allow_sideways=False)
+
+def parse_tti_value(val):
+    return parse_directional_trend_value(val, allow_sideways=True)
+
 def parse_ema200_value(val):
     normalized = str(val).strip().lower()
     if normalized in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
@@ -1051,6 +1117,12 @@ def normalize_alert_type(alert_type_raw):
         'stcontext': 'st_context',
         'rangefilter': 'range_filter',
         'range_filter_30m': 'range_filter',
+        'trendtype': 'tti',
+        'trend_type': 'tti',
+        'trend_type_indicator': 'tti',
+        'rmits': 'rmi',
+        'rmi_trend': 'rmi',
+        'rmi_trend_sniper': 'rmi',
     }
     return type_aliases.get(normalized, normalized)
 
@@ -1129,7 +1201,7 @@ def init_symbol_states(symbol):
         MOMENTUM_STATE[symbol] = {
             'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_2d_ts': None, 'bias_3d': None, 'bias_3d_ts': None,
             'st_context_1h': None, 'st_context_4h': None,
-            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
+            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_3m_ts': None, 'st_context_4h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
             'st_1h': None, 'st_1h_ts': None, 'st_4h': None, 'st_6h': None,
             'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
@@ -1137,12 +1209,15 @@ def init_symbol_states(symbol):
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_4h': None, 'bias_6h': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
+            'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_2h_ts': None, 'bias_4h': None, 'bias_6h': None, 'bias_6h_ts': None, 'bias_30m': None, 'bias_30m_ts': None, 'bias_15m': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'daily_st_ai_30m_flip_dir': None, 'daily_st_ai_30m_flip_ts': None, 'daily_st_ai_30m_flip_event_id': None,
             'williams_1d': None, 'williams_1d_ts': None, 'williams_2d': None, 'williams_2d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
+            'st_context_3m': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
+            'rmi_6h': None, 'rmi_6h_ts': None, 'rmi_2h': None, 'rmi_2h_ts': None,
+            'tti_1d': None, 'tti_1d_ts': None, 'tti_6h': None, 'tti_6h_ts': None, 'tti_2h': None, 'tti_2h_ts': None,
             'range_filter_10m': None, 'range_filter_10m_ts': None, 'last_range_filter_10m_signal_ts': None,
             'range_filter_30m': None, 'range_filter_30m_ts': None, 'last_range_filter_30m_signal_ts': None,
         }
@@ -1247,6 +1322,7 @@ def process_webhook(data):
                 elif tf == '6h':
                     prev_bias_6h = m.get('bias_6h')
                     m['bias_6h'] = bias_val if bias_val != 'neutral' else None
+                    m['bias_6h_ts'] = now_ts
                     logger.info(f"[BIAS TV] {symbol} bias_6h = {bias_val}")
                     # Clôture PULSE si Bias 6H inversé (via alerte TV)
                     pos_pulse = SCALP_POSITIONS.get(f'{symbol}_PULSE')
@@ -1322,6 +1398,10 @@ def process_webhook(data):
                 m['st_context_2h'] = parsed_ctx
                 m['st_context_2h_ts'] = now_ts
                 logger.info(f"[CTX 2H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
+            elif tf == '3m':
+                m['st_context_3m'] = parsed_ctx
+                m['st_context_3m_ts'] = now_ts
+                logger.info(f"[CTX 3M] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
             elif tf == '4h':
                 prev_ctx_4h = m.get('st_context_4h')
                 m['st_context_4h'] = parsed_ctx
@@ -1381,6 +1461,47 @@ def process_webhook(data):
             elif tf in ('4h', 'lt_4h'):
                 ST_CONTEXT_LT_4H[symbol] = parsed_ctx_lt
                 m['st_context_lt_4h_ts'] = now_ts
+
+        if alert_type == 'rmi':
+            parsed_rmi = parse_rmi_value(val)
+            if parsed_rmi in ('bull', 'bear'):
+                if tf == '6h':
+                    m['rmi_6h'] = parsed_rmi
+                    m['rmi_6h_ts'] = now_ts
+                    logger.info(f"[RMI 6H] {symbol} = {parsed_rmi}")
+                elif tf == '2h':
+                    m['rmi_2h'] = parsed_rmi
+                    m['rmi_2h_ts'] = now_ts
+                    logger.info(f"[RMI 2H] {symbol} = {parsed_rmi}")
+
+        if alert_type == 'tti':
+            parsed_tti = parse_tti_value(val)
+            if parsed_tti in ('bull', 'bear', 'sideways'):
+                if tf == '6h':
+                    m['tti_6h'] = parsed_tti
+                    m['tti_6h_ts'] = now_ts
+                    logger.info(f"[TTI 6H] {symbol} = {parsed_tti}")
+                elif tf == '2h':
+                    m['tti_2h'] = parsed_tti
+                    m['tti_2h_ts'] = now_ts
+                    logger.info(f"[TTI 2H] {symbol} = {parsed_tti}")
+                elif tf == '1d':
+                    m['tti_1d'] = parsed_tti
+                    m['tti_1d_ts'] = now_ts
+                    logger.info(f"[TTI 1D] {symbol} = {parsed_tti}")
+                    evaluate_tti_1d_zone_alert(
+                        symbol,
+                        parsed_tti,
+                        price=price,
+                        exchange_name=exchange_name,
+                        event_id=event_id,
+                    )
+                evaluate_pulse_v2_take_profit_reminder(
+                    symbol,
+                    price=price,
+                    exchange_name=exchange_name,
+                    event_id=event_id,
+                )
 
         if radar_only:
             check_daily_radar_report()
@@ -2196,7 +2317,24 @@ def process_webhook(data):
                 source=f"webhook_{alert_type}_{tf}",
             )
 
-        if strat in ['pulse', 'all'] and (
+        if (
+            CONFIG.get('ENABLE_PULSE_V2', True)
+            and strat in ['pulse', 'pulse_v2', 'all']
+            and (
+                (alert_type == 'st_context' and tf == '3m')
+                or (alert_type in ('rmi', 'tti') and tf in ('2h', '6h'))
+                or (alert_type == 'bias' and tf == '6h')
+            )
+        ):
+            evaluate_pulse_v2(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+                source=f"{alert_type}_{tf}",
+            )
+
+        if CONFIG.get('ENABLE_PULSE_LEGACY', False) and strat in ['pulse', 'all'] and (
             (alert_type == 'st_context' and tf == '10m')
             or (alert_type == 'supertrend' and tf == '6h')
             or (alert_type == 'bias' and tf == '2h')
@@ -2213,9 +2351,10 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             (alert_type == 'supertrend' and tf in ('1h', '2h', '30m'))
-            or (alert_type == 'st_context' and tf in ('1m', '5m', '10m', '1h', '30m'))
+            or (alert_type == 'st_context' and tf in ('1m', '3m', '5m', '10m', '1h', '30m'))
             or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
             or (alert_type == 'bias' and tf == '2h')
+            or (alert_type in ('rmi', 'tti') and tf == '30m')
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
@@ -2715,6 +2854,58 @@ def calc_williams_ema(df, length=14, ema_length=14):
         return None
 
 
+def calc_rmi_trend(df, length=10, positive_above=62, negative_below=34):
+    """Reproduit l'etat RMI Trend Sniper: RSI/MFI moyen + pente EMA5."""
+    try:
+        if df is None or len(df) < length + 10:
+            return None
+        close = df['close'].astype(float).reset_index(drop=True)
+        high = df['high'].astype(float).reset_index(drop=True)
+        low = df['low'].astype(float).reset_index(drop=True)
+        volume = df['volume'].astype(float).reset_index(drop=True)
+
+        change = close.diff()
+        up = change.clip(lower=0).ewm(alpha=1 / length, adjust=False).mean()
+        down = (-change.clip(upper=0)).ewm(alpha=1 / length, adjust=False).mean()
+        rs = up / down.where(down != 0)
+        rsi = 100 - (100 / (1 + rs))
+        rsi = rsi.where(down != 0, 100).where(up != 0, 0)
+
+        typical = (high + low + close) / 3
+        money_flow = typical * volume
+        typical_change = typical.diff()
+        pos_flow = money_flow.where(typical_change > 0, 0.0).rolling(length).sum()
+        neg_flow = money_flow.where(typical_change < 0, 0.0).rolling(length).sum()
+        mfi_ratio = pos_flow / neg_flow.where(neg_flow != 0)
+        mfi = 100 - (100 / (1 + mfi_ratio))
+        mfi = mfi.where(neg_flow != 0, 100).where(pos_flow != 0, 0)
+
+        rsi_mfi = ((rsi + mfi) / 2).astype(float)
+        ema5 = close.ewm(span=5, adjust=False).mean()
+
+        state = None
+        for i in range(1, len(close)):
+            current = rsi_mfi.iloc[i]
+            previous = rsi_mfi.iloc[i - 1]
+            if pd.isna(current) or pd.isna(previous):
+                continue
+            p_mom = (
+                previous < positive_above
+                and current > positive_above
+                and current > negative_below
+                and (ema5.iloc[i] - ema5.iloc[i - 1]) > 0
+            )
+            n_mom = current < negative_below and (ema5.iloc[i] - ema5.iloc[i - 1]) < 0
+            if p_mom:
+                state = 'bull'
+            elif n_mom:
+                state = 'bear'
+        return state
+    except Exception as e:
+        logger.debug(f"[RMI] Calcul impossible: {e}")
+        return None
+
+
 def get_williams_filter(symbol, timeframe, direction, max_age_seconds):
     """Retourne l'etat du filtre Williams pour une direction donnee."""
     normalized_direction = str(direction or '').upper()
@@ -2762,6 +2953,53 @@ def fmt_sig(value):
     if value in ('sell', 'bear'):
         return 'SELL'
     return 'NEUTRE'
+
+
+def evaluate_tti_1d_zone_alert(symbol, tti_value, price=0.0, exchange_name=None, event_id=None):
+    """Alerte info quand TTI 1D passe en zone bull/bear, qualite si Context 1D aligne."""
+    if not is_trade_symbol(symbol):
+        return False
+    if tti_value not in ('bull', 'bear'):
+        return False
+
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    direction = 'LONG' if tti_value == 'bull' else 'SHORT'
+    exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+    ctx_1d = ST_CONTEXT_1D.get(symbol)
+    ctx_1d_fresh = is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
+    ctx_1d_quality = ctx_1d_fresh and ctx_1d == exp_ctx
+    event_key = event_id or f"tti_1d_zone_{symbol}_{int(time.time())}_{tti_value}"
+
+    logger.info(
+        f"[TTI 1D ALERT CHECK] {symbol} dir={direction} "
+        f"tti1d={tti_value} ctx1d={ctx_1d}/{exp_ctx} fresh={ctx_1d_fresh} quality={ctx_1d_quality}"
+    )
+
+    if not should_send(symbol, f"tti_1d_zone_{tti_value}", event_id=event_key, cooldown=12 * 3600):
+        return False
+
+    emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
+    quality_line = (
+        "\u2b50 <b>ALERTE HAUTE QUALITE: ST Context 1D aligne</b>\n\n"
+        if ctx_1d_quality else ""
+    )
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    send_telegram(
+        f"{emoji} <b>[TTI 1D - ZONE]</b> {symbol}\n"
+        f"--------------------\n"
+        f"{quality_line}"
+        f"Direction: {direction}\n"
+        f"Price: ${format_price(price)}\n"
+        f"Exchange: {exchange_name.upper()}\n"
+        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+        f"[OK] TTI 1D: {tti_value.upper()}\n"
+        f"[QUALITE] ST Context 1D: {(ctx_1d or 'NEUTRE').upper() if ctx_1d_quality else (ctx_1d or 'NEUTRE').upper()}\n"
+        f"{get_market_context_info()}",
+        ntfy=True,
+    )
+    track_alert(symbol, 'TTI1D')
+    return True
 
 
 def calc_range_filter_signal(df, per=100, mult=2.0):
@@ -3092,6 +3330,210 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
     return True
 
 
+def _bias_to_trade_direction(bias_value):
+    if bias_value == 'bull':
+        return 'LONG'
+    if bias_value == 'bear':
+        return 'SHORT'
+    return None
+
+
+def _trade_direction_to_ctx(direction):
+    return 'buy' if direction == 'LONG' else 'sell'
+
+
+def _trade_direction_to_bias(direction):
+    return 'bull' if direction == 'LONG' else 'bear'
+
+
+def _pulse_v2_tti_state(m, exp_bias):
+    tti_6h = m.get('tti_6h')
+    tti_2h = m.get('tti_2h')
+    tti_6h_fresh = is_signal_fresh(m.get('tti_6h_ts'), 18 * 3600)
+    tti_2h_fresh = is_signal_fresh(m.get('tti_2h_ts'), 6 * 3600)
+    tti_6h_ok = tti_6h_fresh and tti_6h == exp_bias
+    tti_2h_ok = tti_2h_fresh and tti_2h == exp_bias
+    return {
+        'tti_6h': tti_6h, 'tti_6h_fresh': tti_6h_fresh, 'tti_6h_ok': tti_6h_ok,
+        'tti_2h': tti_2h, 'tti_2h_fresh': tti_2h_fresh, 'tti_2h_ok': tti_2h_ok,
+        'any_ok': tti_6h_ok or tti_2h_ok,
+        'both_ok': tti_6h_ok and tti_2h_ok,
+    }
+
+
+def evaluate_pulse_v2_take_profit_reminder(symbol, price=0.0, exchange_name=None, event_id=None):
+    """Rappel de prise de profit si une zone TTI opposee apparait pendant un PULSE V2."""
+    pos_key = f"{symbol}_PULSEV2"
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(pos_key)
+    if not pos:
+        return False
+
+    direction = pos.get('direction')
+    if direction not in ('LONG', 'SHORT'):
+        return False
+
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    opp_bias = 'bear' if direction == 'LONG' else 'bull'
+    tti_6h_opp = is_signal_fresh(m.get('tti_6h_ts'), 18 * 3600) and m.get('tti_6h') == opp_bias
+    tti_2h_opp = is_signal_fresh(m.get('tti_2h_ts'), 6 * 3600) and m.get('tti_2h') == opp_bias
+    if not (tti_6h_opp or tti_2h_opp):
+        return False
+
+    strength = 'double' if tti_6h_opp and tti_2h_opp else 'single'
+    if not should_send(symbol, f"pulsev2_tp_tti_{opp_bias}_{strength}", event_id=event_id, cooldown=3600):
+        return False
+
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    emoji = "\u26a0\ufe0f" if strength == 'single' else "\U0001f6a8"
+    send_telegram(
+        f"{emoji} <b>[PULSE V2 - RAPPEL TAKE PROFIT]</b> {symbol}\n"
+        f"--------------------\n"
+        f"Position suivie: {direction}\n"
+        f"Price: ${format_price(price)}\n"
+        f"Exchange: {exchange_name.upper()}\n"
+        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+        f"<b>Zone TTI opposee detectee: penser a securiser / prendre des profits.</b>\n"
+        f"[INFO] TTI 6H: {(m.get('tti_6h') or 'N/A').upper()}\n"
+        f"[INFO] TTI 2H: {(m.get('tti_2h') or 'N/A').upper()}\n"
+        f"{get_market_context_info()}",
+        ntfy=True,
+    )
+    logger.info(f"[PULSEV2 TP] {symbol} position={direction} tti_6h_opp={tti_6h_opp} tti_2h_opp={tti_2h_opp}")
+    return True
+
+
+def evaluate_pulse_v2(symbol, price=0.0, exchange_name=None, event_id=None, source='webhook'):
+    """PULSE V2: RMI/Bias HTF + TTI 6H/2H, entree sur zone ST Context 3m."""
+    if not CONFIG.get('ENABLE_PULSE_V2', True) or not is_trade_symbol(symbol):
+        return False
+
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+
+    ctx_3m = m.get('st_context_3m')
+    ctx_3m_fresh = is_signal_fresh(m.get('st_context_3m_ts'), 10 * 60)
+
+    rmi_6h = m.get('rmi_6h')
+    rmi_6h_fresh = is_signal_fresh(m.get('rmi_6h_ts'), 18 * 3600)
+    primary_direction = _bias_to_trade_direction(rmi_6h) if rmi_6h_fresh else None
+
+    bias_6h = m.get('bias_6h')
+    bias_6h_fresh = is_signal_fresh(m.get('bias_6h_ts'), 18 * 3600)
+    rmi_2h = m.get('rmi_2h')
+    rmi_2h_fresh = is_signal_fresh(m.get('rmi_2h_ts'), 6 * 3600)
+    secondary_direction = _bias_to_trade_direction(bias_6h) if bias_6h_fresh else None
+
+    candidates = []
+    if primary_direction:
+        exp_bias = _trade_direction_to_bias(primary_direction)
+        tti = _pulse_v2_tti_state(m, exp_bias)
+        candidates.append({
+            'name': 'principal_rmi6h',
+            'label': 'PULSE V2 PRINCIPALE',
+            'direction': primary_direction,
+            'exp_ctx': _trade_direction_to_ctx(primary_direction),
+            'ready': tti['any_ok'],
+            'quality': tti['both_ok'],
+            'lines': [
+                f"[OK] RMI 6H: {rmi_6h.upper()}",
+                f"[OK] TTI 6H: {(tti['tti_6h'] or 'N/A').upper()}" if tti['tti_6h_ok'] else f"[INFO] TTI 6H: {(tti['tti_6h'] or 'N/A').upper()}",
+                f"[OK] TTI 2H: {(tti['tti_2h'] or 'N/A').upper()}" if tti['tti_2h_ok'] else f"[INFO] TTI 2H: {(tti['tti_2h'] or 'N/A').upper()}",
+            ],
+            'log': f"rmi6h={rmi_6h} fresh={rmi_6h_fresh} tti6h={tti['tti_6h']} ok={tti['tti_6h_ok']} tti2h={tti['tti_2h']} ok={tti['tti_2h_ok']}",
+        })
+
+    if secondary_direction and rmi_2h_fresh and rmi_2h == _trade_direction_to_bias(secondary_direction):
+        exp_bias = _trade_direction_to_bias(secondary_direction)
+        tti = _pulse_v2_tti_state(m, exp_bias)
+        candidates.append({
+            'name': 'secondaire_bias6h_rmi2h',
+            'label': 'PULSE V2 SECONDAIRE',
+            'direction': secondary_direction,
+            'exp_ctx': _trade_direction_to_ctx(secondary_direction),
+            'ready': tti['any_ok'],
+            'quality': tti['both_ok'],
+            'lines': [
+                f"[OK] Bias 6H: {(bias_6h or 'N/A').upper()} (EMA17/SMA40)",
+                f"[OK] RMI 2H: {(rmi_2h or 'N/A').upper()}",
+                f"[OK] TTI 6H: {(tti['tti_6h'] or 'N/A').upper()}" if tti['tti_6h_ok'] else f"[INFO] TTI 6H: {(tti['tti_6h'] or 'N/A').upper()}",
+                f"[OK] TTI 2H: {(tti['tti_2h'] or 'N/A').upper()}" if tti['tti_2h_ok'] else f"[INFO] TTI 2H: {(tti['tti_2h'] or 'N/A').upper()}",
+            ],
+            'log': f"bias6h={bias_6h} fresh={bias_6h_fresh} rmi2h={rmi_2h} fresh={rmi_2h_fresh} tti6h={tti['tti_6h']} ok={tti['tti_6h_ok']} tti2h={tti['tti_2h']} ok={tti['tti_2h_ok']}",
+        })
+
+    logger.info(
+        f"[PULSEV2 CHECK] {symbol} source={source} ctx3m={ctx_3m} fresh={ctx_3m_fresh} "
+        f"rmi6h={rmi_6h} fresh={rmi_6h_fresh} bias6h={bias_6h} fresh={bias_6h_fresh} "
+        f"rmi2h={rmi_2h} fresh={rmi_2h_fresh} candidates={len(candidates)}"
+    )
+
+    ready_candidates = [c for c in candidates if c['ready']]
+    for candidate in ready_candidates:
+        if should_send(
+            symbol,
+            f"pulsev2_prep_{candidate['name']}_{candidate['direction']}",
+            cooldown=3600,
+        ):
+            send_info(
+                f"<b>[PREP {candidate['label']}]</b> {symbol}\n"
+                f"--------------------\n"
+                f"Direction: {candidate['direction']}\n"
+                f"Price: ${format_price(price)}\n\n"
+                + "\n".join(candidate['lines']) + "\n"
+                f"[WAIT] Zone ST Context 3m: {(ctx_3m or 'NEUTRE').upper()}"
+            )
+
+    entry_candidates = [
+        c for c in ready_candidates
+        if ctx_3m_fresh and ctx_3m == c['exp_ctx']
+    ]
+    if not entry_candidates:
+        for candidate in candidates:
+            logger.info(
+                f"[PULSEV2 WAITING] {symbol} {candidate['name']} dir={candidate['direction']} "
+                f"ready={candidate['ready']} {candidate['log']} ctx3m={ctx_3m}/{candidate['exp_ctx']} fresh={ctx_3m_fresh}"
+            )
+        return False
+
+    directions = {c['direction'] for c in entry_candidates}
+    if len(directions) > 1:
+        logger.warning(f"[PULSEV2 BLOCKED] {symbol} directions contradictoires: {directions}")
+        return False
+
+    selected = next((c for c in entry_candidates if c['name'] == 'principal_rmi6h'), entry_candidates[0])
+    quality = selected['quality'] or len(entry_candidates) > 1
+    quality_line = "\u2b50 <b>PULSE V2 HAUTE QUALITE: TTI 6H + TTI 2H alignes</b>" if selected['quality'] else None
+    if len(entry_candidates) > 1:
+        quality_line = "\u2b50 <b>PULSE V2 HAUTE QUALITE: principale + secondaire alignees</b>"
+
+    detail_lines = []
+    if quality_line:
+        detail_lines.append(quality_line)
+    detail_lines.extend(selected['lines'])
+    detail_lines.append(f"[OK] Zone ST Context 3m: {ctx_3m.upper()}")
+    if len(entry_candidates) > 1:
+        detail_lines.append("[BONUS] Confirmation secondaire: OK")
+
+    event_key = event_id or f"pulsev2_{selected['name']}_{symbol}_{int(time.time())}_{selected['exp_ctx']}"
+    opened = _open_strategy_entry(
+        symbol,
+        'PULSEV2',
+        selected['direction'],
+        selected['name'],
+        event_key,
+        price,
+        exchange_name,
+        detail_lines,
+        cooldown=3600,
+    )
+    if opened:
+        logger.info(f"[PULSEV2] Entree {selected['name']}: {symbol} {selected['direction']}")
+    return opened
+
+
 def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exchange_name, event_id):
     """Pyramiding DAILY: nouveau RF10 + ST AI 2H, bloque par Context 10m oppose."""
     m = MOMENTUM_STATE.get(symbol, {})
@@ -3219,6 +3661,8 @@ def evaluate_daily_primary_after_okx(symbol, price=0.0, exchange_name=None):
 
 def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
     """Evalue uniquement le pyramiding PULSE sur un nouveau flip Range Filter 30m."""
+    if not CONFIG.get('ENABLE_PULSE_LEGACY', False):
+        return False
     if range_dir not in ('buy', 'sell'):
         return False
     m = MOMENTUM_STATE.get(symbol, {})
@@ -3314,6 +3758,8 @@ def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exc
 
 def evaluate_pulse_context_10m_alert(symbol, price=0.0, exchange_name=None, event_id=None):
     """Alerte PULSE quand ST AI 6H + Bias 2H + ST Context 10m sont alignes. Williams en bonus."""
+    if not CONFIG.get('ENABLE_PULSE_LEGACY', False):
+        return False
     if not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3641,11 +4087,13 @@ def update_indicators_for_symbol(symbol):
 
         # Calculs
         bias_1h  = calc_bias_okx(df_1h, ema_len=13, sma_len=30)
-        df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=50)
+        df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=150)
         bias_2h  = calc_bias_okx(df_2h, ema_len=17, sma_len=40) if df_2h is not None else None
         bias_4h  = calc_bias_okx(df_4h, ema_len=17, sma_len=40)
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
         bias_30m = calc_bias_okx(df_30m, ema_len=13, sma_len=30) if df_30m is not None and len(df_30m) >= 30 else None
+        rmi_2h = calc_rmi_trend(df_2h, length=10, positive_above=62, negative_below=34) if df_2h is not None else None
+        rmi_6h = calc_rmi_trend(df_6h, length=10, positive_above=62, negative_below=34) if df_6h is not None else None
         williams_2h = calc_williams_ema(df_2h, length=14, ema_length=14) if df_2h is not None else None
         williams_6h = calc_williams_ema(df_6h, length=14, ema_length=14) if df_6h is not None else None
         williams_1d = calc_williams_ema(df_1d, length=14, ema_length=14)
@@ -3721,7 +4169,9 @@ def update_indicators_for_symbol(symbol):
                 MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
                 MOMENTUM_STATE[symbol]['bias_1h_ts'] = datetime.now(timezone.utc).timestamp()
                 MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
-                if bias_6h is not None: MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
+                if bias_6h is not None:
+                    MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
+                    MOMENTUM_STATE[symbol]['bias_6h_ts'] = datetime.now(timezone.utc).timestamp()
                 if bias_2h is not None:
                     MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
                     MOMENTUM_STATE[symbol]['bias_2h_ts'] = datetime.now(timezone.utc).timestamp()
@@ -3740,14 +4190,27 @@ def update_indicators_for_symbol(symbol):
                 if williams_6h is not None:
                     MOMENTUM_STATE[symbol]['williams_6h'] = williams_6h
                     MOMENTUM_STATE[symbol]['williams_6h_ts'] = datetime.now(timezone.utc).timestamp()
+                if rmi_2h is not None:
+                    MOMENTUM_STATE[symbol]['rmi_2h'] = rmi_2h
+                    MOMENTUM_STATE[symbol]['rmi_2h_ts'] = datetime.now(timezone.utc).timestamp()
+                if rmi_6h is not None:
+                    MOMENTUM_STATE[symbol]['rmi_6h'] = rmi_6h
+                    MOMENTUM_STATE[symbol]['rmi_6h_ts'] = datetime.now(timezone.utc).timestamp()
 
 
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} RMI2H={rmi_2h} RMI6H={rmi_6h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
         evaluate_pulse_context_10m_alert(
             symbol,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
             event_id=f"okx_pulse_ctx10m_{symbol}_{int(time.time())}",
+        )
+        evaluate_pulse_v2(
+            symbol,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_pulsev2_{symbol}_{int(time.time())}",
+            source='okx_post_recalc',
         )
         evaluate_daily_primary_after_okx(
             symbol,

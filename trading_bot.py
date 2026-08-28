@@ -1181,7 +1181,7 @@ ST_CONTEXT_LT_1H:  dict = {}  # Long term context 1H
 ST_CONTEXT_LT_4H:  dict = {}  # Long term context 4H (plot_2)
 ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
 PREP_STATE: dict = {}
-WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 PYRA_ENABLED: dict = {}  # f'{symbol}_{strat}' -> True si pyramiding activé  # strategy -> {'LONG': set(), 'SHORT': set()} — assets en préparation
 ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
@@ -1260,8 +1260,11 @@ def webhook():
 
 def run_webhook_job(data):
     """Wrapper avec contexte Flask pour l'exécuteur."""
-    with app.app_context():
-        process_webhook(data)
+    try:
+        with app.app_context():
+            process_webhook(data)
+    except Exception:
+        logger.exception("[WEBHOOK] Erreur non geree dans le job async")
 
 
 def process_webhook(data):
@@ -2400,8 +2403,8 @@ def process_webhook(data):
                     logger.warning(f"[RELAY] Erreur: {e}")
 
 
-    except Exception as e:
-        logger.error(f"[WEBHOOK] Erreur traitement: {e}")
+    except Exception:
+        logger.exception("[WEBHOOK] Erreur traitement")
 
 @app.route('/telegram_callback', methods=['POST'])
 def telegram_callback():
@@ -3536,6 +3539,7 @@ def evaluate_pulse_v2(symbol, price=0.0, exchange_name=None, event_id=None, sour
 
 def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exchange_name, event_id):
     """Pyramiding DAILY: nouveau RF10 + ST AI 2H, bloque par Context 10m oppose."""
+    return False  # DAILY pyramiding desactive (demande utilisateur) — code garde en reference
     m = MOMENTUM_STATE.get(symbol, {})
     direction = 'LONG' if range_dir == 'buy' else 'SHORT'
     exp_ctx = range_dir
@@ -3661,6 +3665,7 @@ def evaluate_daily_primary_after_okx(symbol, price=0.0, exchange_name=None):
 
 def evaluate_pulse_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
     """Evalue uniquement le pyramiding PULSE sur un nouveau flip Range Filter 30m."""
+    return False  # PULSE pyramiding desactive (demande utilisateur) — code garde en reference, independant du flag ENABLE_PULSE_LEGACY
     if not CONFIG.get('ENABLE_PULSE_LEGACY', False):
         return False
     if range_dir not in ('buy', 'sell'):
@@ -3845,6 +3850,7 @@ def replay_recent_range_filter_30m(symbol, price=0.0, exchange_name=None, event_
 
 def evaluate_context_1d_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
     """CONTEXT1D: flip RF30m + ST Context 1D + ST Context 30m + ST AI 1D alignes."""
+    return False  # CONTEXT1D desactivee (demande utilisateur) — code garde en reference
     if not is_trade_symbol(symbol):
         return False
     if range_dir not in ('buy', 'sell'):

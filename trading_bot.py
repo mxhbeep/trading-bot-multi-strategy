@@ -90,6 +90,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_LEGACY': False,
     'ENABLE_PULSE_V2': True,
+    'ENABLE_DAILY': False,
     'ENABLE_CONFLUENCE_REPORT': False,
 }
 
@@ -1818,7 +1819,7 @@ def process_webhook(data):
         # Bonus tres haute qualite : ST Context 1D aligne
         # Anti-chop : ST Context LT 30m meme sens => bloque
         # ========================================================================
-        if strat in ['daily', 'all']:
+        if CONFIG.get('ENABLE_DAILY', True) and strat in ['daily', 'all']:
             m = MOMENTUM_STATE[symbol]
 
             # Remplacee par l'entree DAILY sur Range Filter 30m.
@@ -2305,6 +2306,8 @@ def process_webhook(data):
                     )
 
         if (
+            CONFIG.get('ENABLE_DAILY', True)
+            and
             strat in ['daily', 'all']
             and alert_type == 'supertrend'
             and tf == '30m'
@@ -2319,6 +2322,8 @@ def process_webhook(data):
             )
 
         if (
+            CONFIG.get('ENABLE_DAILY', True)
+            and
             alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend')
             and tf in ('1d', '2d', '2h', '10m', '30m', '6h')
         ):
@@ -3202,6 +3207,8 @@ def evaluate_strategy_2h_range_filter_30m(symbol, range_dir, signal_ts, price=0.
 
 def evaluate_daily_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None, source='okx'):
     """Entree DAILY declenchee par Range Filter 30m, avec les filtres DAILY existants."""
+    if not CONFIG.get('ENABLE_DAILY', True):
+        return False
     if range_dir not in ('buy', 'sell') or not is_trade_symbol(symbol):
         return False
 
@@ -3605,6 +3612,8 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
 
 def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, event_id=None, source='webhook'):
     """Entree DAILY principale: flip ST AI 30m + ST AI 1D + Bias 6H + Context 30m."""
+    if not CONFIG.get('ENABLE_DAILY', True):
+        return False
     if not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3669,6 +3678,8 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
 
 def evaluate_daily_primary_after_okx(symbol, price=0.0, exchange_name=None):
     """Rejoue DAILY apres recalcul OKX seulement si un vrai flip ST AI 30m est encore recent."""
+    if not CONFIG.get('ENABLE_DAILY', True):
+        return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
     flip_dir = m.get('daily_st_ai_30m_flip_dir')
@@ -4335,26 +4346,27 @@ def check_prep_alerts():
     # Condition : tout est pret sauf le flip Range Filter 10m.
     new_prep_daily = {'LONG': set(), 'SHORT': set()}
 
-    for symbol, m in state_copy.items():
-        if symbol not in symbols_conf:
-            continue
-        st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
-        bias_6h = m.get('bias_6h')
-        ctx_30m = ST_CONTEXT_30M.get(symbol)
+    if CONFIG.get('ENABLE_DAILY', True):
+        for symbol, m in state_copy.items():
+            if symbol not in symbols_conf:
+                continue
+            st_1d = m.get('st_ai_1d') or ST_AI_1D.get(symbol)
+            bias_6h = m.get('bias_6h')
+            ctx_30m = ST_CONTEXT_30M.get(symbol)
 
-        for direction in ('LONG', 'SHORT'):
-            exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-            exp_bias = 'bull' if direction == 'LONG' else 'bear'
-            williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
-            prep_ok = (
-                st_1d == exp_ctx
-                and bias_6h == exp_bias
-                and ctx_30m == exp_ctx
-                and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
-                and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-            )
-            if prep_ok:
-                new_prep_daily[direction].add(symbol)
+            for direction in ('LONG', 'SHORT'):
+                exp_ctx = 'buy' if direction == 'LONG' else 'sell'
+                exp_bias = 'bull' if direction == 'LONG' else 'bear'
+                williams_1d = get_williams_filter(symbol, '1d', direction, 36 * 3600)
+                prep_ok = (
+                    st_1d == exp_ctx
+                    and bias_6h == exp_bias
+                    and ctx_30m == exp_ctx
+                    and is_signal_fresh(m.get('st_ai_1d_ts'), 36 * 3600)
+                    and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+                )
+                if prep_ok:
+                    new_prep_daily[direction].add(symbol)
 
     old_daily = PREP_STATE.get('DAILY', {'LONG': set(), 'SHORT': set()})
     new_d_long = new_prep_daily['LONG']

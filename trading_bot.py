@@ -90,6 +90,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_LEGACY': False,
     'ENABLE_PULSE_V2': True,
+    'ENABLE_CONFLUENCE_REPORT': False,
 }
 
 # ============================================================================ #
@@ -112,7 +113,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'PULSEV2': 0, 'TTI1D': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'PULSEV2': 0, 'TTI6H': 0, 'TTI1D': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -673,7 +674,7 @@ def send_start_notification():
         "PULSE V2 principale: RMI 6H + TTI 6H/2H + ST Context 3m\n"
         "PULSE V2 secondaire: Bias 6H + RMI 2H + TTI 6H/2H + ST Context 3m\n"
         "PULSE V2 TP: rappel si TTI oppose apparait pendant une position\n\n"
-        "TTI 1D: alerte zone bull/bear, qualite si ST Context 1D aligne\n\n"
+        "TTI 6H/1D: alerte zone bull/bear sur toute la watchlist, qualite si ST Context meme TF aligne\n\n"
         "CONTEXT1D: RF30m + ST Context 1D + ST Context 30m + ST AI 1D\n"
         "TREND2D: RF30m + ST Context 2H + ST Context 10m + Bias 2D, bloque si ST Context 1D oppose\n"
         "--------------------\n"
@@ -702,6 +703,7 @@ def send_weekly_report():
     total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
     total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
     total_pulse_v2   = sum(s.get('PULSEV2', 0)      for s in WEEKLY_STATS.values())
+    total_tti_6h     = sum(s.get('TTI6H', 0)        for s in WEEKLY_STATS.values())
     total_tti_1d     = sum(s.get('TTI1D', 0)        for s in WEEKLY_STATS.values())
     total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
@@ -713,6 +715,7 @@ def send_weekly_report():
         f"  — SWING: {total_swing}\n"
         f"  — PULSE: {total_pulse}\n"
         f"  — PULSEV2: {total_pulse_v2}\n"
+        f"  — TTI6H: {total_tti_6h}\n"
         f"  — TTI1D: {total_tti_1d}\n"
         f"  — SCALP: {total_scalp}\n"
         f"  — MOMENTUM: {total_momentum}\n\n"
@@ -737,6 +740,7 @@ def send_weekly_report():
             if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
             if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
             if stats.get('PULSEV2', 0):     details.append(f"PL2:{stats['PULSEV2']}")
+            if stats.get('TTI6H', 0):       details.append(f"TTI6H:{stats['TTI6H']}")
             if stats.get('TTI1D', 0):       details.append(f"TTI1D:{stats['TTI1D']}")
             if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
             msg += f"  —{base}: {sum(stats.values())} ({', '.join(details)})\n"
@@ -1486,6 +1490,14 @@ def process_webhook(data):
                     m['tti_6h'] = parsed_tti
                     m['tti_6h_ts'] = now_ts
                     logger.info(f"[TTI 6H] {symbol} = {parsed_tti}")
+                    evaluate_tti_zone_alert(
+                        symbol,
+                        '6h',
+                        parsed_tti,
+                        price=price,
+                        exchange_name=exchange_name,
+                        event_id=event_id,
+                    )
                 elif tf == '2h':
                     m['tti_2h'] = parsed_tti
                     m['tti_2h_ts'] = now_ts
@@ -1494,8 +1506,9 @@ def process_webhook(data):
                     m['tti_1d'] = parsed_tti
                     m['tti_1d_ts'] = now_ts
                     logger.info(f"[TTI 1D] {symbol} = {parsed_tti}")
-                    evaluate_tti_1d_zone_alert(
+                    evaluate_tti_zone_alert(
                         symbol,
+                        '1d',
                         parsed_tti,
                         price=price,
                         exchange_name=exchange_name,
@@ -2960,9 +2973,12 @@ def fmt_sig(value):
     return 'NEUTRE'
 
 
-def evaluate_tti_1d_zone_alert(symbol, tti_value, price=0.0, exchange_name=None, event_id=None):
-    """Alerte info quand TTI 1D passe en zone bull/bear, qualite si Context 1D aligne."""
-    if not is_trade_symbol(symbol):
+def evaluate_tti_zone_alert(symbol, tf, tti_value, price=0.0, exchange_name=None, event_id=None):
+    """Alerte info quand TTI 6H/1D passe en zone bull/bear sur toute la watchlist."""
+    if symbol not in all_known_symbols():
+        return False
+    tf = normalize_tf(tf)
+    if tf not in ('6h', '1d'):
         return False
     if tti_value not in ('bull', 'bear'):
         return False
@@ -2971,39 +2987,48 @@ def evaluate_tti_1d_zone_alert(symbol, tti_value, price=0.0, exchange_name=None,
     m = MOMENTUM_STATE[symbol]
     direction = 'LONG' if tti_value == 'bull' else 'SHORT'
     exp_ctx = 'buy' if direction == 'LONG' else 'sell'
-    ctx_1d = ST_CONTEXT_1D.get(symbol)
-    ctx_1d_fresh = is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
-    ctx_1d_quality = ctx_1d_fresh and ctx_1d == exp_ctx
-    event_key = event_id or f"tti_1d_zone_{symbol}_{int(time.time())}_{tti_value}"
+    tf_label = '6H' if tf == '6h' else '1D'
+    stat_key = 'TTI6H' if tf == '6h' else 'TTI1D'
+    max_age = 18 * 3600 if tf == '6h' else 36 * 3600
+    cooldown = 3 * 3600 if tf == '6h' else 12 * 3600
+    if tf == '6h':
+        ctx_value = m.get('st_context_6h')
+        ctx_ts = m.get('st_context_6h_ts')
+    else:
+        ctx_value = ST_CONTEXT_1D.get(symbol)
+        ctx_ts = m.get('st_context_1d_ts')
+    ctx_fresh = is_signal_fresh(ctx_ts, max_age)
+    ctx_quality = ctx_fresh and ctx_value == exp_ctx
+    event_key = event_id or f"tti_{tf}_zone_{symbol}_{int(time.time())}_{tti_value}"
 
     logger.info(
-        f"[TTI 1D ALERT CHECK] {symbol} dir={direction} "
-        f"tti1d={tti_value} ctx1d={ctx_1d}/{exp_ctx} fresh={ctx_1d_fresh} quality={ctx_1d_quality}"
+        f"[TTI {tf_label} ALERT CHECK] {symbol} dir={direction} "
+        f"tti={tti_value} ctx={ctx_value}/{exp_ctx} fresh={ctx_fresh} quality={ctx_quality}"
     )
 
-    if not should_send(symbol, f"tti_1d_zone_{tti_value}", event_id=event_key, cooldown=12 * 3600):
+    if not should_send(symbol, f"tti_{tf}_zone_{tti_value}", event_id=event_key, cooldown=cooldown):
         return False
 
     emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
     quality_line = (
-        "\u2b50 <b>ALERTE HAUTE QUALITE: ST Context 1D aligne</b>\n\n"
-        if ctx_1d_quality else ""
+        f"\u2b50 <b>ALERTE HAUTE QUALITE: ST Context {tf_label} aligne</b>\n\n"
+        if ctx_quality else ""
     )
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
     send_telegram(
-        f"{emoji} <b>[TTI 1D - ZONE]</b> {symbol}\n"
+        f"{emoji} <b>[TTI {tf_label} - ZONE]</b> {symbol}\n"
         f"--------------------\n"
         f"{quality_line}"
         f"Direction: {direction}\n"
         f"Price: ${format_price(price)}\n"
         f"Exchange: {exchange_name.upper()}\n"
         f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-        f"[OK] TTI 1D: {tti_value.upper()}\n"
-        f"[QUALITE] ST Context 1D: {(ctx_1d or 'NEUTRE').upper() if ctx_1d_quality else (ctx_1d or 'NEUTRE').upper()}\n"
+        f"[OK] TTI {tf_label}: {tti_value.upper()}\n"
+        f"[QUALITE] ST Context {tf_label}: {(ctx_value or 'NEUTRE').upper()}\n"
         f"{get_market_context_info()}",
         ntfy=True,
     )
-    track_alert(symbol, 'TTI1D')
+    track_alert(symbol, stat_key)
     return True
 
 
@@ -4350,6 +4375,9 @@ def check_prep_alerts():
 
 def bias4h_report_scheduler():
     """Envoie toutes les 4H le rapport des confluences conservees."""
+    if not CONFIG.get('ENABLE_CONFLUENCE_REPORT', False):
+        logger.info("[CONFLUENCES] Rapport desactive")
+        return
     logger.info("📊 Scheduler rapport confluences demarre (toutes les 4H)")
     # Attendre 10 minutes après démarrage pour que les données soient chargées
     time.sleep(600)
@@ -4699,8 +4727,11 @@ def startup():
                 send_info('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont désactivés.\nConfigurer PUBLIC_BASE_URL sur Railway.')
         except Exception as e:
             logger.warning(f'⚠️ Telegram webhook setup: {e}')
-        bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)
-        bias4h_thread.start()
+        if CONFIG.get('ENABLE_CONFLUENCE_REPORT', False):
+            bias4h_thread = threading.Thread(target=bias4h_report_scheduler, daemon=True)
+            bias4h_thread.start()
+        else:
+            logger.info("[CONFLUENCES] Scheduler non demarre: rapport desactive")
 
         prep_thread = threading.Thread(target=prep_report_scheduler, daemon=True)
         prep_thread.start()

@@ -90,6 +90,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V3': True,
     'ENABLE_DAILY': True,
+    'ENABLE_SCALP_RELAY': os.environ.get('ENABLE_SCALP_RELAY', '0') == '1',
 }
 
 # ============================================================================ #
@@ -1407,7 +1408,11 @@ def process_webhook(data):
 
         if alert_type == 'st_context':
             parsed_ctx = parse_st_context_value(val)
-            if tf == '1h':
+            if tf == '1m':
+                m['st_context_1m'] = parsed_ctx
+                m['st_context_1m_ts'] = now_ts
+                logger.info(f"[CTX 1M] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
+            elif tf == '1h':
                 m['st_context_1h'] = parsed_ctx
                 m['st_context_1h_ts'] = now_ts
                 logger.info(f"[CTX 1H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
@@ -1902,10 +1907,13 @@ def process_webhook(data):
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
-            (alert_type == 'supertrend' and tf in ('1h', '2h', '30m'))
-            or (alert_type == 'st_context' and tf in ('1m', '3m', '5m', '10m', '1h', '30m'))
-            or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
-            or (alert_type == 'bias' and tf == '2h')
+            CONFIG.get('ENABLE_SCALP_RELAY', False)
+            and (
+                (alert_type == 'supertrend' and tf in ('1h', '2h', '30m'))
+                or (alert_type == 'st_context' and tf in ('1m', '3m', '5m', '10m', '1h', '30m'))
+                or (alert_type == 'st_context_lt' and tf in ('1m', '5m'))
+                or (alert_type == 'bias' and tf == '2h')
+            )
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}

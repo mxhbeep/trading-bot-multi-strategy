@@ -872,41 +872,81 @@ def tv_required_signals():
             'label': 'ST Context 1m',
             'alert_type': 'st_context',
             'tf': '1m',
-            'max_age': 5 * 60,
-            'warmup': 10 * 60,
+            'max_age': 60 * 60,
+            'warmup': 90 * 60,
             'scope': 'active',
+            'symbol_max_age': {
+                'CVX/USDT': 3 * 3600,
+                'CRV/USDT': 3 * 3600,
+            },
+            'symbol_warmup': {
+                'CVX/USDT': 3 * 3600,
+                'CRV/USDT': 3 * 3600,
+            },
         },
         {
             'label': 'ST Context 3m',
             'alert_type': 'st_context',
             'tf': '3m',
-            'max_age': 10 * 60,
-            'warmup': 20 * 60,
+            'max_age': 90 * 60,
+            'warmup': 2 * 3600,
             'scope': 'active',
+            'symbol_max_age': {
+                'CVX/USDT': 4 * 3600,
+                'CRV/USDT': 4 * 3600,
+            },
+            'symbol_warmup': {
+                'CVX/USDT': 4 * 3600,
+                'CRV/USDT': 4 * 3600,
+            },
         },
         {
             'label': 'ST Context 10m',
             'alert_type': 'st_context',
             'tf': '10m',
-            'max_age': 30 * 60,
-            'warmup': 45 * 60,
+            'max_age': 2 * 3600,
+            'warmup': 3 * 3600,
             'scope': 'active',
+            'symbol_max_age': {
+                'CVX/USDT': 6 * 3600,
+                'CRV/USDT': 6 * 3600,
+            },
+            'symbol_warmup': {
+                'CVX/USDT': 6 * 3600,
+                'CRV/USDT': 6 * 3600,
+            },
         },
         {
             'label': 'Range Filter 1m',
             'alert_type': 'range_filter',
             'tf': '1m',
-            'max_age': 5 * 60,
-            'warmup': 10 * 60,
+            'max_age': 6 * 3600,
+            'warmup': 6 * 3600,
             'scope': 'active',
+            'symbol_max_age': {
+                'CVX/USDT': 12 * 3600,
+                'CRV/USDT': 12 * 3600,
+            },
+            'symbol_warmup': {
+                'CVX/USDT': 12 * 3600,
+                'CRV/USDT': 12 * 3600,
+            },
         },
         {
             'label': 'Range Filter 3m',
             'alert_type': 'range_filter',
             'tf': '3m',
-            'max_age': 10 * 60,
-            'warmup': 20 * 60,
+            'max_age': 6 * 3600,
+            'warmup': 6 * 3600,
             'scope': 'active',
+            'symbol_max_age': {
+                'CVX/USDT': 12 * 3600,
+                'CRV/USDT': 12 * 3600,
+            },
+            'symbol_warmup': {
+                'CVX/USDT': 12 * 3600,
+                'CRV/USDT': 12 * 3600,
+            },
         },
     ]
 
@@ -937,9 +977,12 @@ def tv_signal_watchdog():
             stale = []
             for symbol in tv_watchdog_symbols(req):
                 ts = signal_ts.get(tv_signal_key(symbol, req['alert_type'], req['tf']))
+                max_age = req.get('symbol_max_age', {}).get(symbol, req['max_age'])
+                warmup = req.get('symbol_warmup', {}).get(symbol, req['warmup'])
                 if ts is None:
-                    missing.append(symbol.replace('/USDT', ''))
-                elif now - float(ts) > req['max_age']:
+                    if uptime >= warmup:
+                        missing.append(symbol.replace('/USDT', ''))
+                elif now - float(ts) > max_age:
                     stale.append((symbol.replace('/USDT', ''), (now - float(ts)) / 3600))
             if missing or stale:
                 details = []

@@ -89,8 +89,9 @@ CONFIG = {
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_LEGACY': False,
-    'ENABLE_PULSE_V2': True,
-    'ENABLE_DAILY': False,
+    'ENABLE_PULSE_V2': False,
+    'ENABLE_PULSE_V3': True,
+    'ENABLE_DAILY': True,
     'ENABLE_CONFLUENCE_REPORT': False,
 }
 
@@ -114,7 +115,8 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
         WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'PULSEV2': 0, 'TTI6H': 0, 'TTI1D': 0, 'MOMENTUM': 0,
+            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'PULSEV2': 0, 'PULSEV3': 0,
+            'TTI6H': 0, 'TTI1D': 0, 'RPZ': 0, 'MOMENTUM': 0,
         }
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
@@ -669,15 +671,12 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY principale: flip ST AI 30m + ST AI 1D + Bias 6H + ST Context 30m\n"
-        "DAILY secondaire: Bias 1D + ST Context 2H + ST Context 10m\n"
-        "DAILY pyramiding: RF10m + ST AI 2H, bloque si ST Context 10m oppose\n\n"
-        "PULSE V2 principale: RMI 6H + TTI 6H/2H + ST Context 3m\n"
-        "PULSE V2 secondaire: Bias 6H + RMI 2H + TTI 6H/2H + ST Context 3m\n"
-        "PULSE V2 TP: rappel si TTI oppose apparait pendant une position\n\n"
-        "TTI 6H/1D: alerte zone bull/bear sur toute la watchlist, qualite si ST Context meme TF aligne\n\n"
-        "CONTEXT1D: RF30m + ST Context 1D + ST Context 30m + ST AI 1D\n"
-        "TREND2D: RF30m + ST Context 2H + ST Context 10m + Bias 2D, bloque si ST Context 1D oppose\n"
+        "DAILY: RPZ 6H + RPZ 30m + ST Context 10m + flip RF10m\n"
+        "DAILY PREP: alerte si une seule condition manque\n"
+        "DAILY PYRA: RPZ 30m + ST Context 10m + flip RF10m, ou RPZ 30m + flip RF30m\n\n"
+        "PULSE V3: RPZ 2H + RPZ 30m + ST Context 1m + flip RF1m\n"
+        "PULSE V3 PYRA: flip RF3m, bloque seulement si ST Context 3m oppose\n\n"
+        "RPZ 6H/2H/30m: radar large sur toute la watchlist\n"
         "--------------------\n"
         f"{now}"
     )
@@ -704,8 +703,10 @@ def send_weekly_report():
     total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
     total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
     total_pulse_v2   = sum(s.get('PULSEV2', 0)      for s in WEEKLY_STATS.values())
+    total_pulse_v3   = sum(s.get('PULSEV3', 0)      for s in WEEKLY_STATS.values())
     total_tti_6h     = sum(s.get('TTI6H', 0)        for s in WEEKLY_STATS.values())
     total_tti_1d     = sum(s.get('TTI1D', 0)        for s in WEEKLY_STATS.values())
+    total_rpz        = sum(s.get('RPZ', 0)          for s in WEEKLY_STATS.values())
     total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
     msg += (
@@ -716,8 +717,10 @@ def send_weekly_report():
         f"  — SWING: {total_swing}\n"
         f"  — PULSE: {total_pulse}\n"
         f"  — PULSEV2: {total_pulse_v2}\n"
+        f"  — PULSEV3: {total_pulse_v3}\n"
         f"  — TTI6H: {total_tti_6h}\n"
         f"  — TTI1D: {total_tti_1d}\n"
+        f"  — RPZ: {total_rpz}\n"
         f"  — SCALP: {total_scalp}\n"
         f"  — MOMENTUM: {total_momentum}\n\n"
     )
@@ -741,8 +744,10 @@ def send_weekly_report():
             if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
             if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
             if stats.get('PULSEV2', 0):     details.append(f"PL2:{stats['PULSEV2']}")
+            if stats.get('PULSEV3', 0):     details.append(f"PL3:{stats['PULSEV3']}")
             if stats.get('TTI6H', 0):       details.append(f"TTI6H:{stats['TTI6H']}")
             if stats.get('TTI1D', 0):       details.append(f"TTI1D:{stats['TTI1D']}")
+            if stats.get('RPZ', 0):         details.append(f"RPZ:{stats['RPZ']}")
             if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
             msg += f"  —{base}: {sum(stats.values())} ({', '.join(details)})\n"
     else:
@@ -855,25 +860,36 @@ def track_tv_signal(symbol, alert_type, tf):
 def tv_required_signals():
     return [
         {
-            'label': 'ST AI 6H',
-            'alert_type': 'supertrend',
+            'label': 'RPZ 6H',
+            'alert_type': 'rpz',
             'tf': '6h',
-            'max_age': 9 * 3600,
-            'warmup': 10 * 3600,
+            'max_age': 18 * 3600,
+            'warmup': 19 * 3600,
+            'scope': 'all',
         },
         {
-            'label': 'ST AI 1D',
-            'alert_type': 'supertrend',
-            'tf': '1d',
-            'max_age': 36 * 3600,
-            'warmup': 37 * 3600,
+            'label': 'RPZ 2H',
+            'alert_type': 'rpz',
+            'tf': '2h',
+            'max_age': 6 * 3600,
+            'warmup': 7 * 3600,
+            'scope': 'all',
         },
         {
-            'label': 'ST AI 30m',
-            'alert_type': 'supertrend',
+            'label': 'RPZ 30m',
+            'alert_type': 'rpz',
             'tf': '30m',
             'max_age': 90 * 60,
             'warmup': 2 * 3600,
+            'scope': 'all',
+        },
+        {
+            'label': 'ST Context 1m',
+            'alert_type': 'st_context',
+            'tf': '1m',
+            'max_age': 5 * 60,
+            'warmup': 10 * 60,
+            'scope': 'active',
         },
         {
             'label': 'ST Context 3m',
@@ -881,6 +897,7 @@ def tv_required_signals():
             'tf': '3m',
             'max_age': 10 * 60,
             'warmup': 20 * 60,
+            'scope': 'active',
         },
         {
             'label': 'ST Context 10m',
@@ -888,50 +905,31 @@ def tv_required_signals():
             'tf': '10m',
             'max_age': 30 * 60,
             'warmup': 45 * 60,
+            'scope': 'active',
         },
         {
-            'label': 'ST Context 30m',
-            'alert_type': 'st_context',
-            'tf': '30m',
-            'max_age': 90 * 60,
-            'warmup': 2 * 3600,
+            'label': 'Range Filter 1m',
+            'alert_type': 'range_filter',
+            'tf': '1m',
+            'max_age': 5 * 60,
+            'warmup': 10 * 60,
+            'scope': 'active',
         },
         {
-            'label': 'ST Context 2H',
-            'alert_type': 'st_context',
-            'tf': '2h',
-            'max_age': 6 * 3600,
-            'warmup': 7 * 3600,
-        },
-        {
-            'label': 'ST Context 1D',
-            'alert_type': 'st_context',
-            'tf': '1d',
-            'max_age': 36 * 3600,
-            'warmup': 37 * 3600,
-        },
-        {
-            'label': 'TTI 1D',
-            'alert_type': 'tti',
-            'tf': '1d',
-            'max_age': 36 * 3600,
-            'warmup': 37 * 3600,
-        },
-        {
-            'label': 'TTI 6H',
-            'alert_type': 'tti',
-            'tf': '6h',
-            'max_age': 18 * 3600,
-            'warmup': 19 * 3600,
-        },
-        {
-            'label': 'TTI 2H',
-            'alert_type': 'tti',
-            'tf': '2h',
-            'max_age': 6 * 3600,
-            'warmup': 7 * 3600,
+            'label': 'Range Filter 3m',
+            'alert_type': 'range_filter',
+            'tf': '3m',
+            'max_age': 10 * 60,
+            'warmup': 20 * 60,
+            'scope': 'active',
         },
     ]
+
+
+def tv_watchdog_symbols(req):
+    if req.get('scope') == 'all':
+        return sorted(get_tracked_symbols())
+    return sorted(s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp'))
 
 
 def tv_signal_watchdog():
@@ -945,7 +943,6 @@ def tv_signal_watchdog():
         uptime = now - bot_start_time
         issues = []
         with STATE_LOCK:
-            symbols = list(CONFIG['SYMBOLS'].keys())
             signal_ts = dict(LAST_WEBHOOK_SIGNAL_TS)
 
         for req in tv_required_signals():
@@ -953,7 +950,7 @@ def tv_signal_watchdog():
                 continue
             missing = []
             stale = []
-            for symbol in symbols:
+            for symbol in tv_watchdog_symbols(req):
                 ts = signal_ts.get(tv_signal_key(symbol, req['alert_type'], req['tf']))
                 if ts is None:
                     missing.append(symbol.replace('/USDT', ''))
@@ -1090,6 +1087,14 @@ def parse_rmi_value(val):
 def parse_tti_value(val):
     return parse_directional_trend_value(val, allow_sideways=True)
 
+def parse_rpz_value(val):
+    parsed = parse_directional_trend_value(val, allow_sideways=False)
+    if parsed == 'bull':
+        return 'buy'
+    if parsed == 'bear':
+        return 'sell'
+    return None
+
 def parse_ema200_value(val):
     normalized = str(val).strip().lower()
     if normalized in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
@@ -1130,6 +1135,9 @@ def normalize_alert_type(alert_type_raw):
         'rmits': 'rmi',
         'rmi_trend': 'rmi',
         'rmi_trend_sniper': 'rmi',
+        'reversal_probability_zone': 'rpz',
+        'reversal_probability': 'rpz',
+        'rpz_zone': 'rpz',
     }
     return type_aliases.get(normalized, normalized)
 
@@ -1225,6 +1233,9 @@ def init_symbol_states(symbol):
             'st_context_10m': None, 'st_context_lt_10m': None,
             'rmi_6h': None, 'rmi_6h_ts': None, 'rmi_2h': None, 'rmi_2h_ts': None,
             'tti_1d': None, 'tti_1d_ts': None, 'tti_6h': None, 'tti_6h_ts': None, 'tti_2h': None, 'tti_2h_ts': None,
+            'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_2h': None, 'rpz_2h_ts': None, 'rpz_30m': None, 'rpz_30m_ts': None,
+            'range_filter_1m': None, 'range_filter_1m_ts': None, 'last_range_filter_1m_signal_ts': None,
+            'range_filter_3m': None, 'range_filter_3m_ts': None, 'last_range_filter_3m_signal_ts': None,
             'range_filter_10m': None, 'range_filter_10m_ts': None, 'last_range_filter_10m_signal_ts': None,
             'range_filter_30m': None, 'range_filter_30m_ts': None, 'last_range_filter_30m_signal_ts': None,
         }
@@ -1521,6 +1532,18 @@ def process_webhook(data):
                     exchange_name=exchange_name,
                     event_id=event_id,
                 )
+
+        if alert_type == 'rpz':
+            parsed_rpz = parse_rpz_value(val)
+            if parsed_rpz in ('buy', 'sell'):
+                if tf in ('6h', '2h', '30m'):
+                    m[f'rpz_{tf}'] = parsed_rpz
+                    m[f'rpz_{tf}_ts'] = now_ts
+                    logger.info(f"[RPZ {tf.upper()}] {symbol} = {parsed_rpz}")
+                else:
+                    logger.info(f"[RPZ] {symbol} tf={tf} ignore: timeframe non utilise")
+            else:
+                logger.warning(f"[WARN] RPZ valeur invalide pour {symbol}: '{val}'")
 
         if radar_only:
             check_daily_radar_report()
@@ -1819,7 +1842,7 @@ def process_webhook(data):
         # Bonus tres haute qualite : ST Context 1D aligne
         # Anti-chop : ST Context LT 30m meme sens => bloque
         # ========================================================================
-        if CONFIG.get('ENABLE_DAILY', True) and strat in ['daily', 'all']:
+        if False and CONFIG.get('ENABLE_DAILY', True) and strat in ['daily', 'all']:
             m = MOMENTUM_STATE[symbol]
 
             # Remplacee par l'entree DAILY sur Range Filter 30m.
@@ -2279,19 +2302,51 @@ def process_webhook(data):
                     m['st_6h_ts'] = time.time()
                     MOMENTUM_STATE[symbol] = m
 
-        # Support optionnel des alertes TradingView Range Filter. Le calcul OKX
-        # local reste la source principale, mais ce chemin couvre notamment les
-        # actifs sans bougies OKX directes.
-        if alert_type == 'range_filter' and tf in ('10m', '30m'):
+        # Support optionnel des alertes TradingView Range Filter. RF10/RF30
+        # peuvent aussi venir des schedulers OKX, RF1/RF3 viennent de TradingView.
+        if alert_type == 'range_filter' and tf in ('1m', '3m', '10m', '30m'):
             range_dir = parse_range_filter_value(val)
             if range_dir is not None:
                 range_event = data.get('event_id') or event_id
+                with STATE_LOCK:
+                    init_symbol_states(symbol)
+                    m = MOMENTUM_STATE[symbol]
+                    m[f'range_filter_{tf}'] = range_dir
+                    m[f'range_filter_{tf}_ts'] = now_ts
+                    m[f'last_range_filter_{tf}_signal_ts'] = range_event
                 if tf == '10m':
                     evaluate_range_filter_10m(
                         symbol, range_dir, range_event, price, exchange_name,
                         event_id=event_id,
                     )
+                    evaluate_daily_rpz(
+                        symbol,
+                        trigger_dir=range_dir,
+                        price=price,
+                        exchange_name=exchange_name,
+                        event_id=event_id,
+                        source='rf10m_webhook',
+                    )
+                    evaluate_daily_rpz_pyramiding_rf10(
+                        symbol, range_dir, price, exchange_name, event_id=event_id,
+                    )
+                elif tf == '1m':
+                    evaluate_pulse_v3(
+                        symbol,
+                        trigger_dir=range_dir,
+                        price=price,
+                        exchange_name=exchange_name,
+                        event_id=event_id,
+                        source='rf1m_webhook',
+                    )
+                elif tf == '3m':
+                    evaluate_pulse_v3_pyramiding_rf3(
+                        symbol, range_dir, price, exchange_name, event_id=event_id,
+                    )
                 else:
+                    evaluate_daily_rpz_pyramiding_rf30(
+                        symbol, range_dir, price, exchange_name, event_id=event_id,
+                    )
                     evaluate_pulse_range_filter_30m(
                         symbol, range_dir, range_event, price, exchange_name,
                         event_id=event_id,
@@ -2305,40 +2360,53 @@ def process_webhook(data):
                         event_id=event_id,
                     )
 
-        if (
-            CONFIG.get('ENABLE_DAILY', True)
-            and
-            strat in ['daily', 'all']
-            and alert_type == 'supertrend'
-            and tf == '30m'
-            and st_ai_30m_flipped_this_call
+        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
+            (alert_type == 'rpz' and tf in ('6h', '30m'))
+            or (alert_type == 'st_context' and tf == '10m')
         ):
-            evaluate_daily_primary_confluence(
+            evaluate_daily_rpz(
                 symbol,
                 price=price,
                 exchange_name=exchange_name,
                 event_id=event_id,
-                source="st_ai_30m_flip",
+                source=f"{alert_type}_{tf}",
+            )
+            init_symbol_states(symbol)
+            m = MOMENTUM_STATE[symbol]
+            rf10 = m.get('range_filter_10m')
+            if rf10 in ('buy', 'sell') and is_signal_fresh(m.get('range_filter_10m_ts'), 30 * 60):
+                evaluate_daily_rpz_pyramiding_rf10(
+                    symbol,
+                    rf10,
+                    price=price,
+                    exchange_name=exchange_name,
+                    event_id=f"daily_pyra_replay_rf10_{symbol}_{tf}_{alert_type}_{event_id}",
+                )
+
+        if CONFIG.get('ENABLE_PULSE_V3', True) and is_trade_symbol(symbol) and (
+            (alert_type == 'rpz' and tf in ('2h', '30m'))
+            or (alert_type == 'st_context' and tf == '1m')
+        ):
+            evaluate_pulse_v3(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+                source=f"{alert_type}_{tf}",
             )
 
-        if (
-            CONFIG.get('ENABLE_DAILY', True)
-            and
-            alert_type in ('st_context', 'st_context_lt', 'bias', 'supertrend')
-            and tf in ('1d', '2d', '2h', '10m', '30m', '6h')
-        ):
-            evaluate_daily_primary_after_okx(
-                symbol,
-                price=price,
-                exchange_name=exchange_name,
-            )
-            replay_recent_range_filter_30m(
-                symbol,
-                price=price,
-                exchange_name=exchange_name,
-                event_id=f"webhook_rf30_replay_{symbol}_{tf}_{alert_type}_{event_id}",
-                source=f"webhook_{alert_type}_{tf}",
-            )
+        if CONFIG.get('ENABLE_PULSE_V3', True) and is_trade_symbol(symbol) and alert_type == 'st_context' and tf == '3m':
+            init_symbol_states(symbol)
+            m = MOMENTUM_STATE[symbol]
+            rf3 = m.get('range_filter_3m')
+            if rf3 in ('buy', 'sell') and is_signal_fresh(m.get('range_filter_3m_ts'), 10 * 60):
+                evaluate_pulse_v3_pyramiding_rf3(
+                    symbol,
+                    rf3,
+                    price=price,
+                    exchange_name=exchange_name,
+                    event_id=f"pulsev3_pyra_replay_rf3_{symbol}_{event_id}",
+                )
 
         if (
             CONFIG.get('ENABLE_PULSE_V2', True)
@@ -3383,6 +3451,269 @@ def _trade_direction_to_bias(direction):
     return 'bull' if direction == 'LONG' else 'bear'
 
 
+def _state_signal(m, field, max_age):
+    value = m.get(field)
+    fresh = is_signal_fresh(m.get(f'{field}_ts'), max_age)
+    return value, fresh
+
+
+def _ctx_label(value):
+    return (value or 'NEUTRE').upper()
+
+
+def _rpz_condition(m, tf, exp_ctx):
+    max_age = {'6h': 18 * 3600, '2h': 6 * 3600, '30m': 90 * 60}.get(tf, 0)
+    value, fresh = _state_signal(m, f'rpz_{tf}', max_age)
+    return value, fresh, bool(fresh and value == exp_ctx)
+
+
+def _st_context_condition(m, tf, exp_ctx):
+    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '30m': 90 * 60}.get(tf, 0)
+    value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
+    return value, fresh, bool(fresh and value == exp_ctx)
+
+
+def _range_filter_condition(m, tf, exp_ctx):
+    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '30m': 90 * 60}.get(tf, 0)
+    value, fresh = _state_signal(m, f'range_filter_{tf}', max_age)
+    return value, fresh, bool(fresh and value == exp_ctx)
+
+
+def _send_strategy_pyramiding(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines, cooldown=1800):
+    pos_key = f"{symbol}_{strategy}"
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(pos_key)
+        if not (
+            pos
+            and pos.get('direction') == direction
+            and PYRA_ENABLED.get(pos_key, False)
+            and should_send(symbol, f"{strategy.lower()}_pyra_{signal_type}_{direction}", event_id=event_id, cooldown=cooldown)
+        ):
+            return False
+        pos['entry_count'] = int(pos.get('entry_count', 1)) + 1
+        count = pos['entry_count']
+
+    emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
+    send_telegram(
+        f"{emoji} <b>[{strategy} - PYRAMIDING #{count}]</b> {symbol}\n"
+        f"--------------------\n"
+        f"Direction: {direction}\n"
+        f"Price: ${format_price(price)}\n"
+        f"Exchange: {exchange_name.upper()}\n"
+        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+        + "\n".join(detail_lines) + "\n" + get_market_context_info(),
+        ntfy=True,
+    )
+    persist_runtime_state()
+    logger.info(f"[{strategy}] Pyramiding {signal_type} #{count}: {symbol} {direction}")
+    return True
+
+
+def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+    """DAILY RPZ: RPZ 6H + RPZ 30m + ST Context 10m + flip RF10m."""
+    if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+
+    directions = [trigger_dir] if trigger_dir in ('buy', 'sell') else ['buy', 'sell']
+    opened = False
+    for exp_ctx in directions:
+        direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
+        rpz6, rpz6_fresh, rpz6_ok = _rpz_condition(m, '6h', exp_ctx)
+        rpz30, rpz30_fresh, rpz30_ok = _rpz_condition(m, '30m', exp_ctx)
+        ctx10, ctx10_fresh, ctx10_ok = _st_context_condition(m, '10m', exp_ctx)
+        rf10, rf10_fresh, rf10_ok = _range_filter_condition(m, '10m', exp_ctx)
+        checks = {
+            'RPZ 6H': rpz6_ok,
+            'RPZ 30m': rpz30_ok,
+            'ST Context 10m': ctx10_ok,
+            'Flip RF10m': rf10_ok,
+        }
+
+        logger.info(
+            f"[DAILY RPZ CHECK] {symbol} source={source} dir={direction} "
+            f"rpz6={rpz6}/{exp_ctx} fresh={rpz6_fresh} ok={rpz6_ok} "
+            f"rpz30={rpz30}/{exp_ctx} fresh={rpz30_fresh} ok={rpz30_ok} "
+            f"ctx10={ctx10}/{exp_ctx} fresh={ctx10_fresh} ok={ctx10_ok} "
+            f"rf10={rf10}/{exp_ctx} fresh={rf10_fresh} ok={rf10_ok}"
+        )
+
+        missing = [name for name, ok in checks.items() if not ok]
+        if not missing:
+            event_key = event_id or f"daily_rpz_{symbol}_{int(time.time())}_{exp_ctx}"
+            opened = _open_strategy_entry(
+                symbol,
+                'DAILY',
+                direction,
+                'rpz_rf10m',
+                event_key,
+                price,
+                exchange_name,
+                [
+                    f"[OK] RPZ 6H: {_ctx_label(rpz6)}",
+                    f"[OK] RPZ 30m: {_ctx_label(rpz30)}",
+                    f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
+                    f"[OK] Flip Range Filter 10m: {_ctx_label(rf10)}",
+                ],
+                cooldown=14400,
+            ) or opened
+        elif len(missing) == 1 and should_send(
+            symbol,
+            f"daily_rpz_prep_{exp_ctx}_{missing[0]}",
+            event_id=None,
+            cooldown=1800,
+        ):
+            send_info(
+                f"<b>[PREP DAILY]</b> {symbol}\n"
+                f"--------------------\n"
+                f"Direction: {direction}\n"
+                f"Price: ${format_price(price)}\n"
+                f"<b>Il manque: {missing[0]}</b>\n\n"
+                f"RPZ 6H: {_ctx_label(rpz6)} {'OK' if rpz6_ok else 'WAIT'}\n"
+                f"RPZ 30m: {_ctx_label(rpz30)} {'OK' if rpz30_ok else 'WAIT'}\n"
+                f"ST Context 10m: {_ctx_label(ctx10)} {'OK' if ctx10_ok else 'WAIT'}\n"
+                f"Range Filter 10m: {_ctx_label(rf10)} {'OK' if rf10_ok else 'WAIT'}"
+            )
+    return opened
+
+
+def evaluate_daily_rpz_pyramiding_rf10(symbol, range_dir, price=0.0, exchange_name=None, event_id=None):
+    """DAILY pyramiding principal: RPZ 30m + ST Context 10m + flip RF10m."""
+    if range_dir not in ('buy', 'sell') or not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    rpz30, _, rpz30_ok = _rpz_condition(m, '30m', range_dir)
+    ctx10, _, ctx10_ok = _st_context_condition(m, '10m', range_dir)
+    if not (rpz30_ok and ctx10_ok):
+        logger.info(f"[DAILY PYRA RF10 BLOCKED] {symbol} dir={direction} rpz30={rpz30} ok={rpz30_ok} ctx10={ctx10} ok={ctx10_ok}")
+        return False
+    return _send_strategy_pyramiding(
+        symbol,
+        'DAILY',
+        direction,
+        'rpz30_ctx10_rf10',
+        event_id or f"daily_pyra_rf10_{symbol}_{int(time.time())}_{range_dir}",
+        price,
+        exchange_name,
+        [
+            f"[OK] RPZ 30m: {_ctx_label(rpz30)}",
+            f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
+            f"[OK] Flip Range Filter 10m: {range_dir.upper()}",
+        ],
+        cooldown=1800,
+    )
+
+
+def evaluate_daily_rpz_pyramiding_rf30(symbol, range_dir, price=0.0, exchange_name=None, event_id=None):
+    """DAILY pyramiding secondaire: RPZ 30m + flip RF30m."""
+    if range_dir not in ('buy', 'sell') or not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    rpz30, _, rpz30_ok = _rpz_condition(m, '30m', range_dir)
+    if not rpz30_ok:
+        logger.info(f"[DAILY PYRA RF30 BLOCKED] {symbol} dir={direction} rpz30={rpz30} ok={rpz30_ok}")
+        return False
+    return _send_strategy_pyramiding(
+        symbol,
+        'DAILY',
+        direction,
+        'rpz30_rf30',
+        event_id or f"daily_pyra_rf30_{symbol}_{int(time.time())}_{range_dir}",
+        price,
+        exchange_name,
+        [
+            f"[OK] RPZ 30m: {_ctx_label(rpz30)}",
+            f"[OK] Flip Range Filter 30m: {range_dir.upper()}",
+        ],
+        cooldown=1800,
+    )
+
+
+def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+    """PULSE V3: RPZ 2H + RPZ 30m + ST Context 1m + flip RF1m."""
+    if not CONFIG.get('ENABLE_PULSE_V3', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    directions = [trigger_dir] if trigger_dir in ('buy', 'sell') else ['buy', 'sell']
+    opened = False
+    for exp_ctx in directions:
+        direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
+        rpz2, rpz2_fresh, rpz2_ok = _rpz_condition(m, '2h', exp_ctx)
+        rpz30, rpz30_fresh, rpz30_ok = _rpz_condition(m, '30m', exp_ctx)
+        ctx1, ctx1_fresh, ctx1_ok = _st_context_condition(m, '1m', exp_ctx)
+        rf1, rf1_fresh, rf1_ok = _range_filter_condition(m, '1m', exp_ctx)
+        entry_ok = rpz2_ok and rpz30_ok and ctx1_ok and rf1_ok
+
+        logger.info(
+            f"[PULSEV3 CHECK] {symbol} source={source} dir={direction} "
+            f"rpz2={rpz2}/{exp_ctx} fresh={rpz2_fresh} ok={rpz2_ok} "
+            f"rpz30={rpz30}/{exp_ctx} fresh={rpz30_fresh} ok={rpz30_ok} "
+            f"ctx1={ctx1}/{exp_ctx} fresh={ctx1_fresh} ok={ctx1_ok} "
+            f"rf1={rf1}/{exp_ctx} fresh={rf1_fresh} ok={rf1_ok} entry={entry_ok}"
+        )
+        if not entry_ok:
+            continue
+
+        event_key = event_id or f"pulsev3_{symbol}_{int(time.time())}_{exp_ctx}"
+        opened = _open_strategy_entry(
+            symbol,
+            'PULSEV3',
+            direction,
+            'rpz_rf1m',
+            event_key,
+            price,
+            exchange_name,
+            [
+                f"[OK] RPZ 2H: {_ctx_label(rpz2)}",
+                f"[OK] RPZ 30m: {_ctx_label(rpz30)}",
+                f"[OK] ST Context 1m: {_ctx_label(ctx1)}",
+                f"[OK] Flip Range Filter 1m: {_ctx_label(rf1)}",
+            ],
+            cooldown=1800,
+        ) or opened
+    return opened
+
+
+def evaluate_pulse_v3_pyramiding_rf3(symbol, range_dir, price=0.0, exchange_name=None, event_id=None):
+    """PULSE V3 pyramiding: flip RF3m, bloque si ST Context 3m oppose frais."""
+    if range_dir not in ('buy', 'sell') or not CONFIG.get('ENABLE_PULSE_V3', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
+    opp_ctx = 'sell' if range_dir == 'buy' else 'buy'
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    ctx3, ctx3_fresh, _ = _st_context_condition(m, '3m', range_dir)
+    ctx3_opp_block = ctx3_fresh and ctx3 == opp_ctx
+    if ctx3_opp_block:
+        logger.info(f"[PULSEV3 PYRA BLOCKED] {symbol} dir={direction} ctx3={ctx3} oppose=True")
+        return False
+    return _send_strategy_pyramiding(
+        symbol,
+        'PULSEV3',
+        direction,
+        'rf3',
+        event_id or f"pulsev3_pyra_rf3_{symbol}_{int(time.time())}_{range_dir}",
+        price,
+        exchange_name,
+        [
+            f"[OK] Flip Range Filter 3m: {range_dir.upper()}",
+            f"[ANTI-CHOP] ST Context 3m oppose: {ctx3_opp_block} ({_ctx_label(ctx3)})",
+        ],
+        cooldown=1800,
+    )
+
+
 def _pulse_v2_tti_state(m, exp_bias):
     tti_6h = m.get('tti_6h')
     tti_2h = m.get('tti_2h')
@@ -3612,6 +3943,7 @@ def _evaluate_daily_range10m_pyramiding(symbol, range_dir, signal_ts, price, exc
 
 def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, event_id=None, source='webhook'):
     """Entree DAILY principale: flip ST AI 30m + ST AI 1D + Bias 6H + Context 30m."""
+    return False  # Ancienne DAILY desactivee; remplacee par evaluate_daily_rpz.
     if not CONFIG.get('ENABLE_DAILY', True):
         return False
     if not is_trade_symbol(symbol):
@@ -3678,6 +4010,7 @@ def evaluate_daily_primary_confluence(symbol, price=0.0, exchange_name=None, eve
 
 def evaluate_daily_primary_after_okx(symbol, price=0.0, exchange_name=None):
     """Rejoue DAILY apres recalcul OKX seulement si un vrai flip ST AI 30m est encore recent."""
+    return False  # Ancienne DAILY desactivee; remplacee par evaluate_daily_rpz.
     if not CONFIG.get('ENABLE_DAILY', True):
         return False
     init_symbol_states(symbol)
@@ -4256,16 +4589,18 @@ def update_indicators_for_symbol(symbol):
             event_id=f"okx_pulsev2_{symbol}_{int(time.time())}",
             source='okx_post_recalc',
         )
-        evaluate_daily_primary_after_okx(
+        evaluate_daily_rpz(
             symbol,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_daily_rpz_{symbol}_{int(time.time())}",
+            source='okx_post_recalc',
         )
-        replay_recent_range_filter_30m(
+        evaluate_pulse_v3(
             symbol,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_rf30_replay_{symbol}_{int(time.time())}",
+            event_id=f"okx_pulsev3_{symbol}_{int(time.time())}",
             source='okx_post_recalc',
         )
         relay_scalp_bias_1h(symbol, bias_1h, price)
@@ -4346,7 +4681,7 @@ def check_prep_alerts():
     # Condition : tout est pret sauf le flip Range Filter 10m.
     new_prep_daily = {'LONG': set(), 'SHORT': set()}
 
-    if CONFIG.get('ENABLE_DAILY', True):
+    if False and CONFIG.get('ENABLE_DAILY', True):
         for symbol, m in state_copy.items():
             if symbol not in symbols_conf:
                 continue
@@ -4371,7 +4706,7 @@ def check_prep_alerts():
     old_daily = PREP_STATE.get('DAILY', {'LONG': set(), 'SHORT': set()})
     new_d_long = new_prep_daily['LONG']
     new_d_short = new_prep_daily['SHORT']
-    if new_d_long != old_daily.get('LONG', set()) or new_d_short != old_daily.get('SHORT', set()):
+    if False and (new_d_long != old_daily.get('LONG', set()) or new_d_short != old_daily.get('SHORT', set())):
         lines = ["⏰<b>[PREP DAILY]</b>"]
         if new_d_long:
             lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_d_long)))
@@ -4510,6 +4845,13 @@ def range_filter_30m_scheduler():
                         f"[RANGE30M] Nouveau signal {symbol} "
                         f"dir={range_dir} ts={signal_ts} price={signal_price}"
                     )
+                    evaluate_daily_rpz_pyramiding_rf30(
+                        symbol,
+                        range_dir,
+                        price=signal_price,
+                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                        event_id=f"range30m_daily_rpz_{symbol}_{signal_ts}_{range_dir}",
+                    )
                     evaluate_pulse_range_filter_30m(
                         symbol,
                         range_dir,
@@ -4600,6 +4942,21 @@ def range_filter_10m_scheduler():
                         symbol, range_dir, signal_ts, price=signal_price,
                         exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
                         event_id=f"range10m_{symbol}_{signal_ts}_{range_dir}",
+                    )
+                    evaluate_daily_rpz(
+                        symbol,
+                        trigger_dir=range_dir,
+                        price=signal_price,
+                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                        event_id=f"range10m_daily_rpz_{symbol}_{signal_ts}_{range_dir}",
+                        source='rf10m_okx',
+                    )
+                    evaluate_daily_rpz_pyramiding_rf10(
+                        symbol,
+                        range_dir,
+                        price=signal_price,
+                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                        event_id=f"range10m_daily_pyra_{symbol}_{signal_ts}_{range_dir}",
                     )
                 except Exception as e:
                     logger.error(f"[RANGE10M] {symbol}: {e}")

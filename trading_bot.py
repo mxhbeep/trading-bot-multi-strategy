@@ -670,7 +670,7 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: RPZ 6H + RPZ 30m + ST Context 10m + flip RF10m\n"
-        "DAILY PREP: alerte si une seule condition manque\n"
+        "DAILY PREP: RPZ 6H + RPZ 30m obligatoires, alerte si ST Context 10m/RF10m manque\n"
         "DAILY PYRA: RPZ 30m + ST Context 10m + flip RF10m, ou RPZ 30m + flip RF30m\n\n"
         "PULSE V3: RPZ 2H + RPZ 30m + ST Context 1m + flip RF1m\n"
         "PULSE V3 PYRA: flip RF3m, bloque seulement si ST Context 3m oppose\n\n"
@@ -2709,18 +2709,20 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
                 ],
                 cooldown=14400,
             ) or opened
-        elif len(missing) == 1 and should_send(
+        elif rpz6_ok and rpz30_ok and missing and all(name in ('ST Context 10m', 'Flip RF10m') for name in missing) and should_send(
             symbol,
-            f"daily_rpz_prep_{exp_ctx}_{missing[0]}",
+            f"daily_rpz_prep_{exp_ctx}_{'_'.join(missing).replace(' ', '_')}",
             event_id=None,
             cooldown=1800,
         ):
+            missing_text = ", ".join(missing)
             send_info(
                 f"<b>[PREP DAILY]</b> {symbol}\n"
                 f"--------------------\n"
                 f"Direction: {direction}\n"
                 f"Price: ${format_price(price)}\n"
-                f"<b>Il manque: {missing[0]}</b>\n\n"
+                f"<b>Base RPZ OK : RPZ 6H + RPZ 30m alignes</b>\n"
+                f"<b>Il manque: {missing_text}</b>\n\n"
                 f"RPZ 6H: {_ctx_label(rpz6)} {'OK' if rpz6_ok else 'WAIT'}\n"
                 f"RPZ 30m: {_ctx_label(rpz30)} {'OK' if rpz30_ok else 'WAIT'}\n"
                 f"ST Context 10m: {_ctx_label(ctx10)} {'OK' if ctx10_ok else 'WAIT'}\n"

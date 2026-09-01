@@ -672,8 +672,8 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "2 DAILY principale: ZALT 2D + ST Context 2H + flip ZALT 2H\n"
         "2 DAILY secondaire: RPZ 2D + ZALT 1D + ST Context 2H + flip ZALT 2H\n"
-        "PULSE V4 principale: ST Context 30m + ST Context 10m + flip ZALT 10m\n"
-        "PULSE V4 secondaire: ST Context 10m + flip ZALT 30m\n\n"
+        "PULSE V4 principale: ZALT 6H + ST Context 30m + ST Context 10m + flip ZALT 10m\n"
+        "PULSE V4 info: flip ZALT 30m si ZALT 6H ou ZALT 2H + RPZ 6H aligne\n\n"
         "SCALP V3: gere par le scalpbot actif\n"
         "--------------------\n"
         f"{now}"
@@ -868,6 +868,22 @@ def tv_required_signals():
             'max_age': 3 * 24 * 3600,
             'warmup': 3 * 24 * 3600,
             'scope': 'all',
+        },
+        {
+            'label': 'ZALT 6H',
+            'alert_type': 'zalt',
+            'tf': '6h',
+            'max_age': 18 * 3600,
+            'warmup': 19 * 3600,
+            'scope': 'active',
+        },
+        {
+            'label': 'RPZ 6H',
+            'alert_type': 'rpz',
+            'tf': '6h',
+            'max_age': 18 * 3600,
+            'warmup': 19 * 3600,
+            'scope': 'active',
         },
         {
             'label': 'ST Context 2H',
@@ -1813,8 +1829,8 @@ def process_webhook(data):
         # STRATEGIES ACTIVES
         # 2 DAILY principale : ZALT 2D + ST Context 2H + flip ZALT 2H
         # 2 DAILY secondaire : RPZ 2D + ZALT 1D + ST Context 2H + flip ZALT 2H
-        # PULSE V4 principale : ST Context 30m + ST Context 10m + flip ZALT 10m
-        # PULSE V4 secondaire : ST Context 10m + flip ZALT 30m
+        # PULSE V4 principale : ZALT 6H + ST Context 30m + ST Context 10m + flip ZALT 10m
+        # PULSE V4 info : flip ZALT 30m si ZALT 6H ou ZALT 2H + RPZ 6H aligne
         # ========================================================================
         # Stocker ST AI 4H pour sync_scalp
         if alert_type == 'supertrend' and tf == '4h':
@@ -1875,7 +1891,8 @@ def process_webhook(data):
                 )
 
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_trade_symbol(symbol) and (
-            (alert_type == 'zalt' and tf in ('10m', '30m'))
+            (alert_type == 'rpz' and tf == '6h')
+            or (alert_type == 'zalt' and tf in ('2h', '6h', '10m', '30m'))
             or (alert_type == 'st_context' and tf in ('10m', '30m'))
         ):
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
@@ -2813,7 +2830,7 @@ def evaluate_daily_rpz_pyramiding_rf30(symbol, range_dir, price=0.0, exchange_na
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE V4: principale ctx30+ctx10+flip ZALT10, secondaire ctx10+flip ZALT30."""
+    """PULSE V4: entree ZALT6H + ctx30 + ctx10 + flip ZALT10, info sur flip ZALT30."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2823,6 +2840,9 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exch
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
+        zalt6, zalt6_fresh, zalt6_ok = _zalt_condition(m, '6h', exp_ctx)
+        zalt2h, zalt2h_fresh, zalt2h_ok = _zalt_condition(m, '2h', exp_ctx)
+        rpz6, rpz6_fresh, rpz6_ok = _rpz_condition(m, '6h', exp_ctx)
         ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
         ctx10, ctx10_fresh, ctx10_ok = _st_context_condition(m, '10m', exp_ctx)
         zalt10, zalt10_fresh, zalt10_ok = _zalt_condition(m, '10m', exp_ctx)
@@ -2830,17 +2850,26 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exch
         zalt10_flip_fresh = is_signal_fresh(m.get('last_zalt_10m_signal_ts'), 45 * 60)
         zalt30_flip_fresh = is_signal_fresh(m.get('last_zalt_30m_signal_ts'), 90 * 60)
         primary_trigger_ok = zalt10_ok and zalt10_flip_fresh and (trigger_tf is None or trigger_tf == '10m') and (trigger_dir is None or trigger_dir == exp_ctx)
-        secondary_trigger_ok = zalt30_ok and zalt30_flip_fresh and (trigger_tf is None or trigger_tf == '30m') and (trigger_dir is None or trigger_dir == exp_ctx)
-        primary_ok = ctx30_ok and ctx10_ok and primary_trigger_ok
-        secondary_ok = ctx10_ok and secondary_trigger_ok
+        primary_ok = zalt6_ok and ctx30_ok and ctx10_ok and primary_trigger_ok
+        info_context_ok = zalt6_ok or (zalt2h_ok and rpz6_ok)
+        info_ok = (
+            trigger_tf == '30m'
+            and trigger_dir == exp_ctx
+            and zalt30_ok
+            and zalt30_flip_fresh
+            and info_context_ok
+        )
 
         logger.info(
             f"[PULSEV4 CHECK] {symbol} source={source} dir={direction} "
+            f"zalt6={zalt6}/{exp_ctx} fresh={zalt6_fresh} ok={zalt6_ok} "
+            f"zalt2h={zalt2h}/{exp_ctx} fresh={zalt2h_fresh} ok={zalt2h_ok} "
+            f"rpz6={rpz6}/{exp_ctx} fresh={rpz6_fresh} ok={rpz6_ok} "
             f"ctx30={ctx30}/{exp_ctx} fresh={ctx30_fresh} ok={ctx30_ok} "
             f"ctx10={ctx10}/{exp_ctx} fresh={ctx10_fresh} ok={ctx10_ok} "
             f"zalt10={zalt10}/{exp_ctx} fresh={zalt10_fresh} ok={zalt10_ok} flip_fresh={zalt10_flip_fresh} "
             f"zalt30={zalt30}/{exp_ctx} fresh={zalt30_fresh} ok={zalt30_ok} flip_fresh={zalt30_flip_fresh} "
-            f"primary={primary_ok} secondary={secondary_ok}"
+            f"primary={primary_ok} info={info_ok}"
         )
 
         if primary_ok:
@@ -2855,6 +2884,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exch
                 exchange_name,
                 [
                     "[OK] Entree principale",
+                    f"[OK] ZALT 6H: {_ctx_label(zalt6)}",
                     f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
                     f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
                     f"[OK] Flip ZALT 10m: {_ctx_label(zalt10)}",
@@ -2862,23 +2892,25 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exch
                 cooldown=1800,
             ) or opened
 
-        if secondary_ok:
-            event_key = event_id or f"pulsev4_secondary_{symbol}_{int(time.time())}_{exp_ctx}"
-            opened = _open_strategy_entry(
-                symbol,
-                'PULSEV4_SECONDARY',
-                direction,
-                'ctx10_zalt30_flip',
-                event_key,
-                price,
-                exchange_name,
-                [
-                    "[OK] Entree secondaire",
-                    f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
-                    f"[OK] Flip ZALT 30m: {_ctx_label(zalt30)}",
-                ],
-                cooldown=1800,
-            ) or opened
+        if info_ok and should_send(symbol, f"pulsev4_info_zalt30_{exp_ctx}", event_id=event_id, cooldown=1800):
+            quality = zalt6_ok and zalt2h_ok and rpz6_ok
+            quality_line = "[QUALITE] ZALT 6H + ZALT 2H + RPZ 6H alignes" if quality else "[INFO] Contexte 6H valide"
+            send_telegram(
+                f"<b>[PULSE V4 - INFO ZALT 30m]</b> {symbol}\n"
+                f"--------------------\n"
+                f"Direction: {direction}\n"
+                f"Price: ${format_price(price)}\n"
+                f"Exchange: {exchange_name.upper()}\n"
+                f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
+                f"{quality_line}\n"
+                f"[OK] Flip ZALT 30m: {_ctx_label(zalt30)}\n"
+                f"[INFO] ZALT 6H: {_ctx_label(zalt6)}\n"
+                f"[INFO] ZALT 2H: {_ctx_label(zalt2h)}\n"
+                f"[INFO] RPZ 6H: {_ctx_label(rpz6)}\n"
+                f"{get_market_context_info()}",
+                ntfy=True,
+            )
+            logger.info(f"[PULSEV4 INFO] ZALT30 {symbol} {direction}")
     return opened
 
 

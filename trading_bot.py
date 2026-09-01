@@ -54,7 +54,7 @@ CONFIG = {
     },
 
     # Assets suivis uniquement en radar/info. Ils ne declenchent pas les entrees trade.
-    # FARTCOIN et USELESS recoivent le Bias 1D via TradingView.
+    # Certains symboles ne sont pas disponibles en spot OKX: ils restent suivis via TradingView.
     'RADAR_SYMBOLS': {
         'ARB/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'ADA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
@@ -65,7 +65,7 @@ CONFIG = {
         'EIGEN/USDT':    {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'ENA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'ETC/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
-        'FARTBOY/USDT':  {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'FARTBOY/USDT':  {'exchange': 'okx', 'bias_1d_source': 'tv'},
         'FET/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'FIL/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'HBAR/USDT':     {'exchange': 'okx', 'bias_1d_source': 'okx'},
@@ -75,7 +75,7 @@ CONFIG = {
         'SKY/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'STX/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'TIA/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
-        'VET/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
+        'VET/USDT':      {'exchange': 'okx', 'bias_1d_source': 'tv'},
         'VIRTUAL/USDT':  {'exchange': 'okx', 'bias_1d_source': 'okx'},
         'ZEN/USDT':      {'exchange': 'okx', 'bias_1d_source': 'okx'},
     },    
@@ -90,7 +90,8 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V4': True,
     'ENABLE_DAILY': True,
-    'ENABLE_SCALP_RELAY': os.environ.get('ENABLE_SCALP_RELAY', '0') == '1',
+    # Relay scalpbot coupe temporairement: la strategie scalp est en retravail.
+    'ENABLE_SCALP_RELAY': False,
 }
 
 # ============================================================================ #
@@ -2121,6 +2122,8 @@ def sync_scalp():
     """Force l'envoi des etats utiles au scalpbot."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return jsonify({'status': 'disabled', 'reason': 'scalp relay paused'}), 200
 
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
@@ -2997,6 +3000,8 @@ def calc_bias_2d(symbol):
 
 def relay_scalp_bias_1h(symbol, bias_1h, price=0):
     """Envoie au scalpbot le Bias 1H calcule par le bot principal."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return False
     if bias_1h not in ('bull', 'bear', 'neutral'):
         return False
     if not CONFIG['SYMBOLS'].get(symbol, {}).get('scalp'):
@@ -3026,6 +3031,8 @@ def relay_scalp_bias_1h(symbol, bias_1h, price=0):
 
 def relay_scalp_bias_2h(symbol, bias_2h, price=0):
     """Envoie au scalpbot le Bias 2H calcule par le bot principal."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return False
     if bias_2h not in ('bull', 'bear', 'neutral'):
         return False
     if not CONFIG['SYMBOLS'].get(symbol, {}).get('scalp'):
@@ -3382,21 +3389,6 @@ def range_filter_10m_scheduler():
                         m['range_filter_10m'] = range_dir
                         m['range_filter_10m_ts'] = datetime.now(timezone.utc).timestamp()
                     logger.info(f"[RANGE10M] Nouveau signal {symbol} dir={range_dir} ts={signal_ts}")
-                    evaluate_daily_rpz(
-                        symbol,
-                        trigger_dir=range_dir,
-                        price=signal_price,
-                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-                        event_id=f"range10m_daily_rpz_{symbol}_{signal_ts}_{range_dir}",
-                        source='rf10m_okx',
-                    )
-                    evaluate_daily_rpz_pyramiding_rf10(
-                        symbol,
-                        range_dir,
-                        price=signal_price,
-                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-                        event_id=f"range10m_daily_pyra_{symbol}_{signal_ts}_{range_dir}",
-                    )
                 except Exception as e:
                     logger.error(f"[RANGE10M] {symbol}: {e}")
                 time.sleep(0.3)
@@ -3557,7 +3549,9 @@ def startup():
         signal_watchdog_thread.start()
 
         scalp_url_check = os.environ.get('SCALP_BOT_URL', '')
-        if not scalp_url_check:
+        if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+            logger.info('Relay scalpbot en pause — strategie scalp en retravail')
+        elif not scalp_url_check:
             logger.warning('⚠️ SCALP_BOT_URL non défini — relay scalpbot désactivé')
         else:
             logger.info(f'✅ Relay scalpbot activé →{scalp_url_check}')

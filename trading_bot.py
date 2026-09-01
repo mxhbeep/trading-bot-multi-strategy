@@ -1910,6 +1910,9 @@ def process_webhook(data):
                         'price':    price,
                         'event_id': event_id,
                     }
+                    sig = str(data.get('signal') or data.get('event') or '').strip().lower()
+                    if sig:
+                        relay_payload['signal'] = sig
                     try:
                         resp = requests.post(
                             f"{scalp_url}/webhook",

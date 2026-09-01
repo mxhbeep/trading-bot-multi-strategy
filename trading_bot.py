@@ -1078,16 +1078,6 @@ def parse_supertrend_value(val):
         logger.warning(f"[WARN] SuperTrend valeur invalide: '{val}'")
         return None
 
-def parse_range_filter_value(val):
-    """Convertit une valeur Range Filter en 'buy' ou 'sell'."""
-    s = str(val).strip().lower()
-    if s in ('buy', 'long', 'bull', '1'):
-        return 'buy'
-    if s in ('sell', 'short', 'bear', '-1', '0'):
-        return 'sell'
-    logger.warning(f"[WARN] Range Filter valeur invalide: '{val}'")
-    return None
-
 def parse_directional_trend_value(val, allow_sideways=False):
     """Convertit une valeur directionnelle brute (ex. RPZ) en 'bull', 'bear' ou 'sideways'."""
     s = str(val).strip().lower()
@@ -1160,8 +1150,6 @@ def normalize_alert_type(alert_type_raw):
         'ema_200': 'ema200', 'ema': 'ema200',
         'super_trend': 'supertrend', 'st': 'supertrend',
         'stcontext': 'st_context',
-        'rangefilter': 'range_filter',
-        'range_filter_30m': 'range_filter',
         'reversal_probability_zone': 'rpz',
         'reversal_probability': 'rpz',
         'rpz_zone': 'rpz',
@@ -1235,7 +1223,6 @@ ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
 ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
 ST_CONTEXT_LT_10M: dict = {}  # Long term context 10m (plot_2)
 ST_CONTEXT_LT_30M: dict = {}  # Long term context 30m (plot_2)
-RANGE_FILTER_30M: dict = {}  # symbol -> 'buy' | 'sell' | None
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
@@ -1259,7 +1246,6 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_2h_ts': None, 'bias_4h': None, 'bias_6h': None, 'bias_6h_ts': None, 'bias_30m': None, 'bias_30m_ts': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
             'daily_st_ai_30m_flip_dir': None, 'daily_st_ai_30m_flip_ts': None, 'daily_st_ai_30m_flip_event_id': None,
-            'williams_1d': None, 'williams_1d_ts': None, 'williams_2d': None, 'williams_2d_ts': None, 'williams_2h': None, 'williams_2h_ts': None, 'williams_6h': None, 'williams_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
             'st_context_3m': None,
@@ -1272,11 +1258,6 @@ def init_symbol_states(symbol):
             'zalt_6h': None, 'zalt_6h_ts': None, 'last_zalt_6h_signal_ts': None,
             'zalt_1d': None, 'zalt_1d_ts': None, 'last_zalt_1d_signal_ts': None,
             'zalt_2d': None, 'zalt_2d_ts': None, 'last_zalt_2d_signal_ts': None,
-            'range_filter_1m': None, 'range_filter_1m_ts': None, 'last_range_filter_1m_signal_ts': None,
-            'range_filter_3m': None, 'range_filter_3m_ts': None, 'last_range_filter_3m_signal_ts': None,
-            'range_filter_10m': None, 'range_filter_10m_ts': None, 'last_range_filter_10m_signal_ts': None,
-            'range_filter_2h': None, 'range_filter_2h_ts': None, 'last_range_filter_2h_signal_ts': None,
-            'range_filter_30m': None, 'range_filter_30m_ts': None, 'last_range_filter_30m_signal_ts': None,
         }
 
 
@@ -1853,16 +1834,6 @@ def process_webhook(data):
 
         # Support optionnel des alertes TradingView Range Filter. RF10/RF30
         # peuvent aussi venir des schedulers OKX, RF1/RF3 viennent de TradingView.
-        if alert_type == 'range_filter' and tf in ('1m', '3m', '10m', '30m', '2h'):
-            range_dir = parse_range_filter_value(val)
-            if range_dir is not None:
-                range_event = data.get('event_id') or event_id
-                with STATE_LOCK:
-                    init_symbol_states(symbol)
-                    m = MOMENTUM_STATE[symbol]
-                    m[f'range_filter_{tf}'] = range_dir
-                    m[f'range_filter_{tf}_ts'] = now_ts
-                    m[f'last_range_filter_{tf}_signal_ts'] = range_event
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
             (alert_type == 'rpz' and tf == '2d')
             or (alert_type == 'zalt' and tf in ('2d', '1d', '2h'))
@@ -1909,18 +1880,6 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        if False and CONFIG.get('ENABLE_PULSE_V4', True) and is_trade_symbol(symbol) and alert_type == 'st_context' and tf == '3m':
-            init_symbol_states(symbol)
-            m = MOMENTUM_STATE[symbol]
-            rf3 = m.get('range_filter_3m')
-            if rf3 in ('buy', 'sell') and is_signal_fresh(m.get('range_filter_3m_ts'), 10 * 60):
-                evaluate_pulse_v3_pyramiding_rf3(
-                    symbol,
-                    rf3,
-                    price=price,
-                    exchange_name=exchange_name,
-                    event_id=f"pulsev3_pyra_replay_rf3_{symbol}_{event_id}",
-                )
 
 
 
@@ -2410,74 +2369,14 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
         return None
 
 
-def calc_williams_ema(df, length=14, ema_length=14):
-    """Calcule Williams %R et son EMA."""
-    try:
-        if df is None or len(df) < length + ema_length:
-            return None
-        high = df['high'].astype(float)
-        low = df['low'].astype(float)
-        close = df['close'].astype(float)
-        upper = high.rolling(length).max()
-        lower = low.rolling(length).min()
-        spread = upper - lower
-        williams = 100.0 * (close - upper) / spread.where(spread != 0)
-        williams_ema = williams.ewm(span=ema_length, adjust=False).mean()
-        value = float(williams.iloc[-1])
-        ema_value = float(williams_ema.iloc[-1])
-        if pd.isna(value) or pd.isna(ema_value):
-            return None
-        return {
-            'value': value,
-            'ema': ema_value,
-            'trend': 'bull' if value > ema_value else 'bear' if value < ema_value else 'neutral',
-        }
-    except Exception as e:
-        logger.debug(f"[WILLIAMS] Calcul impossible: {e}")
-        return None
 
 
 
 
-def get_williams_filter(symbol, timeframe, direction, max_age_seconds):
-    """Retourne l'etat du filtre Williams pour une direction donnee."""
-    normalized_direction = str(direction or '').upper()
-    expected_trend = 'bull' if normalized_direction == 'LONG' else 'bear'
-    key = f'williams_{timeframe}'
-    ts_key = f'{key}_ts'
-    with STATE_LOCK:
-        data = dict(MOMENTUM_STATE.get(symbol, {}).get(key) or {})
-        ts = MOMENTUM_STATE.get(symbol, {}).get(ts_key)
-    fresh = bool(data) and is_signal_fresh(ts, max_age_seconds)
-    trend = data.get('trend')
-    ok = fresh and trend == expected_trend
-    return {
-        'data': data,
-        'fresh': fresh,
-        'ok': ok,
-        'trend': trend,
-        'value': data.get('value'),
-        'ema': data.get('ema'),
-    }
 
 
-def format_williams_filter_line(label, williams_filter):
-    """Formate Williams pour les messages Telegram."""
-    value = williams_filter.get('value')
-    ema_value = williams_filter.get('ema')
-    trend = williams_filter.get('trend')
-    if value is None or ema_value is None:
-        return f"[OK] Williams {label}: N/A"
-    relation = ">" if trend == 'bull' else "<" if trend == 'bear' else "="
-    return f"[OK] Williams {label}: W%R {value:.2f} {relation} EMA14 {ema_value:.2f}"
 
 
-def format_optional_williams_line(label, williams_filter):
-    """Formate un Williams optionnel : qualite si aligne, warning sinon."""
-    base = format_williams_filter_line(label, williams_filter).replace("[OK]", "").strip()
-    if williams_filter.get('ok'):
-        return f"[QUALITE] {base}"
-    return f"[WARNING NON BLOQUANT] {base} pas aligne"
 
 
 def fmt_sig(value):
@@ -2490,72 +2389,6 @@ def fmt_sig(value):
 
 
 
-def calc_range_filter_signal(df, per=100, mult=2.0):
-    """Reproduit le Range Filter Pine et retourne le dernier signal confirme."""
-    try:
-        # 100 periodes suffisent pour amorcer les deux EMA. Le scheduler 10m
-        # agrege 300 bougies 5m, soit environ 150 bougies 10m confirmees.
-        if df is None or len(df) < (per + 5):
-            return None
-
-        close = df['close'].astype(float).reset_index(drop=True)
-        wper = per * 2 - 1
-        avrng = close.diff().abs().ewm(span=per, adjust=False).mean()
-        smrng = avrng.ewm(span=wper, adjust=False).mean() * mult
-
-        filt = []
-        for i, x in enumerate(close):
-            prev = x if i == 0 else filt[-1]
-            r = smrng.iloc[i]
-            if pd.isna(r):
-                filt.append(prev)
-            elif x > prev:
-                filt.append(prev if x - r < prev else x - r)
-            else:
-                filt.append(prev if x + r > prev else x + r)
-        filt = pd.Series(filt)
-
-        upward = []
-        downward = []
-        for i, value in enumerate(filt):
-            if i == 0:
-                upward.append(0.0)
-                downward.append(0.0)
-                continue
-            prev_up = upward[-1]
-            prev_down = downward[-1]
-            prev_filt = filt.iloc[i - 1]
-            upward.append(prev_up + 1 if value > prev_filt else 0.0 if value < prev_filt else prev_up)
-            downward.append(prev_down + 1 if value < prev_filt else 0.0 if value > prev_filt else prev_down)
-
-        long_cond = (close > filt) & (pd.Series(upward) > 0)
-        short_cond = (close < filt) & (pd.Series(downward) > 0)
-
-        cond_ini = []
-        for long_ok, short_ok in zip(long_cond, short_cond):
-            prev = cond_ini[-1] if cond_ini else 0
-            cond_ini.append(1 if long_ok else -1 if short_ok else prev)
-
-        idx = len(close) - 1
-        prev_cond = cond_ini[idx - 1]
-        direction = None
-        if bool(long_cond.iloc[idx]) and prev_cond == -1:
-            direction = 'buy'
-        elif bool(short_cond.iloc[idx]) and prev_cond == 1:
-            direction = 'sell'
-
-        if direction is None:
-            return None
-
-        return {
-            'direction': direction,
-            'ts': str(df['ts'].iloc[idx]),
-            'price': float(close.iloc[idx]),
-        }
-    except Exception as e:
-        logger.info(f"[RANGE30M] calc failed: {e}")
-        logger.debug("[RANGE30M] calc exception", exc_info=True)
-        return None
 
 
 def keep_confirmed_candles(df, timeframe_minutes):
@@ -2661,10 +2494,6 @@ def _st_context_condition(m, tf, exp_ctx):
     return value, fresh, bool(fresh and value == exp_ctx)
 
 
-def _range_filter_condition(m, tf, exp_ctx):
-    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '30m': 90 * 60, '2h': 6 * 3600}.get(tf, 0)
-    value, fresh = _state_signal(m, f'range_filter_{tf}', max_age)
-    return value, fresh, bool(fresh and value == exp_ctx)
 
 
 def _send_strategy_pyramiding(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines, cooldown=1800):
@@ -2770,64 +2599,8 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
     return opened
 
 
-def evaluate_daily_rpz_pyramiding_rf10(symbol, range_dir, price=0.0, exchange_name=None, event_id=None):
-    """DAILY pyramiding principal: RPZ 30m + ST Context 10m + flip RF10m."""
-    return False
-    if range_dir not in ('buy', 'sell') or not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
-        return False
-    init_symbol_states(symbol)
-    m = MOMENTUM_STATE[symbol]
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    rpz30, _, rpz30_ok = _rpz_condition(m, '30m', range_dir)
-    ctx10, _, ctx10_ok = _st_context_condition(m, '10m', range_dir)
-    if not (rpz30_ok and ctx10_ok):
-        logger.info(f"[DAILY PYRA RF10 BLOCKED] {symbol} dir={direction} rpz30={rpz30} ok={rpz30_ok} ctx10={ctx10} ok={ctx10_ok}")
-        return False
-    return _send_strategy_pyramiding(
-        symbol,
-        'DAILY',
-        direction,
-        'rpz30_ctx10_rf10',
-        event_id or f"daily_pyra_rf10_{symbol}_{int(time.time())}_{range_dir}",
-        price,
-        exchange_name,
-        [
-            f"[OK] RPZ 30m: {_ctx_label(rpz30)}",
-            f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
-            f"[OK] Flip Range Filter 10m: {range_dir.upper()}",
-        ],
-        cooldown=1800,
-    )
 
 
-def evaluate_daily_rpz_pyramiding_rf30(symbol, range_dir, price=0.0, exchange_name=None, event_id=None):
-    """DAILY pyramiding secondaire: RPZ 30m + flip RF30m."""
-    return False
-    if range_dir not in ('buy', 'sell') or not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
-        return False
-    init_symbol_states(symbol)
-    m = MOMENTUM_STATE[symbol]
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    rpz30, _, rpz30_ok = _rpz_condition(m, '30m', range_dir)
-    if not rpz30_ok:
-        logger.info(f"[DAILY PYRA RF30 BLOCKED] {symbol} dir={direction} rpz30={rpz30} ok={rpz30_ok}")
-        return False
-    return _send_strategy_pyramiding(
-        symbol,
-        'DAILY',
-        direction,
-        'rpz30_rf30',
-        event_id or f"daily_pyra_rf30_{symbol}_{int(time.time())}_{range_dir}",
-        price,
-        exchange_name,
-        [
-            f"[OK] RPZ 30m: {_ctx_label(rpz30)}",
-            f"[OK] Flip Range Filter 30m: {range_dir.upper()}",
-        ],
-        cooldown=1800,
-    )
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
@@ -2939,35 +2712,6 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exch
 
 
 
-def evaluate_pulse_v3_pyramiding_rf3(symbol, range_dir, price=0.0, exchange_name=None, event_id=None):
-    """PULSE V3 pyramiding: flip RF3m, bloque si ST Context 3m oppose frais."""
-    return False
-    if range_dir not in ('buy', 'sell') or not CONFIG.get('ENABLE_PULSE_V3', True) or not is_trade_symbol(symbol):
-        return False
-    init_symbol_states(symbol)
-    m = MOMENTUM_STATE[symbol]
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    opp_ctx = 'sell' if range_dir == 'buy' else 'buy'
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    ctx3, ctx3_fresh, _ = _st_context_condition(m, '3m', range_dir)
-    ctx3_opp_block = ctx3_fresh and ctx3 == opp_ctx
-    if ctx3_opp_block:
-        logger.info(f"[PULSEV3 PYRA BLOCKED] {symbol} dir={direction} ctx3={ctx3} oppose=True")
-        return False
-    return _send_strategy_pyramiding(
-        symbol,
-        'PULSEV3',
-        direction,
-        'rf3',
-        event_id or f"pulsev3_pyra_rf3_{symbol}_{int(time.time())}_{range_dir}",
-        price,
-        exchange_name,
-        [
-            f"[OK] Flip Range Filter 3m: {range_dir.upper()}",
-            f"[ANTI-CHOP] ST Context 3m oppose: {ctx3_opp_block} ({_ctx_label(ctx3)})",
-        ],
-        cooldown=1800,
-    )
 
 
 
@@ -2990,64 +2734,6 @@ def evaluate_pulse_v3_pyramiding_rf3(symbol, range_dir, price=0.0, exchange_name
 
 
 
-def evaluate_trend_2d_range_filter_30m(symbol, range_dir, signal_ts, price=0.0, exchange_name=None, event_id=None):
-    """TREND2D: flip RF30m + Context 2H + Context 10m + Bias 2D, bloque par Context 1D oppose."""
-    return False  # Strategie desactivee: architecture simplifiee sur 2 DAILY + PULSE V4.
-    if not is_trade_symbol(symbol):
-        return False
-    if range_dir not in ('buy', 'sell'):
-        return False
-    init_symbol_states(symbol)
-    m = MOMENTUM_STATE[symbol]
-    ctx_2h = m.get('st_context_2h')
-    ctx_10m = m.get('st_context_10m')
-    ctx_1d = ST_CONTEXT_1D.get(symbol)
-    bias_2d = m.get('bias_2d')
-    direction = 'LONG' if range_dir == 'buy' else 'SHORT'
-    exp_ctx = range_dir
-    exp_bias = 'bull' if direction == 'LONG' else 'bear'
-    opp_ctx = 'sell' if direction == 'LONG' else 'buy'
-    ctx_2h_fresh = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
-    ctx_10m_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 30 * 60)
-    ctx_1d_fresh = is_signal_fresh(m.get('st_context_1d_ts'), 36 * 3600)
-    bias_2d_fresh = is_signal_fresh(m.get('bias_2d_ts'), 5 * 3600)
-    ctx_1d_opp_block = ctx_1d_fresh and ctx_1d == opp_ctx
-    all_ok = (
-        ctx_2h_fresh
-        and ctx_10m_fresh
-        and bias_2d_fresh
-        and ctx_2h == exp_ctx
-        and ctx_10m == exp_ctx
-        and bias_2d == exp_bias
-        and not ctx_1d_opp_block
-    )
-    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-
-    logger.info(
-        f"[TREND2D RF30M CHECK] {symbol} dir={direction} rf30={range_dir} signal_ts={signal_ts} "
-        f"ctx2h={ctx_2h}/{exp_ctx} fresh={ctx_2h_fresh} "
-        f"ctx10m={ctx_10m}/{exp_ctx} fresh={ctx_10m_fresh} "
-        f"bias2d={bias_2d}/{exp_bias} fresh={bias_2d_fresh} "
-        f"ctx1d_antichop={ctx_1d}/{opp_ctx} fresh={ctx_1d_fresh} block={ctx_1d_opp_block} ok={all_ok}"
-    )
-    if not all_ok:
-        return False
-
-    event_key = event_id or f"trend2d_rf30m_{symbol}_{signal_ts}_{exp_ctx}"
-    opened = _open_strategy_entry(
-        symbol, 'TREND2D', direction, 'trend_2d_rf30m', event_key, price, exchange_name,
-        [
-            f"[OK] Flip Range Filter 30m: {range_dir.upper()}",
-            f"[OK] ST Context 2H: {ctx_2h.upper()}",
-            f"[OK] ST Context 10m: {ctx_10m.upper()}",
-            f"[OK] Bias 2D: {bias_2d.upper()} (EMA17/SMA40)",
-            f"[ANTI-CHOP] ST Context 1D oppose: {fmt_sig(ctx_1d)}",
-        ],
-        cooldown=3600,
-    )
-    if opened:
-        logger.info(f"[TREND2D] Entree RF30m: {symbol} {direction}")
-    return opened
 
 
 def calc_adx_okx(df, length=11, threshold=20):
@@ -3193,17 +2879,6 @@ def update_indicators_for_symbol(symbol):
         bias_4h  = calc_bias_okx(df_4h, ema_len=17, sma_len=40)
         bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
         bias_30m = calc_bias_okx(df_30m, ema_len=13, sma_len=30) if df_30m is not None and len(df_30m) >= 30 else None
-        williams_2h = calc_williams_ema(df_2h, length=14, ema_length=14) if df_2h is not None else None
-        williams_6h = calc_williams_ema(df_6h, length=14, ema_length=14) if df_6h is not None else None
-        williams_1d = calc_williams_ema(df_1d, length=14, ema_length=14)
-        try:
-            df_2d_w = df_1d.groupby(df_1d.index // 2).agg({
-                'open': 'first', 'high': 'max', 'low': 'min',
-                'close': 'last', 'volume': 'sum'
-            }).reset_index(drop=True)
-            williams_2d = calc_williams_ema(df_2d_w, length=14, ema_length=14)
-        except Exception:
-            williams_2d = None
         bias_1d  = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
         bias_2d  = calc_bias_2d(symbol)
         ema200_1h = calc_ema200_okx(df_1h)
@@ -3274,18 +2949,6 @@ def update_indicators_for_symbol(symbol):
                 if bias_30m is not None:
                     MOMENTUM_STATE[symbol]['bias_30m'] = bias_30m
                     MOMENTUM_STATE[symbol]['bias_30m_ts'] = datetime.now(timezone.utc).timestamp()
-                if williams_1d is not None:
-                    MOMENTUM_STATE[symbol]['williams_1d'] = williams_1d
-                    MOMENTUM_STATE[symbol]['williams_1d_ts'] = datetime.now(timezone.utc).timestamp()
-                if williams_2d is not None:
-                    MOMENTUM_STATE[symbol]['williams_2d'] = williams_2d
-                    MOMENTUM_STATE[symbol]['williams_2d_ts'] = datetime.now(timezone.utc).timestamp()
-                if williams_2h is not None:
-                    MOMENTUM_STATE[symbol]['williams_2h'] = williams_2h
-                    MOMENTUM_STATE[symbol]['williams_2h_ts'] = datetime.now(timezone.utc).timestamp()
-                if williams_6h is not None:
-                    MOMENTUM_STATE[symbol]['williams_6h'] = williams_6h
-                    MOMENTUM_STATE[symbol]['williams_6h_ts'] = datetime.now(timezone.utc).timestamp()
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
         evaluate_daily_rpz(
@@ -3377,135 +3040,10 @@ def check_prep_alerts():
     PREP_STATE['CONTEXT4H'] = {'LONG': set(), 'SHORT': set()}
 
 
-def range_filter_30m_scheduler():
-    """Calcule Range Filter 30m pour les entrees PULSE."""
-    logger.info("[RANGE30M] Scheduler demarre (per=100, mult=2.0)")
-    OKX_SKIP = {'TAO/USDT'}
-    time.sleep(45)
-    while True:
-        checked_count = 0
-        skipped_count = 0
-        fetch_ok_count = 0
-        signal_count = 0
-        new_signal_count = 0
-        error_count = 0
-        try:
-            for symbol in CONFIG['SYMBOLS']:
-                if symbol in OKX_SKIP:
-                    skipped_count += 1
-                    continue
-                checked_count += 1
-                try:
-                    df = fetch_ohlcv_okx(symbol, '30m', limit=260)
-                    df_confirmed = keep_confirmed_candles(df, 30)
-                    if df_confirmed is not None:
-                        fetch_ok_count += 1
-                    signal = calc_range_filter_signal(df_confirmed, per=100, mult=2.0)
-                    if signal is None:
-                        continue
-                    signal_count += 1
-
-                    range_dir = signal['direction']
-                    signal_ts = signal['ts']
-                    signal_price = signal['price']
-                    should_process = False
-
-                    with STATE_LOCK:
-                        init_symbol_states(symbol)
-                        m = MOMENTUM_STATE[symbol]
-                        if m.get('last_range_filter_30m_signal_ts') != signal_ts:
-                            m['last_range_filter_30m_signal_ts'] = signal_ts
-                            m['range_filter_30m'] = range_dir
-                            m['range_filter_30m_ts'] = datetime.now(timezone.utc).timestamp()
-                            RANGE_FILTER_30M[symbol] = range_dir
-                            should_process = True
-
-                    if not should_process:
-                        continue
-                    new_signal_count += 1
-
-                    logger.info(
-                        f"[RANGE30M] Nouveau signal {symbol} "
-                        f"dir={range_dir} ts={signal_ts} price={signal_price}"
-                    )
-                    evaluate_daily_rpz_pyramiding_rf30(
-                        symbol,
-                        range_dir,
-                        price=signal_price,
-                        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-                        event_id=f"range30m_daily_rpz_{symbol}_{signal_ts}_{range_dir}",
-                    )
-                except Exception as e:
-                    error_count += 1
-                    logger.error(f"[RANGE30M] {symbol}: {e}")
-                time.sleep(0.3)
-        except Exception as e:
-            logger.error(f"[RANGE30M] Scheduler erreur: {e}")
-        logger.info(
-            f"[RANGE30M] Cycle termine: checked={checked_count}, skipped={skipped_count}, "
-            f"fetch_ok={fetch_ok_count}, signals={signal_count}, "
-            f"new_signals={new_signal_count}, errors={error_count}"
-        )
-        now = datetime.now(timezone.utc)
-        minutes_to_next = 30 - (now.minute % 30)
-        next_30m = now + timedelta(minutes=minutes_to_next)
-        next_30m = next_30m.replace(second=20, microsecond=0)
-        time.sleep(max(60, (next_30m - now).total_seconds()))
 
 
-def build_confirmed_10m_candles(df_5m):
-    """Agrege les bougies 5m confirmees par paires en bougies 10m."""
-    df_5m = keep_confirmed_candles(df_5m, 5)
-    if df_5m is None or len(df_5m) < 2:
-        return None
-    df = df_5m.copy().sort_values('ts').reset_index(drop=True)
-    bucket_ms = 10 * 60 * 1000
-    df['bucket'] = (df['ts'].astype('int64') // bucket_ms) * bucket_ms
-    counts = df.groupby('bucket').size()
-    complete = counts[counts >= 2].index
-    df = df[df['bucket'].isin(complete)]
-    if df.empty:
-        return None
-    return df.groupby('bucket', as_index=False).agg(
-        ts=('bucket', 'first'), open=('open', 'first'), high=('high', 'max'),
-        low=('low', 'min'), close=('close', 'last'), volume=('volume', 'sum'),
-    )
 
 
-def range_filter_10m_scheduler():
-    """Calcule RF10 (Length 100, Multiplier 2.00) depuis les bougies OKX 5m."""
-    logger.info("[RANGE10M] Scheduler demarre (per=100, mult=2.0, source=5m agrege)")
-    time.sleep(50)
-    while True:
-        try:
-            for symbol in CONFIG['SYMBOLS']:
-                if symbol == 'TAO/USDT':
-                    continue
-                try:
-                    df_5m = fetch_ohlcv_okx(symbol, '5m', limit=300)
-                    df_10m = build_confirmed_10m_candles(df_5m)
-                    signal = calc_range_filter_signal(df_10m, per=100, mult=2.0)
-                    if signal is None:
-                        continue
-                    range_dir, signal_ts, signal_price = signal['direction'], signal['ts'], signal['price']
-                    with STATE_LOCK:
-                        init_symbol_states(symbol)
-                        m = MOMENTUM_STATE[symbol]
-                        if m.get('last_range_filter_10m_signal_ts') == signal_ts:
-                            continue
-                        m['last_range_filter_10m_signal_ts'] = signal_ts
-                        m['range_filter_10m'] = range_dir
-                        m['range_filter_10m_ts'] = datetime.now(timezone.utc).timestamp()
-                    logger.info(f"[RANGE10M] Nouveau signal {symbol} dir={range_dir} ts={signal_ts}")
-                except Exception as e:
-                    logger.error(f"[RANGE10M] {symbol}: {e}")
-                time.sleep(0.3)
-        except Exception as e:
-            logger.error(f"[RANGE10M] Scheduler erreur: {e}")
-        now = datetime.now(timezone.utc)
-        minutes_to_next = 10 - (now.minute % 10)
-        next_run = (now + timedelta(minutes=minutes_to_next)).replace(second=20, microsecond=0)
-        time.sleep(max(60, (next_run - now).total_seconds()))
 
 
 def indicators_scheduler():
@@ -3641,12 +3179,6 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
-
-        range30m_thread = threading.Thread(target=range_filter_30m_scheduler, daemon=True)
-        range30m_thread.start()
-
-        range10m_thread = threading.Thread(target=range_filter_10m_scheduler, daemon=True)
-        range10m_thread.start()
 
         sentiment_thread = threading.Thread(target=sentiment_scheduler, daemon=True)
         sentiment_thread.start()

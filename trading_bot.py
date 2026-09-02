@@ -24,21 +24,21 @@ CONFIG = {
     
     'SYMBOLS': {
         'AAVE/USDT':   {'exchange': 'okx', 'scalp': False},
-        'APT/USDT':    {'exchange': 'okx', 'scalp': False},
+        'APT/USDT':    {'exchange': 'okx', 'scalp': True},
         'AVAX/USDT':   {'exchange': 'okx', 'scalp': False},
         'BONK/USDT':   {'exchange': 'okx', 'scalp': False},
         'BTC/USDT':    {'exchange': 'okx', 'scalp': True},
         'COMP/USDT':   {'exchange': 'okx', 'scalp': False},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': True},
         'CVX/USDT':    {'exchange': 'okx', 'scalp': True},
-        'DOGE/USDT':   {'exchange': 'okx', 'scalp': False},
+        'DOGE/USDT':   {'exchange': 'okx', 'scalp': True},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True},
-        'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': False, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
-        'HYPE/USDT':   {'exchange': 'okx', 'scalp': False, 'okx_inst_id': 'HYPE-USDT-SWAP'},
+        'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
+        'HYPE/USDT':   {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'HYPE-USDT-SWAP'},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': False},
         'LINK/USDT':   {'exchange': 'okx', 'scalp': True},
-        'PENGU/USDT':  {'exchange': 'okx', 'scalp': False},
-        'PEPE/USDT':   {'exchange': 'okx', 'scalp': False},
+        'PENGU/USDT':  {'exchange': 'okx', 'scalp': True},
+        'PEPE/USDT':   {'exchange': 'okx', 'scalp': True},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': False},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': False},
         'ONDO/USDT':   {'exchange': 'okx', 'scalp': False},
@@ -47,10 +47,10 @@ CONFIG = {
         'SUI/USDT':    {'exchange': 'okx', 'scalp': False},
         'TAO/USDT':    {'exchange': 'okx', 'scalp': False},  # perp-only
         'UNI/USDT':    {'exchange': 'okx', 'scalp': False},
-        'USELESS/USDT': {'exchange': 'okx', 'scalp': False, 'okx_inst_id': 'USELESS-USDT-SWAP'},
-        'XPL/USDT':    {'exchange': 'okx', 'scalp': False, 'okx_inst_id': 'XPL-USDT-SWAP'},
+        'USELESS/USDT': {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
+        'XPL/USDT':    {'exchange': 'okx', 'scalp': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True},
-        'ZEC/USDT':    {'exchange': 'okx', 'scalp': False},
+        'ZEC/USDT':    {'exchange': 'okx', 'scalp': True},
     },
 
     # Assets suivis uniquement en radar/info. Ils ne declenchent pas les entrees trade.
@@ -1889,8 +1889,9 @@ def process_webhook(data):
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
-                (alert_type == 'zalt' and tf in ('1m', '30m'))
-                or (alert_type == 'st_context' and tf == '3m')
+                (alert_type == 'zalt' and tf in ('1m', '10m', '30m'))
+                or (alert_type == 'st_context' and tf in ('1m', '3m'))
+                or (alert_type == 'rpz' and tf == '30m')
             )
         )
         if scalp_url and should_relay_scalp:
@@ -2095,7 +2096,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot V3 : ZALT 30m + ST Context 3m. Pas de faux flip 1m."""
+    """Rechauffe le scalpbot V3 : ZALT 30m/10m + ST Context 1m/3m + RPZ 30m. Pas de faux flip 1m."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -2142,6 +2143,69 @@ def sync_scalp():
                 errors.append(f"{symbol}: ZALT30 {e}")
         else:
             errors.append(f"{symbol}: ZALT 30m absent/invalide ({zalt30!r})")
+
+        zalt10 = m.get('zalt_10m')
+        if zalt10 in ('buy', 'sell'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '10m',
+                    'type':     'zalt',
+                    'value':    zalt10,
+                    'price':    0,
+                    'event_id': f"sync_scalp_zalt10_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('zalt10')
+                else:
+                    errors.append(f"{symbol}: ZALT10 HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ZALT10 {e}")
+        else:
+            errors.append(f"{symbol}: ZALT 10m absent/invalide ({zalt10!r})")
+
+        rpz30 = m.get('rpz_30m')
+        if rpz30 in ('buy', 'sell'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '30m',
+                    'type':     'rpz',
+                    'value':    rpz30,
+                    'price':    0,
+                    'event_id': f"sync_scalp_rpz30_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('rpz30')
+                else:
+                    errors.append(f"{symbol}: RPZ30 HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: RPZ30 {e}")
+        else:
+            errors.append(f"{symbol}: RPZ 30m absent/invalide ({rpz30!r})")
+
+        ctx1 = m.get('st_context_1m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '1m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx1),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx1_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx1m')
+            else:
+                errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX1M {e}")
 
         ctx3 = m.get('st_context_3m')
         try:

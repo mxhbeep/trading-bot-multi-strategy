@@ -2451,9 +2451,10 @@ def update_okx_zalt_htf(symbol):
             if not payload:
                 logger.info(f"[ZALT OKX] {symbol} {tf}=None")
                 continue
+            old = m.get(f'zalt_{tf}')
             m[f'zalt_{tf}'] = payload['trend']
             m[f'zalt_{tf}_ts'] = now_ts
-            if payload['flip']:
+            if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m[f'last_zalt_{tf}_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
                 if tf == '2h':

@@ -2366,6 +2366,115 @@ def keep_confirmed_candles(df, timeframe_minutes):
     return confirmed.reset_index(drop=True)
 
 
+ZALT_HTF_SETTINGS = {
+    '2h': {'length': 50, 'mult': 1.2},
+    '6h': {'length': 50, 'mult': 1.2},
+    '1d': {'length': 50, 'mult': 1.2},
+}
+
+
+def _rma(series, length):
+    return series.ewm(alpha=1 / length, adjust=False).mean()
+
+
+
+
+def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
+    if df is None or len(df) < length * 3 + 5:
+        return None
+    d = df.copy().reset_index(drop=True)
+    close = d['close']
+    high = d['high']
+    low = d['low']
+    lag = int((length - 1) // 2)
+    src = close + (close - close.shift(lag))
+    zlema = src.ewm(span=length, adjust=False).mean()
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = _rma(tr, length)
+    vol = atr.rolling(length * 3).max() * mult
+    upper = zlema + vol
+    lower = zlema - vol
+
+    trend = 0
+    trends = []
+    for i in range(len(d)):
+        c = close.iloc[i]
+        if pd.isna(zlema.iloc[i]) or pd.isna(vol.iloc[i]):
+            trends.append(trend)
+            continue
+        prev_c = close.iloc[i - 1] if i else c
+        prev_up = upper.iloc[i - 1] if i else upper.iloc[i]
+        prev_lo = lower.iloc[i - 1] if i else lower.iloc[i]
+        if i and prev_c <= prev_up and c > upper.iloc[i]:
+            trend = 1
+        elif i and prev_c >= prev_lo and c < lower.iloc[i]:
+            trend = -1
+        trends.append(trend)
+
+    last = trends[-1]
+    prev = trends[-2] if len(trends) > 1 else 0
+    if last == 1:
+        direction = 'buy'
+    elif last == -1:
+        direction = 'sell'
+    else:
+        return None
+    flip = (prev <= 0 and last > 0) or (prev >= 0 and last < 0)
+    return {'trend': direction, 'flip': flip, 'close': float(close.iloc[-1])}
+
+
+
+
+def update_okx_zalt_htf(symbol):
+    """ZALT 2H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView."""
+    if not is_trade_symbol(symbol):
+        return
+    computed = {}
+    for tf, minutes in (('2h', 120), ('6h', 360), ('1d', 1440)):
+        cfg = ZALT_HTF_SETTINGS[tf]
+        df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=300), minutes)
+        computed[tf] = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+
+    flipped_2h = False
+    flip_dir = None
+    price = 0.0
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        for tf, payload in computed.items():
+            if not payload:
+                logger.info(f"[ZALT OKX] {symbol} {tf}=None")
+                continue
+            m[f'zalt_{tf}'] = payload['trend']
+            m[f'zalt_{tf}_ts'] = now_ts
+            if payload['flip']:
+                m[f'last_zalt_{tf}_signal_ts'] = now_ts
+                logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
+                if tf == '2h':
+                    flipped_2h = True
+                    flip_dir = payload['trend']
+                    price = payload['close']
+            else:
+                logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
+        persist_runtime_state()
+
+    if flipped_2h and flip_dir in ('buy', 'sell'):
+        evaluate_daily_rpz(
+            symbol,
+            trigger_dir=flip_dir,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_zalt_2h_flip_{symbol}_{int(now_ts)}",
+            source='okx_zalt_2h_flip',
+        )
+
+
 
 
 
@@ -2856,6 +2965,7 @@ def update_indicators_for_symbol(symbol):
                     MOMENTUM_STATE[symbol]['bias_30m_ts'] = datetime.now(timezone.utc).timestamp()
 
         logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
+        update_okx_zalt_htf(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

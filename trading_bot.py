@@ -174,7 +174,7 @@ def init_redis():
 
     # ========================================================================
     # Redis : etat DAILY + PULSE V4.
-    # Relay scalp V3 = ZALT 1m/30m + ST Context 3m uniquement (avec signal=trend_flip).
+    # Relay scalp V3 = ZALT 1m/10m/30m + ST Context 1m/3m + RPZ 30m (avec signal=trend_flip).
     # ========================================================================
 def persist_runtime_state():
     if not REDIS_CLIENT:

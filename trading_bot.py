@@ -89,6 +89,7 @@ CONFIG = {
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V4': True,
+    'ENABLE_PULSE_V4_INFO': False,
     'ENABLE_DAILY': True,
     'ENABLE_SCALP_RELAY': True,
 }
@@ -663,6 +664,11 @@ def send_info(msg):
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     redis_status = "Redis connecte" if REDIS_CLIENT else "Redis non disponible"
+    pulse_v4_info_line = (
+        "PULSE V4 info: flip ZALT 30m si ZALT 6H ou ZALT 2H + RPZ 6H aligne\n\n"
+        if CONFIG.get('ENABLE_PULSE_V4_INFO', True)
+        else "PULSE V4 info: EN PAUSE\n\n"
+    )
     msg = (
         "<b>[BOT STARTED]</b>\n"
         "--------------------\n"
@@ -673,7 +679,7 @@ def send_start_notification():
         "2 DAILY secondaire: RPZ 2D + ZALT 1D + ST Context 2H + flip ZALT 2H\n"
         "PULSE V4 principale: ZALT 6H + ST Context 30m + ST Context 10m + flip ZALT 10m\n"
         "PULSE V4 secondaire: ZALT 2H + RPZ 6H + ST Context 30m + ST Context 10m + flip ZALT 10m\n"
-        "PULSE V4 info: flip ZALT 30m si ZALT 6H ou ZALT 2H + RPZ 6H aligne\n\n"
+        f"{pulse_v4_info_line}"
         "SCALP V3: gere par le scalpbot actif\n"
         "--------------------\n"
         f"{now}"
@@ -2720,7 +2726,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, trigger_tf=None, price=0.0, exch
                 cooldown=1800,
             ) or opened
 
-        if info_ok and should_send(symbol, f"pulsev4_info_zalt30_{exp_ctx}", event_id=event_id, cooldown=1800):
+        if CONFIG.get('ENABLE_PULSE_V4_INFO', True) and info_ok and should_send(symbol, f"pulsev4_info_zalt30_{exp_ctx}", event_id=event_id, cooldown=1800):
             quality = zalt6_ok and zalt2h_ok and rpz6_ok
             quality_line = "[QUALITE] ZALT 6H + ZALT 2H + RPZ 6H alignes" if quality else "[INFO] Contexte 6H valide"
             send_telegram(

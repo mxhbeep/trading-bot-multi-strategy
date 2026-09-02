@@ -2102,10 +2102,9 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot V3.1 : ZALT 30m + ST Context 30m/3m.
-    ZALT 1H et RPZ 1H ne sont jamais stockes par le bot principal (pas de logique interne
-    qui en depend) — ils ne peuvent pas etre rechauffes ici, ils arriveront via le prochain
-    webhook TradingView normal (relaye directement par should_relay_scalp)."""
+    """Rechauffe le scalpbot V3.1 : ZALT 30m/1H (calcules en interne OKX) + ST Context 30m/3m.
+    RPZ 1H reste TradingView uniquement — n'est jamais stocke par le bot principal, il arrivera
+    via le prochain webhook TradingView normal (relaye directement par should_relay_scalp)."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -2152,6 +2151,28 @@ def sync_scalp():
                 errors.append(f"{symbol}: ZALT30 {e}")
         else:
             errors.append(f"{symbol}: ZALT 30m absent/invalide ({zalt30!r})")
+
+        zalt1h = m.get('zalt_1h')
+        if zalt1h in ('buy', 'sell'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '1h',
+                    'type':     'zalt',
+                    'value':    zalt1h,
+                    'price':    0,
+                    'event_id': f"sync_scalp_zalt1h_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('zalt1h')
+                else:
+                    errors.append(f"{symbol}: ZALT1H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ZALT1H {e}")
+        else:
+            errors.append(f"{symbol}: ZALT 1H absent/invalide ({zalt1h!r})")
 
         ctx30 = m.get('st_context_30m')
         try:
@@ -2332,9 +2353,11 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 
 ZALT_HTF_SETTINGS = {
-    '2h': {'length': 50, 'mult': 1.2},
-    '6h': {'length': 50, 'mult': 1.2},
-    '1d': {'length': 50, 'mult': 1.2},
+    '30m': {'length': 50, 'mult': 1.2},
+    '1h':  {'length': 50, 'mult': 1.2},
+    '2h':  {'length': 50, 'mult': 1.2},
+    '6h':  {'length': 50, 'mult': 1.2},
+    '1d':  {'length': 50, 'mult': 1.2},
 }
 
 
@@ -2395,12 +2418,49 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
 
 
 
+def relay_zalt_okx_to_scalp(symbol, tf, direction, price):
+    """Relaie vers le scalpbot un ZALT 30m/1H calcule en interne (OKX), pas via TradingView.
+    Pas de champ 'signal' : ce n'est jamais un flip TV, le trigger scalp reste uniquement
+    le flip ZALT 1m recu par TV."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol':   symbol,
+        'strategy': 'scalp',
+        'tf':       tf,
+        'type':     'zalt',
+        'value':    direction,
+        'price':    price,
+        'event_id': f"okx_zalt_{tf}_{symbol}_{int(time.time())}",
+    }
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX ZALT] {symbol} {tf} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX ZALT] {symbol} {tf}={direction} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX ZALT] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT] Erreur: {e}")
+
+
 def update_okx_zalt_htf(symbol):
-    """ZALT 2H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView."""
+    """ZALT 30m/1H/2H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
+    30m/1H sont en plus relayes vers le scalpbot (plus de TV pour ces tf). Seul le flip 2H
+    declenche evaluate_daily_rpz — 30m/1H ne declenchent jamais Daily/Pulse/Scalp evaluate."""
     if not is_trade_symbol(symbol):
         return
     computed = {}
-    for tf, minutes in (('2h', 120), ('6h', 360), ('1d', 1440)):
+    for tf, minutes in (('30m', 30), ('1h', 60), ('2h', 120), ('6h', 360), ('1d', 1440)):
         cfg = ZALT_HTF_SETTINGS[tf]
         df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=300), minutes)
         computed[tf] = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
@@ -2408,6 +2468,7 @@ def update_okx_zalt_htf(symbol):
     flipped_2h = False
     flip_dir = None
     price = 0.0
+    to_relay = []
     now_ts = time.time()
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2419,6 +2480,8 @@ def update_okx_zalt_htf(symbol):
             old = m.get(f'zalt_{tf}')
             m[f'zalt_{tf}'] = payload['trend']
             m[f'zalt_{tf}_ts'] = now_ts
+            if tf in ('30m', '1h'):
+                to_relay.append((tf, payload['trend'], payload['close']))
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m[f'last_zalt_{tf}_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
@@ -2429,6 +2492,9 @@ def update_okx_zalt_htf(symbol):
             else:
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
         persist_runtime_state()
+
+    for tf, direction, close_price in to_relay:
+        relay_zalt_okx_to_scalp(symbol, tf, direction, close_price)
 
     if flipped_2h and flip_dir in ('buy', 'sell'):
         evaluate_daily_rpz(

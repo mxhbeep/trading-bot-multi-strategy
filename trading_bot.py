@@ -1889,9 +1889,9 @@ def process_webhook(data):
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
-                (alert_type == 'zalt' and tf in ('1m', '10m', '30m'))
-                or (alert_type == 'st_context' and tf in ('1m', '3m'))
-                or (alert_type == 'rpz' and tf == '30m')
+                (alert_type == 'zalt' and tf in ('1m', '30m', '1h'))
+                or (alert_type == 'st_context' and tf in ('3m', '30m'))
+                or (alert_type == 'rpz' and tf == '1h')
             )
         )
         if scalp_url and should_relay_scalp:
@@ -2096,7 +2096,10 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot V3 : ZALT 30m/10m + ST Context 1m/3m + RPZ 30m. Pas de faux flip 1m."""
+    """Rechauffe le scalpbot V3.1 : ZALT 30m + ST Context 30m/3m.
+    ZALT 1H et RPZ 1H ne sont jamais stockes par le bot principal (pas de logique interne
+    qui en depend) — ils ne peuvent pas etre rechauffes ici, ils arriveront via le prochain
+    webhook TradingView normal (relaye directement par should_relay_scalp)."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -2144,68 +2147,24 @@ def sync_scalp():
         else:
             errors.append(f"{symbol}: ZALT 30m absent/invalide ({zalt30!r})")
 
-        zalt10 = m.get('zalt_10m')
-        if zalt10 in ('buy', 'sell'):
-            try:
-                payload = {
-                    'symbol':   symbol,
-                    'strategy': 'scalp',
-                    'tf':       '10m',
-                    'type':     'zalt',
-                    'value':    zalt10,
-                    'price':    0,
-                    'event_id': f"sync_scalp_zalt10_{symbol}_{int(time.time())}",
-                }
-                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-                if resp.status_code == 200:
-                    symbol_sent.append('zalt10')
-                else:
-                    errors.append(f"{symbol}: ZALT10 HTTP {resp.status_code}")
-            except Exception as e:
-                errors.append(f"{symbol}: ZALT10 {e}")
-        else:
-            errors.append(f"{symbol}: ZALT 10m absent/invalide ({zalt10!r})")
-
-        rpz30 = m.get('rpz_30m')
-        if rpz30 in ('buy', 'sell'):
-            try:
-                payload = {
-                    'symbol':   symbol,
-                    'strategy': 'scalp',
-                    'tf':       '30m',
-                    'type':     'rpz',
-                    'value':    rpz30,
-                    'price':    0,
-                    'event_id': f"sync_scalp_rpz30_{symbol}_{int(time.time())}",
-                }
-                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-                if resp.status_code == 200:
-                    symbol_sent.append('rpz30')
-                else:
-                    errors.append(f"{symbol}: RPZ30 HTTP {resp.status_code}")
-            except Exception as e:
-                errors.append(f"{symbol}: RPZ30 {e}")
-        else:
-            errors.append(f"{symbol}: RPZ 30m absent/invalide ({rpz30!r})")
-
-        ctx1 = m.get('st_context_1m')
+        ctx30 = m.get('st_context_30m')
         try:
             payload = {
                 'symbol':   symbol,
                 'strategy': 'scalp',
-                'tf':       '1m',
+                'tf':       '30m',
                 'type':     'st_context',
-                'value':    ctx_to_sync_value(ctx1),
+                'value':    ctx_to_sync_value(ctx30),
                 'price':    0,
-                'event_id': f"sync_scalp_ctx1_{symbol}_{int(time.time())}",
+                'event_id': f"sync_scalp_ctx30_{symbol}_{int(time.time())}",
             }
             resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
             if resp.status_code == 200:
-                symbol_sent.append('ctx1m')
+                symbol_sent.append('ctx30m')
             else:
-                errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
+                errors.append(f"{symbol}: CTX30M HTTP {resp.status_code}")
         except Exception as e:
-            errors.append(f"{symbol}: CTX1M {e}")
+            errors.append(f"{symbol}: CTX30M {e}")
 
         ctx3 = m.get('st_context_3m')
         try:

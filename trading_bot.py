@@ -66,7 +66,6 @@ CONFIG = {
         'TIA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'UNI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'USELESS/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
-        'VET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'XPL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
@@ -634,8 +633,8 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY A: RPZ 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose\n"
         "DAILY B: ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)\n"
-        "PULSE A: RPZ 6H + flip ZALT 15m + veto ST Context 2H oppose\n"
-        "PULSE B: ST Context 2H + ST Context 15m alignes + flip ZALT 15m\n"
+        "PULSE A: RPZ 6H + flip ZALT 15m (OKX) + veto ST Context 2H oppose\n"
+        "PULSE B: ST Context 2H + ST Context 15m alignes + flip ZALT 15m (OKX)\n"
         "SCALP: gere par le scalpbot actif (7 assets)\n"
         "--------------------\n"
         f"{now}"
@@ -1211,11 +1210,7 @@ def process_webhook(data):
         now_ts = datetime.now(timezone.utc).timestamp()
         if alert_type == 'st_context':
             parsed_ctx = parse_st_context_value(val)
-            if tf == '1m':
-                m['st_context_1m'] = parsed_ctx
-                m['st_context_1m_ts'] = now_ts
-                logger.info(f"[CTX 1M] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
-            elif tf == '1h':
+            if tf == '1h':
                 m['st_context_1h'] = parsed_ctx
                 m['st_context_1h_ts'] = now_ts
                 logger.info(f"[CTX 1H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
@@ -1272,7 +1267,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('1m', '10m', '15m', '30m', '2h', '4h', '6h', '1d', '2d'):
+                if tf in ('1m', '5m', '10m', '15m', '30m', '2h', '4h', '6h', '1d', '2d'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1343,10 +1338,10 @@ def process_webhook(data):
         # STRATEGIES ACTIVES
         # DAILY A : RPZ 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose
         # DAILY B : ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)
-        # PULSE A : RPZ 6H + flip ZALT 15m + veto ST Context 30m oppose
-        # PULSE B : ST Context 30m + ST Context 15m alignes + flip ZALT 15m
+        # PULSE A : RPZ 6H + flip ZALT 15m (OKX) + veto ST Context 2H oppose
+        # PULSE B : ST Context 2H + ST Context 15m alignes + flip ZALT 15m (OKX)
         # ========================================================================
-        # Stocker ST AI 4H pour sync_scalp
+        # SuperTrend 4H — relai Tapbit uniquement
         if alert_type == 'supertrend' and tf == '4h':
             st_4h_val = parse_supertrend_value(val)
             if st_4h_val is not None:
@@ -1379,7 +1374,8 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE: trigger = flip ZALT 15m (TV). Rafraichi aussi sur Context 2H/15m (A ou B)
+        # PULSE: trigger = flip ZALT 15m (calcule en interne OKX, ce bloc webhook n'est
+        # qu'un fallback si une vieille alerte TV tire encore). Rafraichi aussi sur Context 2H/15m (A ou B)
         # ou RPZ 6H (A) pour retester si le flip 15m est encore frais.
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_pulse_symbol(symbol) and (
             (alert_type == 'zalt' and tf == '15m')
@@ -1582,10 +1578,8 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : RPZ 30m (TV, relaye) + ST Context 15m/30m/5m.
-    ZALT 5m (trigger) reste TradingView uniquement — n'est jamais stocke par le bot
-    principal, il arrivera via le prochain webhook TradingView normal (relaye directement
-    par should_relay_scalp)."""
+    """Rechauffe le scalpbot : RPZ 30m (TV, relaye) + ZALT 5m (calcule en interne OKX)
+    + ST Context 15m/30m/5m."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1610,6 +1604,28 @@ def sync_scalp():
     for symbol in sorted(scalp_symbols):
         m = state_copy.get(symbol, {})
         symbol_sent = []
+
+        zalt5 = m.get('zalt_5m')
+        if zalt5 in ('buy', 'sell'):
+            try:
+                payload = {
+                    'symbol':   symbol,
+                    'strategy': 'scalp',
+                    'tf':       '5m',
+                    'type':     'zalt',
+                    'value':    zalt5,
+                    'price':    0,
+                    'event_id': f"sync_scalp_zalt5_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('zalt5')
+                else:
+                    errors.append(f"{symbol}: ZALT5 HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ZALT5 {e}")
+        else:
+            errors.append(f"{symbol}: ZALT 5m absent/invalide ({zalt5!r})")
 
         rpz30 = m.get('rpz_30m')
         if rpz30 in ('buy', 'sell'):
@@ -1808,6 +1824,10 @@ ZALT_HTF_SETTINGS = {
     '6h':  {'length': 50, 'mult': 1.2},
     '1d':  {'length': 50, 'mult': 1.3},
 }
+ZALT_LTF_SETTINGS = {
+    '5m':  {'length': 34, 'mult': 1.2},
+    '15m': {'length': 50, 'mult': 1.2},
+}
 
 
 def _rma(series, length):
@@ -1914,6 +1934,119 @@ def update_okx_zalt_htf(symbol):
             event_id=f"okx_zalt_4h_flip_{symbol}_{int(now_ts)}",
             source='okx_zalt_4h_flip',
         )
+
+
+def relay_zalt_5m_to_scalp(symbol, direction, price, is_flip):
+    """Relaie vers le scalpbot un ZALT 5m calcule en interne (OKX). signal=trend_flip
+    seulement si c'est un vrai flip, sinon un simple refresh d'etat (nourrit zalt_5m_ts
+    cote scalp pour le watchdog et l'alignement, sans re-declencher le trigger)."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol':   symbol,
+        'strategy': 'scalp',
+        'tf':       '5m',
+        'type':     'zalt',
+        'value':    direction,
+        'price':    price,
+        'event_id': f"okx_zalt_5m_{symbol}_{int(time.time())}",
+    }
+    if is_flip:
+        relay_payload['signal'] = 'trend_flip'
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX ZALT 5m] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX ZALT 5m] {symbol}={direction} flip={is_flip} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX ZALT 5m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT 5m] Erreur: {e}")
+
+
+def update_okx_zalt_15m(symbol):
+    """ZALT 15m calcule en interne (OKX) pour tous les assets pulse=True.
+    Flip → evaluate_pulse_v3 en local (pas de relay, PULSE reste sur le bot principal)."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('pulse'):
+        return
+    settings = ZALT_LTF_SETTINGS['15m']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=300), 15)
+    payload = calc_zalt_from_ohlcv(df, length=settings['length'], mult=settings['mult'])
+    now_ts = time.time()
+    flipped = False
+    flip_dir = None
+    price = 0.0
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        if not payload:
+            logger.info(f"[ZALT OKX] {symbol} 15m=None")
+            return
+        old = m.get('zalt_15m')
+        m['zalt_15m'] = payload['trend']
+        m['zalt_15m_ts'] = now_ts
+        if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
+            m['last_zalt_15m_signal_ts'] = now_ts
+            logger.info(f"[ZALT OKX] {symbol} 15m={payload['trend']} FLIP")
+            flipped = True
+            flip_dir = payload['trend']
+            price = payload['close']
+        else:
+            logger.info(f"[ZALT OKX] {symbol} 15m={payload['trend']}")
+        persist_runtime_state()
+
+    if flipped and flip_dir in ('buy', 'sell'):
+        evaluate_pulse_v3(
+            symbol,
+            trigger_dir=flip_dir,
+            price=price,
+            exchange_name=cfg.get('exchange', 'okx'),
+            event_id=f"okx_zalt_15m_flip_{symbol}_{int(now_ts)}",
+            source='okx_zalt_15m_flip',
+        )
+
+
+def update_okx_zalt_5m(symbol):
+    """ZALT 5m calcule en interne (OKX) pour les assets scalp=True uniquement.
+    Toujours relaye vers le scalpbot (flip ou simple refresh d'etat) — pas d'evaluate
+    local, le scalp reste gere par le service scalpbot separe."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('scalp'):
+        return
+    settings = ZALT_LTF_SETTINGS['5m']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '5m', limit=300), 5)
+    payload = calc_zalt_from_ohlcv(df, length=settings['length'], mult=settings['mult'])
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        if not payload:
+            logger.info(f"[ZALT OKX] {symbol} 5m=None")
+            return
+        old = m.get('zalt_5m')
+        m['zalt_5m'] = payload['trend']
+        m['zalt_5m_ts'] = now_ts
+        is_flip = bool(payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend'])
+        if is_flip:
+            m['last_zalt_5m_signal_ts'] = now_ts
+            logger.info(f"[ZALT OKX] {symbol} 5m={payload['trend']} FLIP")
+        else:
+            logger.info(f"[ZALT OKX] {symbol} 5m={payload['trend']}")
+        persist_runtime_state()
+        direction = payload['trend']
+        price = payload['close']
+
+    relay_zalt_5m_to_scalp(symbol, direction, price, is_flip)
 
 
 
@@ -2143,13 +2276,14 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 
 def update_indicators_for_symbol(symbol):
-    """Calcule les ZALT HTF (30m/4H/6H/1D) via update_okx_zalt_htf, qui fait son propre fetch OHLCV."""
+    """Calcule les ZALT HTF (30m/4H/6H/1D) et LTF 15m (pulse=True) via OKX."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
         return
     try:
         update_okx_zalt_htf(symbol)
+        update_okx_zalt_15m(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
@@ -2179,6 +2313,30 @@ def indicators_scheduler():
         wait = (next_15m - now).total_seconds()
         logger.info(f"[OKX] Prochain calcul dans {int(wait)}s")
         time.sleep(max(60, wait))
+
+
+
+def zalt_5m_scalp_scheduler():
+    """ZALT 5m dedie aux 7 assets scalp=True, cadence plus rapide que le cycle HTF/15m
+    (une bougie 5m confirmee toutes les 5 min — le cycle normal a 15 min la raterait)."""
+    scalp_symbols = [s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')]
+    logger.info(f"[OKX] Scheduler ZALT 5m scalp démarré ({len(scalp_symbols)} assets, toutes les 5 minutes)")
+    time.sleep(20)
+    while True:
+        for symbol in scalp_symbols:
+            try:
+                update_okx_zalt_5m(symbol)
+            except Exception as e:
+                logger.error(f"[OKX] zalt_5m_scalp_scheduler {symbol}: {e}")
+            time.sleep(0.5)  # rate limit OKX
+        persist_runtime_state()
+        # Attendre la prochaine bougie 5m confirmee
+        now = datetime.now(timezone.utc)
+        minutes_to_next = 5 - (now.minute % 5)
+        next_5m = now + timedelta(minutes=minutes_to_next)
+        next_5m = next_5m.replace(second=10, microsecond=0)
+        wait = (next_5m - now).total_seconds()
+        time.sleep(max(30, wait))
 
 
 
@@ -2223,6 +2381,9 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
+
+        zalt_5m_thread = threading.Thread(target=zalt_5m_scalp_scheduler, daemon=True)
+        zalt_5m_thread.start()
 
         watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
         watchdog_thread.start()

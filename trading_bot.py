@@ -1648,11 +1648,11 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE: trigger = flip ZALT 15m (TV). Rafraichi aussi sur Context 15m/30m (A ou B)
+        # PULSE: trigger = flip ZALT 15m (TV). Rafraichi aussi sur Context 2H/15m (A ou B)
         # ou RPZ 6H (A) pour retester si le flip 15m est encore frais.
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_trade_symbol(symbol) and (
             (alert_type == 'zalt' and tf == '15m')
-            or (alert_type == 'st_context' and tf in ('15m', '30m'))
+            or (alert_type == 'st_context' and tf in ('15m', '2h'))
             or (alert_type == 'rpz' and tf == '6h')
         ):
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
@@ -2336,7 +2336,7 @@ def _st_context_condition(m, tf, exp_ctx):
 
 def _st_context_veto(m, tf, exp_ctx):
     """Veto seulement si le contexte est OPPOSE et frais. Neutre/None/perime = on passe (pas de veto)."""
-    max_age = {'15m': 45 * 60, '30m': 90 * 60, '4h': 12 * 3600, '12h': 24 * 3600}.get(tf, 0)
+    max_age = {'15m': 45 * 60, '30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
     opp = 'sell' if exp_ctx == 'buy' else 'buy'
     veto = bool(fresh and value == opp)
@@ -2448,8 +2448,8 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """PULSE porte A/B: trigger flip ZALT 15m (TV) commun.
-    A: RPZ 6H + veto Context 30m oppose.
-    B: Context 30m + Context 15m alignes (pas de RPZ 6H)."""
+    A: RPZ 6H + veto Context 2H oppose.
+    B: Context 2H + Context 15m alignes (pas de RPZ 6H)."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2464,37 +2464,37 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         zalt15_flip_fresh = is_signal_fresh(m.get('last_zalt_15m_signal_ts'), 45 * 60)
         trigger_ok = zalt15_ok and zalt15_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
 
-        ctx30_veto_val, ctx30_veto_fresh, ctx30_veto = _st_context_veto(m, '30m', exp_ctx)
-        ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
+        ctx2h_veto_val, ctx2h_veto_fresh, ctx2h_veto = _st_context_veto(m, '2h', exp_ctx)
+        ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
         ctx15, ctx15_fresh, ctx15_ok = _st_context_condition(m, '15m', exp_ctx)
 
-        entry_a_ok = rpz6_ok and trigger_ok and not ctx30_veto
-        entry_b_ok = ctx30_ok and ctx15_ok and trigger_ok
+        entry_a_ok = rpz6_ok and trigger_ok and not ctx2h_veto
+        entry_b_ok = ctx2h_ok and ctx15_ok and trigger_ok
         entry_ok = entry_a_ok or entry_b_ok
 
         logger.info(
             f"[PULSEV4 CHECK] {symbol} source={source} dir={direction} "
             f"rpz6={rpz6}/{exp_ctx} fresh={rpz6_fresh} ok={rpz6_ok} "
             f"zalt15={zalt15}/{exp_ctx} fresh={zalt15_fresh} flip_fresh={zalt15_flip_fresh} trig={trigger_ok} "
-            f"ctx30={ctx30_veto_val} veto={ctx30_veto} align_ok={ctx30_ok} "
+            f"ctx2h={ctx2h_veto_val} veto={ctx2h_veto} align_ok={ctx2h_ok} "
             f"ctx15={ctx15} align_ok={ctx15_ok} "
             f"A={entry_a_ok} B={entry_b_ok} entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'pulse_a_rpz6h' if entry_a_ok else 'pulse_b_ctx30_ctx15'
+            signal_type = 'pulse_a_rpz6h' if entry_a_ok else 'pulse_b_ctx2h_ctx15'
             event_key = event_id or f"pulsev4_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = ["[OK] Entree PULSE"]
             if entry_a_ok:
                 detail_lines += [
-                    "[VOIE] A: RPZ 6H + veto Context 30m",
+                    "[VOIE] A: RPZ 6H + veto Context 2H",
                     f"[OK] RPZ 6H: {_ctx_label(rpz6)}",
-                    f"[INFO] ST Context 30m (veto si oppose): {_ctx_label(ctx30_veto_val)}",
+                    f"[INFO] ST Context 2H (veto si oppose): {_ctx_label(ctx2h_veto_val)}",
                 ]
             else:
                 detail_lines += [
-                    "[VOIE] B: Context 30m + Context 15m alignes",
-                    f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
+                    "[VOIE] B: Context 2H + Context 15m alignes",
+                    f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
                     f"[OK] ST Context 15m: {_ctx_label(ctx15)}",
                 ]
             detail_lines.append(f"[OK] Flip ZALT 15m: {_ctx_label(zalt15)}")

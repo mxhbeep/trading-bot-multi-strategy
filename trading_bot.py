@@ -74,11 +74,6 @@ CONFIG = {
         'ZEN/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
     },
 
-    # Assets suivis uniquement en radar/info. Ils ne declenchent pas les entrees trade.
-    # Certains symboles ne sont pas disponibles en spot OKX: ils restent suivis via TradingView.
-    'RADAR_SYMBOLS': {
-        'FARTBOY/USDT':  {'exchange': 'okx', 'bias_1d_source': 'tv'},
-    },    
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
     'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
     'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),  # legacy
@@ -89,7 +84,6 @@ CONFIG = {
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V4': True,
-    'ENABLE_PULSE_V4_INFO': False,
     'ENABLE_DAILY': True,
     'ENABLE_SCALP_RELAY': True,
 }
@@ -108,7 +102,6 @@ MOMENTUM_STATE = {}
 
 WEEKLY_STATS = {}
 WEEKLY_START = datetime.now(timezone.utc)
-PREP_BUFFER = []  # Buffer des alertes de preparation
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
 def track_alert(symbol, strategy):
@@ -129,7 +122,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 def get_tracked_symbols():
-    return set(CONFIG['SYMBOLS']) | set(CONFIG.get('RADAR_SYMBOLS', {}))
+    return set(CONFIG['SYMBOLS'])
 
 def is_trade_symbol(symbol):
     return symbol in CONFIG['SYMBOLS']
@@ -137,22 +130,18 @@ def is_trade_symbol(symbol):
 def is_pulse_symbol(symbol):
     return symbol in CONFIG['SYMBOLS'] and CONFIG['SYMBOLS'][symbol].get('pulse', False)
 
-def is_radar_symbol(symbol):
-    return symbol in CONFIG.get('RADAR_SYMBOLS', {})
-
 def get_symbol_config(symbol):
-    return CONFIG['SYMBOLS'].get(symbol) or CONFIG.get('RADAR_SYMBOLS', {}).get(symbol) or {}
+    return CONFIG['SYMBOLS'].get(symbol) or {}
 
 @app.route('/')
 def home():
     total_symbols = len(CONFIG['SYMBOLS'])
-    radar_symbols = len(CONFIG.get('RADAR_SYMBOLS', {}))
     okx_count = sum(1 for ex in CONFIG['SYMBOLS'].values() if ex.get('exchange') == 'okx')
     return f"""
     <h1>Trading Bot Multi-Strategy</h1>
     <p>Status: Running</p>
-    <p>Trade assets: {total_symbols} | Radar assets: {radar_symbols} | OKX trade: {okx_count}</p>
-    <p>Strategies: SAFE + MOMENTUM + CONTEXT</p>
+    <p>Trade assets: {total_symbols} | OKX trade: {okx_count}</p>
+    <p>Strategies: DAILY / PULSE / SCALP</p>
     """
 
 # ============================================================================ #
@@ -178,7 +167,7 @@ def init_redis():
 
     # ========================================================================
     # Redis : etat DAILY + PULSE V4.
-    # Relay scalp V3 = ZALT 1m/10m/30m + ST Context 1m/3m + RPZ 30m (avec signal=trend_flip).
+    # Relay scalp = ZALT 5m + RPZ 30m + ST Context 5m/15m/30m (avec signal=trend_flip).
     # ========================================================================
 def persist_runtime_state():
     if not REDIS_CLIENT:
@@ -190,22 +179,9 @@ def persist_runtime_state():
             'weekly_start':       WEEKLY_START.isoformat(),
             'last_signals':       LAST_SIGNALS,
             'last_signal_events': LAST_SIGNAL_EVENTS,
-            'st_ai_15m':          dict(ST_AI_15M),
-            'st_ai_30m':          dict(ST_AI_30M),
-            'st_ai_1d':           dict(ST_AI_1D),
-            'st_context_15m':     dict(ST_CONTEXT_15M),
-            'st_context_30m':     dict(ST_CONTEXT_30M),
-            'adx_state':          dict(ADX_STATE),
             'scalp_positions':    dict(SCALP_POSITIONS),
             'st_context_1d':      dict(ST_CONTEXT_1D),
             'st_context_3d':      dict(ST_CONTEXT_3D),
-            'st_context_lt_1h':   dict(ST_CONTEXT_LT_1H),
-            'st_context_lt_4h':   dict(ST_CONTEXT_LT_4H),
-            'st_context_lt_15m':  dict(ST_CONTEXT_LT_15M),
-            'st_context_lt_5m':   dict(ST_CONTEXT_LT_5M),
-            'st_context_lt_10m':  dict(ST_CONTEXT_LT_10M),
-            'st_context_lt_30m':  dict(ST_CONTEXT_LT_30M),
-            'pyra_enabled':       dict(PYRA_ENABLED),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
         }
@@ -268,22 +244,9 @@ def load_runtime_state():
         LAST_SIGNAL_EVENTS  = payload.get('last_signal_events', {})
         LAST_WEBHOOK_TS.update(payload.get('last_webhook_ts', {}))
         LAST_WEBHOOK_SIGNAL_TS.update(payload.get('last_webhook_signal_ts', {}))
-        ST_AI_15M.update(payload.get('st_ai_15m', {}))
-        ST_AI_30M.update(payload.get('st_ai_30m', {}))
-        ST_AI_1D.update(payload.get('st_ai_1d', {}))
-        ST_CONTEXT_15M.update(payload.get('st_context_15m', {}))
-        ST_CONTEXT_30M.update(payload.get('st_context_30m', {}))
-        ADX_STATE.update(payload.get('adx_state', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
         ST_CONTEXT_1D.update(payload.get('st_context_1d', {}))
         ST_CONTEXT_3D.update(payload.get('st_context_3d', {}))
-        ST_CONTEXT_LT_1H.update(payload.get('st_context_lt_1h', {}))
-        ST_CONTEXT_LT_4H.update(payload.get('st_context_lt_4h', {}))
-        ST_CONTEXT_LT_15M.update(payload.get('st_context_lt_15m', {}))
-        ST_CONTEXT_LT_5M.update(payload.get('st_context_lt_5m', {}))
-        ST_CONTEXT_LT_10M.update(payload.get('st_context_lt_10m', {}))
-        ST_CONTEXT_LT_30M.update(payload.get('st_context_lt_30m', {}))
-        PYRA_ENABLED.update(payload.get('pyra_enabled', {}))
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
         for s in stale:
@@ -569,15 +532,11 @@ def send_telegram_scalp(msg):
         send_telegram(msg, ntfy=False)
 
 
-def send_telegram_with_buttons(msg, callback_key, token=None, chat_id=None,
+def send_telegram_with_buttons(msg, token=None, chat_id=None,
                                journal_symbol=None, journal_strategy=None,
                                journal_direction=None, journal_price=None):
-    """Envoie un message Telegram avec boutons Pyramiding / Ignorer / Journal + ntfy."""
-    row1 = [
-        {"text": "Activer pyramiding", "callback_data": f"pyra_on:{callback_key}"},
-        {"text": "Ignorer",             "callback_data": f"pyra_off:{callback_key}"},
-    ]
-    rows = [row1]
+    """Envoie un message Telegram avec bouton Journal (optionnel) + ntfy."""
+    rows = []
     if journal_symbol and journal_strategy and journal_direction and journal_price is not None and CONFIG.get('JOURNAL_BOT_URL'):
         sym_safe = str(journal_symbol).replace('|', '')
         jdata = f"journal_log:{sym_safe}|{journal_strategy}|{journal_direction}|{journal_price}"
@@ -667,23 +626,17 @@ def send_info(msg):
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     redis_status = "Redis connecte" if REDIS_CLIENT else "Redis non disponible"
-    pulse_v4_info_line = (
-        "PULSE V4 info: flip ZALT 30m si ZALT 6H ou ZALT 2H + RPZ 6H aligne\n\n"
-        if CONFIG.get('ENABLE_PULSE_V4_INFO', True)
-        else "PULSE V4 info: EN PAUSE\n\n"
-    )
     msg = (
         "<b>[BOT STARTED]</b>\n"
         "--------------------\n"
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "2 DAILY principale: ZALT 2D + ST Context 2H + flip ZALT 2H\n"
-        "2 DAILY secondaire: RPZ 2D + ZALT 1D + ST Context 2H + flip ZALT 2H\n"
-        "PULSE V4 principale: ZALT 6H + ST Context 30m + ST Context 10m + flip ZALT 10m\n"
-        "PULSE V4 secondaire: ZALT 2H + RPZ 6H + ST Context 30m + ST Context 10m + flip ZALT 10m\n"
-        f"{pulse_v4_info_line}"
-        "SCALP V3: gere par le scalpbot actif\n"
+        "DAILY A: RPZ 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose\n"
+        "DAILY B: ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)\n"
+        "PULSE A: RPZ 6H + flip ZALT 15m + veto ST Context 2H oppose\n"
+        "PULSE B: ST Context 2H + ST Context 15m alignes + flip ZALT 15m\n"
+        "SCALP: gere par le scalpbot actif (7 assets)\n"
         "--------------------\n"
         f"{now}"
     )
@@ -703,25 +656,13 @@ def send_weekly_report():
         f"📅 Semaine du {week_start.strftime('%d/%m')} au {now.strftime('%d/%m/%Y')}\n"
         f"🔔 Total alertes: <b>{total_alerts}</b>\n\n"
     )
-    total_confluence = sum(s.get('CONFLUENCE', 0)  for s in WEEKLY_STATS.values())
     total_daily      = sum(s.get('DAILY', 0)       for s in WEEKLY_STATS.values())
-    total_momentum   = sum(s.get('MOMENTUM', 0)     for s in WEEKLY_STATS.values())
-    total_swing      = sum(s.get('SWING', 0)        for s in WEEKLY_STATS.values())
-    total_pulse      = sum(s.get('PULSE', 0)        for s in WEEKLY_STATS.values())
     total_pulse_v4   = sum(s.get('PULSEV4', 0)      for s in WEEKLY_STATS.values())
-    total_rpz        = sum(s.get('RPZ', 0)          for s in WEEKLY_STATS.values())
-    total_scalp      = sum(s.get('SCALP', 0)        for s in WEEKLY_STATS.values())
 
     msg += (
         "📋 <b>Par stratégie:</b>\n"
-        f"  — CONFLUENCE: {total_confluence}\n"
         f"  — DAILY: {total_daily}\n"
-        f"  — SWING: {total_swing}\n"
-        f"  — PULSE: {total_pulse}\n"
-        f"  — PULSEV4: {total_pulse_v4}\n"
-        f"  — RPZ: {total_rpz}\n"
-        f"  — SCALP: {total_scalp}\n"
-        f"  — MOMENTUM: {total_momentum}\n\n"
+        f"  — PULSEV4: {total_pulse_v4}\n\n"
     )
 
 
@@ -735,15 +676,8 @@ def send_weekly_report():
         for symbol, stats in sorted(assets_with_alerts.items(), key=lambda x: sum(x[1].values()), reverse=True):
             base = symbol.replace('/USDT', '')
             details = []
-            if stats.get('SAFE', 0):        details.append(f"S:{stats['SAFE']}")
-            if stats.get('MOMENTUM', 0):    details.append(f"M:{stats['MOMENTUM']}")
-            if stats.get('CONFLUENCE', 0):  details.append(f"CONF:{stats['CONFLUENCE']}")
             if stats.get('DAILY', 0):       details.append(f"D:{stats['DAILY']}")
-            if stats.get('SWING', 0):       details.append(f"SW:{stats['SWING']}")
-            if stats.get('PULSE', 0):       details.append(f"PL:{stats['PULSE']}")
             if stats.get('PULSEV4', 0):     details.append(f"PL4:{stats['PULSEV4']}")
-            if stats.get('RPZ', 0):         details.append(f"RPZ:{stats['RPZ']}")
-            if stats.get('SCALP', 0):       details.append(f"SC:{stats['SCALP']}")
             msg += f"  —{base}: {sum(stats.values())} ({', '.join(details)})\n"
     else:
         msg += "📈 <b>Par asset:</b> Aucune alerte cette semaine\n"
@@ -758,46 +692,6 @@ def send_weekly_report():
     persist_runtime_state()
 
 
-
-def send_prep_report():
-    """Envoie un rapport groupé des assets en préparation — appelé toutes les heures."""
-    global PREP_BUFFER
-    with STATE_LOCK:
-        entries = list(PREP_BUFFER)
-        PREP_BUFFER.clear()
-    if not entries:
-        return
-    now = datetime.now(timezone.utc).strftime('%H:%M UTC')
-    msg = '<b>Assets en preparation</b> - ' + now + '\n' + '-' * 20 + '\n'
-
-    # Group by strategy and direction
-    groups = {}
-    for e in entries:
-        key = e['strat'] + '_' + e['dir']
-        if key not in groups:
-            groups[key] = []
-        groups[key].append(e['sym'].replace('/USDT', '') + ' $' + str(round(e['price'], 4)))
-
-    for key in sorted(groups.keys()):
-        strat, direction = key.split('_', 1)
-        emoji = "🟢" if direction == "LONG" else "🔴"
-        msg += '\n\n<b>' + strat + ' ' + direction + '</b>\n'
-        msg += '\n'.join([emoji + ' ' + x for x in groups[key]]) + '\n'
-    send_info(msg)
-    logger.info(f"[PREP REPORT] {len(entries)} assets envoyés")
-
-
-def prep_report_scheduler():
-    """Envoie le rapport de préparation à HH:05 chaque heure."""
-    logger.info("⏰ Scheduler rapport préparation démarré (HH:05 UTC)")
-    while True:
-        now = datetime.now(timezone.utc)
-        next_run = now.replace(minute=5, second=0, microsecond=0)
-        if now.minute >= 5:
-            next_run = (now + timedelta(hours=1)).replace(minute=5, second=0, microsecond=0)
-        wait = (next_run - now).total_seconds()
-        time.sleep(wait)
-        send_prep_report()
 
 def weekly_report_scheduler():
     logger.info("⏰ Scheduler rapport hebdomadaire démarré (dimanche minuit Taiwan)")
@@ -1180,19 +1074,6 @@ def get_ema200_raw_value(data, val_raw):
             return data.get(key)
     return val_raw
 
-def parse_bias_value(val, val2=None):
-    normalized = str(val).strip().lower()
-    if normalized in {'bull', 'bear'}:
-        return normalized
-    if val2 is None:
-        return None
-    try:
-        ema_value = float(val)
-        sma_value = float(val2)
-    except (ValueError, TypeError):
-        return None
-    return 'bull' if ema_value > sma_value else 'bear'
-
 def build_event_id(data, symbol, strat, tf, alert_type, val):
     candle_ts = data.get('candle_ts') or data.get('bar_time') or data.get('time') or data.get('timestamp')
     if candle_ts is None:
@@ -1215,24 +1096,10 @@ def should_send(symbol, key, event_id=None, cooldown=None):
             return True
     return False
 
-# États SCALP — ST AI 15min + contexte 15min
-ST_AI_15M: dict = {}       # symbol -> 'buy' | 'sell' | None
-ST_AI_30M: dict = {}       # symbol -> 'buy' | 'sell' | None
-ST_AI_1D: dict = {}        # symbol -> 'buy' | 'sell' | None
-ST_CONTEXT_15M: dict = {}  # symbol -> 'buy' | 'sell' | None
-ST_CONTEXT_30M: dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_1D:  dict = {}  # symbol -> 'buy' | 'sell' | None
 ST_CONTEXT_3D:  dict = {}  # symbol -> 'buy' | 'sell' | None
-ST_CONTEXT_LT_1H:  dict = {}  # Long term context 1H
-ST_CONTEXT_LT_4H:  dict = {}  # Long term context 4H (plot_2)
-ADX_STATE: dict = {}  # symbol -> {adx, di_plus, di_minus, adx_rising}
 PREP_STATE: dict = {}
 WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=4)
-PYRA_ENABLED: dict = {}  # f'{symbol}_{strat}' -> True si pyramiding activé  # strategy -> {'LONG': set(), 'SHORT': set()} — assets en préparation
-ST_CONTEXT_LT_15M: dict = {}  # Long term context 15m
-ST_CONTEXT_LT_5M:  dict = {}  # Long term context 5m (plot_2)
-ST_CONTEXT_LT_10M: dict = {}  # Long term context 10m (plot_2)
-ST_CONTEXT_LT_30M: dict = {}  # Long term context 30m (plot_2)
 
 # Timestamps derniers webhooks TradingView par tf (pour heartbeat)
 LAST_WEBHOOK_TS: dict = {}  # tf -> timestamp
@@ -1244,20 +1111,16 @@ SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_2d_ts': None, 'bias_3d': None, 'bias_3d_ts': None,
             'st_context_1h': None, 'st_context_4h': None, 'st_context_12h': None, 'st_context_15m': None, 'st_context_30m': None,
-            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_12h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
-            'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
+            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_12h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
+            'st_context_5m': None,
             'st_1h': None, 'st_1h_ts': None, 'st_4h': None, 'st_6h': None,
             'last_st_6h': None,   # dernier flip 6H
-            'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
-            'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'bias_1h': None, 'bias_1h_ts': None, 'bias_2h': None, 'bias_2h_ts': None, 'bias_4h': None, 'bias_6h': None, 'bias_6h_ts': None, 'bias_30m': None, 'bias_30m_ts': None, 'st_ai_15m': None, 'st_ai_30m': None, 'st_ai_30m_ts': None, 'st_ai_1d': None, 'st_ai_1d_ts': None, 'st_6h_ts': None,
-            'daily_st_ai_30m_flip_dir': None, 'daily_st_ai_30m_flip_ts': None, 'daily_st_ai_30m_flip_event_id': None,
+            'st_6h_ts': None,
             'st_context_2h': None,
             'st_context_6h': None,
-            'st_context_10m': None, 'st_context_lt_10m': None,
+            'st_context_10m': None,
             'rpz_1d': None, 'rpz_1d_ts': None, 'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_2h': None, 'rpz_2h_ts': None, 'rpz_30m': None, 'rpz_30m_ts': None, 'rpz_2d': None, 'rpz_2d_ts': None,
             'zalt_1m': None, 'zalt_1m_ts': None, 'last_zalt_1m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,
@@ -1279,7 +1142,6 @@ def send_close_alert(symbol, strategy, direction, price, reason):
     pos_key = f"{symbol}_{strategy}"
     with STATE_LOCK:
         pos = SCALP_POSITIONS.pop(pos_key, None)
-        PYRA_ENABLED.pop(pos_key, None)
     if pos:
         emoji = "🔴" if direction == "LONG" else "🟢"
         send_telegram(
@@ -1323,38 +1185,23 @@ def process_webhook(data):
         tf          = normalize_tf(data.get('tf', ''))
         alert_type  = normalize_alert_type(data.get('type', ''))
         val_raw     = data.get('value', '')
-        val2_raw    = data.get('value2')
         val         = str(val_raw).strip().lower()
         try:
             price = float(data.get('price', 0) or 0)
         except (TypeError, ValueError):
             price = 0.0
 
-        if alert_type in {'bias', 'bias_9_26'}:
-            bias_value = parse_bias_value(val_raw, val2_raw)
-            if bias_value is not None:
-                val = bias_value
-            else:
-                logger.warning(f"[WARN] BIAS valeur invalide pour {symbol}: value='{val_raw}' value2='{val2_raw}'")
-
         logger.info(f"📥 Webhook: {symbol} | strat={strat} | tf={tf} | type={alert_type} | val={val} | price={price}")
         # Tracker le dernier webhook reçu par tf
         LAST_WEBHOOK_TS[tf] = time.time()
         audit_log(data, status="reçu")
         event_id = build_event_id(data, symbol, strat, tf, alert_type, val)
-        # Defaut de securite : toujours defini, meme si le bloc de mise a jour
-        # ST AI 15m (gate par strat) ne s'execute pas pour cette alerte.
-        st_ai_15m_flipped_this_call = False
-        st_ai_30m_flipped_this_call = False
-        ctx30m_zone_changed_this_call = False
 
         if symbol not in get_tracked_symbols():
             logger.info(f"⚠️ {symbol} non dans la watchlist")
             audit_log(data, status="ignoré_watchlist")
             return jsonify({'status': 'ignored', 'reason': 'not_in_watchlist'}), 200
 
-        trade_symbol = is_trade_symbol(symbol)
-        radar_only = is_radar_symbol(symbol) and not trade_symbol
         exchange_name = get_symbol_config(symbol).get('exchange', 'okx')
         init_symbol_states(symbol)
         track_tv_signal(symbol, alert_type, tf)
@@ -1362,62 +1209,6 @@ def process_webhook(data):
         # Mise à jour globale des contextes (indépendante de la stratégie du webhook)
         m = MOMENTUM_STATE[symbol]
         now_ts = datetime.now(timezone.utc).timestamp()
-        if alert_type == 'bias':
-            bias_val = val.lower() if isinstance(val, str) else None
-            if bias_val in ('bull', 'bear', 'neutral'):
-                if tf == '4h':
-                    prev_bias_4h = m.get('bias_4h')
-                    m['bias_4h'] = bias_val if bias_val != 'neutral' else None
-                    logger.info(f"[BIAS TV] {symbol} bias_4h = {bias_val}")
-                elif tf == '6h':
-                    prev_bias_6h = m.get('bias_6h')
-                    m['bias_6h'] = bias_val if bias_val != 'neutral' else None
-                    m['bias_6h_ts'] = now_ts
-                    logger.info(f"[BIAS TV] {symbol} bias_6h = {bias_val}")
-                    # Clôture PULSE si Bias 6H inversé (via alerte TV)
-                    pos_pulse = SCALP_POSITIONS.get(f'{symbol}_PULSE')
-                    if pos_pulse and prev_bias_6h and bias_val != prev_bias_6h and bias_val != 'neutral':
-                        dir_p = pos_pulse['direction']
-                        exp_bias = 'bull' if dir_p == 'LONG' else 'bear'
-                        if bias_val != exp_bias:
-                            send_close_alert(symbol, 'PULSE', dir_p, price, 'Bias 6H inversé')
-                elif tf == '1d':
-                    prev_bias_1d = m.get('bias_1d')
-                    m['bias_1d'] = bias_val if bias_val != 'neutral' else None
-                    m['bias_1d_ts'] = now_ts
-                    logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
-                    logger.info(f"[BIAS TV] {symbol} bias_1d = {bias_val}")
-                elif tf == '2d':
-                    m['bias_2d'] = bias_val if bias_val != 'neutral' else None
-                    logger.info(f"[BIAS TV] {symbol} bias_2d = {bias_val}")
-                elif tf == '2h':
-                    m['bias_2h'] = bias_val if bias_val != 'neutral' else None
-                    m['bias_2h_ts'] = now_ts
-                    logger.info(f"[BIAS TV] {symbol} bias_2h = {bias_val}")
-                elif tf == '30m':
-                    m['bias_30m'] = bias_val if bias_val != 'neutral' else None
-                    m['bias_30m_ts'] = now_ts
-                    logger.info(f"[BIAS TV] {symbol} bias_30m = {bias_val}")
-                elif tf == '1h':
-                    m['bias_1h'] = bias_val if bias_val != 'neutral' else None
-                    m['bias_1h_ts'] = now_ts
-                    logger.info(f"[BIAS TV] {symbol} bias_1h = {bias_val}")
-
-
-
-
-        if alert_type == 'st_context_lt' and tf == '5m':
-            parsed_lt5m = parse_st_context_value(val)
-            ST_CONTEXT_LT_5M[symbol] = parsed_lt5m
-            m['st_context_lt_5m'] = parsed_lt5m
-            m['st_context_lt_5m_ts'] = now_ts
-
-        if alert_type == 'st_context_lt' and tf == '10m':
-            parsed_lt10m = parse_st_context_value(val)
-            ST_CONTEXT_LT_10M[symbol] = parsed_lt10m
-            m['st_context_lt_10m'] = parsed_lt10m
-            m['st_context_lt_10m_ts'] = now_ts
-
         if alert_type == 'st_context':
             parsed_ctx = parse_st_context_value(val)
             if tf == '1m':
@@ -1442,15 +1233,9 @@ def process_webhook(data):
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
             elif tf == '15m':
-                prev_ctx_15m_global = ST_CONTEXT_15M.get(symbol)
-                ctx15m_zone_changed_this_call = (parsed_ctx is not None and parsed_ctx != prev_ctx_15m_global)
-                ST_CONTEXT_15M[symbol] = parsed_ctx
                 m['st_context_15m'] = parsed_ctx
                 m['st_context_15m_ts'] = now_ts
             elif tf == '30m':
-                prev_ctx_30m_global = ST_CONTEXT_30M.get(symbol)
-                ctx30m_zone_changed_this_call = (parsed_ctx is not None and parsed_ctx != prev_ctx_30m_global)
-                ST_CONTEXT_30M[symbol] = parsed_ctx
                 m['st_context_30m'] = parsed_ctx
                 m['st_context_30m_ts'] = now_ts
             elif tf == '10m':
@@ -1466,28 +1251,8 @@ def process_webhook(data):
                 ST_CONTEXT_1D[symbol] = parsed_ctx
                 m['st_context_1d_ts'] = now_ts
             elif tf == '3d':
-                prev_ctx_3d = ST_CONTEXT_3D.get(symbol)
                 ST_CONTEXT_3D[symbol] = parsed_ctx
                 m['st_context_3d_ts'] = now_ts
-
-        if alert_type == 'st_context_lt':
-            parsed_ctx_lt = parse_st_context_value(val)
-            if tf == '1h':
-                ST_CONTEXT_LT_1H[symbol] = parsed_ctx_lt
-                m['st_context_lt_1h_ts'] = now_ts
-            elif tf == '30m':
-                ST_CONTEXT_LT_30M[symbol] = parsed_ctx_lt
-                m['st_context_lt_30m'] = parsed_ctx_lt
-                m['st_context_lt_30m_ts'] = now_ts
-            elif tf == '15m':
-                ST_CONTEXT_LT_15M[symbol] = parsed_ctx_lt
-                m['st_context_lt_15m_ts'] = now_ts
-            elif tf == '10m':
-                ST_CONTEXT_LT_10M[symbol] = parsed_ctx_lt
-                m['st_context_lt_10m_ts'] = now_ts
-            elif tf in ('4h', 'lt_4h'):
-                ST_CONTEXT_LT_4H[symbol] = parsed_ctx_lt
-                m['st_context_lt_4h_ts'] = now_ts
 
 
 
@@ -1518,11 +1283,6 @@ def process_webhook(data):
             else:
                 logger.warning(f"[WARN] ZALT valeur invalide pour {symbol}: '{val}'")
 
-        if radar_only:
-            check_daily_radar_report()
-            persist_runtime_state()
-            return jsonify({'status': 'ok', 'mode': 'radar_only'}), 200
-
         ema200_value = None
         if alert_type == 'ema200' and tf == '1h':
             ema200_raw = get_ema200_raw_value(data, val_raw)
@@ -1550,8 +1310,6 @@ def process_webhook(data):
             if alert_type == 'supertrend' and tf == '2h':
                 prev_2h = m.get('st_2h')
                 m['st_2h'] = parse_supertrend_value(val)
-                m['st_ai_2h'] = m['st_2h']
-                m['st_ai_2h_ts'] = now_ts
                 m['st_2h_flipped'] = bool(prev_2h is not None and m['st_2h'] is not None and m['st_2h'] != prev_2h)
                 if m['st_2h_flipped'] and prev_2h:
                     m['last_st_2h'] = prev_2h
@@ -1580,31 +1338,6 @@ def process_webhook(data):
                 m['st_6h_flipped'] = bool(prev_6h is not None and m['st_6h'] is not None and m['st_6h'] != prev_6h)
                 if m['st_6h_flipped']:
                     m['last_st_6h'] = prev_6h
-            if alert_type == 'supertrend' and tf == '1d':
-                st_1d_val = parse_supertrend_value(val)
-                m['st_ai_1d'] = st_1d_val
-                m['st_ai_1d_ts'] = now_ts
-                ST_AI_1D[symbol] = st_1d_val
-            if alert_type == 'supertrend' and tf == '15m':
-                prev_15m = m.get('st_ai_15m')
-                st_15m_val = parse_supertrend_value(val)
-                m['st_ai_15m'] = st_15m_val
-                st_ai_15m_flipped_this_call = bool(prev_15m and st_15m_val and st_15m_val != prev_15m)
-                if st_ai_15m_flipped_this_call:
-                    m['last_st_15m'] = prev_15m  # garde la valeur précédente pour le guard
-                ST_AI_15M[symbol] = st_15m_val
-            if alert_type == 'supertrend' and tf == '30m':
-                prev_30m = m.get('st_ai_30m')
-                st_30m_val = parse_supertrend_value(val)
-                m['st_ai_30m'] = st_30m_val
-                m['st_ai_30m_ts'] = now_ts
-                st_ai_30m_flipped_this_call = bool(prev_30m and st_30m_val and st_30m_val != prev_30m)
-                if st_ai_30m_flipped_this_call:
-                    m['last_st_30m'] = prev_30m
-                    m['daily_st_ai_30m_flip_dir'] = st_30m_val
-                    m['daily_st_ai_30m_flip_ts'] = now_ts
-                    m['daily_st_ai_30m_flip_event_id'] = event_id or f"st_ai_30m_flip_{symbol}_{int(now_ts)}_{st_30m_val}"
-                ST_AI_30M[symbol] = st_30m_val
 
         # ========================================================================
         # STRATEGIES ACTIVES
@@ -1752,31 +1485,7 @@ def telegram_callback():
             requests.post(f"https://api.telegram.org/bot{tok}/answerCallbackQuery",
                          json={"callback_query_id": callback_id}, timeout=5)
 
-        if callback_data.startswith('pyra_on:'):
-            key = callback_data[len('pyra_on:'):]
-            with STATE_LOCK:
-                PYRA_ENABLED[key] = True
-            logger.info(f"[PYRA] Activé par {user}: {key}")
-            if tok and chat_id and msg_id:
-                requests.post(f"https://api.telegram.org/bot{tok}/editMessageReplyMarkup",
-                             json={"chat_id": chat_id, "message_id": msg_id,
-                                   "reply_markup": {"inline_keyboard": [[
-                                       {"text": "✅ Pyramiding activé", "callback_data": "noop"}
-                                   ]]}}, timeout=5)
-
-        elif callback_data.startswith('pyra_off:'):
-            key = callback_data[len('pyra_off:'):]
-            with STATE_LOCK:
-                PYRA_ENABLED.pop(key, None)
-            logger.info(f"[PYRA] Désactivé par {user}: {key}")
-            if tok and chat_id and msg_id:
-                requests.post(f"https://api.telegram.org/bot{tok}/editMessageReplyMarkup",
-                             json={"chat_id": chat_id, "message_id": msg_id,
-                                   "reply_markup": {"inline_keyboard": [[
-                                       {"text": "❌ Pyramiding ignoré", "callback_data": "noop"}
-                                   ]]}}, timeout=5)
-
-        elif callback_data.startswith('journal_log:'):
+        if callback_data.startswith('journal_log:'):
             # Relai vers le Journal Bot
             payload_str = callback_data[len('journal_log:'):]
             parts = payload_str.split('|')
@@ -1842,7 +1551,7 @@ def force_prep_report():
 def refresh_indicators():
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
-    """Relance immédiatement le calcul des indicateurs OKX (Bias, ADX).
+    """Relance immédiatement le calcul des indicateurs OKX (ZALT HTF).
     Body optionnel: {"symbol": "BTC/USDT"} pour un seul asset.
     Sans body: relance pour tous les assets.
     """
@@ -1855,20 +1564,16 @@ def refresh_indicators():
             return jsonify({'error': f'{symbol} non dans la watchlist'}), 404
         symbols = [symbol]
     else:
-        symbols = list(CONFIG['SYMBOLS'].keys()) + list(CONFIG.get('RADAR_SYMBOLS', {}).keys())
+        symbols = list(CONFIG['SYMBOLS'].keys())
 
     def _run():
         logger.info(f"[REFRESH] Calcul forcé pour {len(symbols)} assets...")
         for sym in symbols:
             try:
-                if is_radar_symbol(sym) and not is_trade_symbol(sym):
-                    update_daily_radar_bias(sym)
-                else:
-                    update_indicators_for_symbol(sym)
+                update_indicators_for_symbol(sym)
             except Exception as e:
                 logger.error(f"[REFRESH] {sym}: {e}")
         persist_runtime_state()
-        check_daily_radar_report()
         logger.info("[REFRESH] Terminé")
 
     threading.Thread(target=_run, daemon=True).start()
@@ -2002,23 +1707,10 @@ def reset_state_all():
         LAST_SIGNALS.clear()
         LAST_SIGNAL_EVENTS.clear()
         LAST_WEBHOOK_SIGNAL_TS.clear()
-        ST_AI_15M.clear()
-        ST_AI_30M.clear()
-        ST_AI_1D.clear()
-        ST_CONTEXT_15M.clear()
-        ST_CONTEXT_30M.clear()
         SCALP_POSITIONS.clear()
         ST_CONTEXT_1D.clear()
-        ST_CONTEXT_LT_1H.clear()
-        ST_CONTEXT_LT_4H.clear()
         ST_CONTEXT_3D.clear()
-        ST_CONTEXT_LT_15M.clear()
-        ST_CONTEXT_LT_5M.clear()
-        ST_CONTEXT_LT_10M.clear()
-        ST_CONTEXT_LT_30M.clear()
-        ADX_STATE.clear()
         PREP_STATE.clear()
-        PYRA_ENABLED.clear()
     persist_runtime_state()
     logger.info("🔄 State complet remis à zéro")
     return jsonify({'status': 'reset', 'message': 'État complet remis à zéro'}), 200
@@ -2033,25 +1725,10 @@ def reset_state_symbol(symbol):
         return jsonify({'status': 'error', 'message': f'{symbol} non trouvé dans la watchlist'}), 404
     with STATE_LOCK:
         MOMENTUM_STATE.pop(symbol, None)
-        ST_AI_15M.pop(symbol, None)
-        ST_AI_30M.pop(symbol, None)
-        ST_AI_1D.pop(symbol, None)
-        ST_CONTEXT_15M.pop(symbol, None)
-        ST_CONTEXT_30M.pop(symbol, None)
         ST_CONTEXT_1D.pop(symbol, None)
         ST_CONTEXT_3D.pop(symbol, None)
-        ST_CONTEXT_LT_1H.pop(symbol, None)
-        ST_CONTEXT_LT_4H.pop(symbol, None)
-        ST_CONTEXT_LT_15M.pop(symbol, None)
-        ST_CONTEXT_LT_5M.pop(symbol, None)
-        ST_CONTEXT_LT_10M.pop(symbol, None)
-        ST_CONTEXT_LT_30M.pop(symbol, None)
-
-        for k in ['', '_1h', '_4h', '_1d']:
-            ADX_STATE.pop(f'{symbol}{k}', None)
 
         for strat in ['PULSE', 'DAILY', 'TREND2D']:
-            PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 
         keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
@@ -2251,7 +1928,6 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
         pos = SCALP_POSITIONS.get(pos_key)
         if pos and pos.get('direction') != direction:
             SCALP_POSITIONS.pop(pos_key, None)
-            PYRA_ENABLED.pop(pos_key, None)
             pos = None
         if pos is not None or not should_send(
             symbol, f"{strategy.lower()}_entry_{signal_type}_{exp_ctx}",
@@ -2261,7 +1937,6 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
         SCALP_POSITIONS[pos_key] = {
             'direction': direction, 'entry_count': 1, 'signal_type': signal_type,
         }
-        PYRA_ENABLED.pop(pos_key, None)
     emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
     send_telegram_with_buttons(
         f"{emoji} <b>[{strategy} - ENTREE]</b> {symbol}\n"
@@ -2269,7 +1944,7 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
         f"Price: ${format_price(price)}\nExchange: {exchange_name.upper()}\n"
         f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
         + "\n".join(detail_lines) + "\n" + get_market_context_info(),
-        pos_key, journal_symbol=symbol, journal_strategy=strategy,
+        journal_symbol=symbol, journal_strategy=strategy,
         journal_direction=direction, journal_price=price,
     )
     track_alert(symbol, strategy)
@@ -2278,20 +1953,8 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
     return True
 
 
-def _bias_to_trade_direction(bias_value):
-    if bias_value == 'bull':
-        return 'LONG'
-    if bias_value == 'bear':
-        return 'SHORT'
-    return None
-
-
 def _trade_direction_to_ctx(direction):
     return 'buy' if direction == 'LONG' else 'sell'
-
-
-def _trade_direction_to_bias(direction):
-    return 'bull' if direction == 'LONG' else 'bear'
 
 
 def _state_signal(m, field, max_age):
@@ -2340,37 +2003,6 @@ def _st_context_veto(m, tf, exp_ctx):
     veto = bool(fresh and value == opp)
     return value, fresh, veto
 
-
-
-
-def _send_strategy_pyramiding(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines, cooldown=1800):
-    pos_key = f"{symbol}_{strategy}"
-    with STATE_LOCK:
-        pos = SCALP_POSITIONS.get(pos_key)
-        if not (
-            pos
-            and pos.get('direction') == direction
-            and PYRA_ENABLED.get(pos_key, False)
-            and should_send(symbol, f"{strategy.lower()}_pyra_{signal_type}_{direction}", event_id=event_id, cooldown=cooldown)
-        ):
-            return False
-        pos['entry_count'] = int(pos.get('entry_count', 1)) + 1
-        count = pos['entry_count']
-
-    emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
-    send_telegram(
-        f"{emoji} <b>[{strategy} - PYRAMIDING #{count}]</b> {symbol}\n"
-        f"--------------------\n"
-        f"Direction: {direction}\n"
-        f"Price: ${format_price(price)}\n"
-        f"Exchange: {exchange_name.upper()}\n"
-        f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-        + "\n".join(detail_lines) + "\n" + get_market_context_info(),
-        ntfy=True,
-    )
-    persist_runtime_state()
-    logger.info(f"[{strategy}] Pyramiding {signal_type} #{count}: {symbol} {direction}")
-    return True
 
 
 def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
@@ -2510,217 +2142,16 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     return opened
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def calc_adx_okx(df, length=11, threshold=20):
-    """Calcule ADX + DI sur les données OHLCV."""
-    try:
-        high  = df['high']
-        low   = df['low']
-        close = df['close']
-        # True Range
-        tr = (high - low).combine((high - close.shift(1)).abs(), max).combine((low - close.shift(1)).abs(), max)
-        # Directional Movement
-        dm_plus  = (high - high.shift(1)).clip(lower=0)
-        dm_minus = (low.shift(1) - low).clip(lower=0)
-        dm_plus  = dm_plus.where(dm_plus >= dm_minus, 0)
-        dm_minus = dm_minus.where(dm_minus >= dm_plus, 0)
-        # Smooth with Wilder EMA
-        atr     = tr.ewm(alpha=1/length, adjust=False).mean()
-        di_plus  = 100 * dm_plus.ewm(alpha=1/length, adjust=False).mean() / atr
-        di_minus = 100 * dm_minus.ewm(alpha=1/length, adjust=False).mean() / atr
-        dx      = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus)
-        adx     = dx.ewm(alpha=1/length, adjust=False).mean()
-        return {
-            'adx':       round(float(adx.iloc[-1]), 2),
-            'di_plus':   round(float(di_plus.iloc[-1]), 2),
-            'di_minus':  round(float(di_minus.iloc[-1]), 2),
-            'adx_rising': float(adx.iloc[-1]) > float(adx.iloc[-2]),
-        }
-    except Exception:
-        return None
-
-def calc_bias_okx(df, ema_len=17, sma_len=40):
-    """EMA17 vs SMA40 — CarreBias uniforme."""
-    close   = df['close']
-    ema_val = close.ewm(span=ema_len, adjust=False).mean().iloc[-1]
-    sma_val = close.rolling(window=sma_len).mean().iloc[-1]
-    return 'bull' if ema_val > sma_val else 'bear'
-
-def calc_ema200_okx(df):
-    """EMA200 sur le close."""
-    return float(df['close'].ewm(span=200, adjust=False).mean().iloc[-2])
-
-
-def calc_bias_2d(symbol):
-    """Calcule le Bias 2D en agrégeant les bougies 1D par paires."""
-    try:
-        df_1d = fetch_ohlcv_okx(symbol, '1d', limit=100)
-        if df_1d is None or len(df_1d) < 40:
-            return None
-        df_2d = df_1d.groupby(df_1d.index // 2).agg({
-            'open': 'first', 'high': 'max', 'low': 'min',
-            'close': 'last', 'volume': 'sum'
-        }).reset_index(drop=True)
-        return calc_bias_okx(df_2d)
-    except Exception as e:
-        logger.error(f'[OKX] calc_bias_2d {symbol}: {e}')
-        return None
-
-
-
-
-
-
 def update_indicators_for_symbol(symbol):
-    """Met a jour tous les indicateurs calculables pour un asset."""
+    """Calcule les ZALT HTF (30m/4H/6H/1D) via update_okx_zalt_htf, qui fait son propre fetch OHLCV."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
         return
     try:
-        # Fetch bougies
-        df_1h  = fetch_ohlcv_okx(symbol, '1h',  limit=250)
-        df_4h  = fetch_ohlcv_okx(symbol, '4h',  limit=200)
-        df_6h  = fetch_ohlcv_okx(symbol, '6h',  limit=200)
-        df_30m = fetch_ohlcv_okx(symbol, '30m', limit=100)
-        df_1d  = fetch_ohlcv_okx(symbol, '1d',  limit=100)
-        df_3d  = fetch_ohlcv_okx(symbol, '1d',  limit=200)  # aggregate pour 3D
-
-        if df_1h is None or df_4h is None or df_1d is None:
-            return
-
-        # Calculs
-        bias_1h  = calc_bias_okx(df_1h, ema_len=13, sma_len=30)
-        df_2h    = fetch_ohlcv_okx(symbol, '2h', limit=150)
-        bias_2h  = calc_bias_okx(df_2h, ema_len=17, sma_len=40) if df_2h is not None else None
-        bias_4h  = calc_bias_okx(df_4h, ema_len=17, sma_len=40)
-        bias_6h  = calc_bias_okx(df_6h, ema_len=17, sma_len=40) if df_6h is not None else None
-        bias_30m = calc_bias_okx(df_30m, ema_len=13, sma_len=30) if df_30m is not None and len(df_30m) >= 30 else None
-        bias_1d  = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
-        bias_2d  = calc_bias_2d(symbol)
-        ema200_1h = calc_ema200_okx(df_1h)
-
-        # Bias 3D — agreger bougies 1D par triplets
-        try:
-            df_3d_agg = df_3d.groupby(df_3d.index // 3).agg({
-                'open': 'first', 'high': 'max', 'low': 'min',
-                'close': 'last', 'volume': 'sum'
-            }).reset_index(drop=True)
-            bias_3d = calc_bias_okx(df_3d_agg, ema_len=17, sma_len=40)
-        except Exception:
-            bias_3d = None
-
-        # ADX 15m
-        try:
-            df_15m_bias = fetch_ohlcv_okx(symbol, '15m', limit=50)
-            if df_15m_bias is not None and len(df_15m_bias) >= 30:
-                adx_data = calc_adx_okx(df_15m_bias)
-                if adx_data:
-                    ADX_STATE[symbol] = adx_data
-        except Exception as e:
-            logger.error(f'[OKX] adx_15m {symbol}: {e}')
-        # ADX 1H (Len=12, Threshold=22)
-        try:
-            adx_1h_data = calc_adx_okx(df_1h, length=10, threshold=20)
-            if adx_1h_data:
-                ADX_STATE[f'{symbol}_1h'] = adx_1h_data
-        except Exception as e:
-            logger.debug(f'[OKX] ADX 1H {symbol}: {e}')
-        # ADX 4H (Len=14, Threshold=23)
-        try:
-            adx_4h_data = calc_adx_okx(df_4h, length=14, threshold=23)
-            if adx_4h_data:
-                ADX_STATE[f'{symbol}_4h'] = adx_4h_data
-        except Exception as e:
-            logger.debug(f'[OKX] ADX 4H {symbol}: {e}')
-        # ADX 1D (Len=14)
-        try:
-            adx_1d_data = calc_adx_okx(df_1d, length=14)
-            if adx_1d_data:
-                ADX_STATE[f'{symbol}_1d'] = adx_1d_data
-        except Exception as e:
-            logger.debug(f'[OKX] ADX 1D {symbol}: {e}')
-
-
-        price = float(df_1h['close'].iloc[-1])
-
-        with STATE_LOCK:
-            if symbol in MOMENTUM_STATE:
-                if bias_2d:
-                    MOMENTUM_STATE[symbol]['bias_2d'] = bias_2d
-                    MOMENTUM_STATE[symbol]['bias_2d_ts'] = datetime.now(timezone.utc).timestamp()
-                if bias_3d:
-                    MOMENTUM_STATE[symbol]['bias_3d'] = bias_3d
-                    MOMENTUM_STATE[symbol]['bias_3d_ts'] = datetime.now(timezone.utc).timestamp()
-                MOMENTUM_STATE[symbol]['bias_1d']  = bias_1d
-                MOMENTUM_STATE[symbol]['bias_1d_ts'] = datetime.now(timezone.utc).timestamp()
-                MOMENTUM_STATE[symbol]['bias_1h']  = bias_1h
-                MOMENTUM_STATE[symbol]['bias_1h_ts'] = datetime.now(timezone.utc).timestamp()
-                MOMENTUM_STATE[symbol]['bias_4h']  = bias_4h
-                if bias_6h is not None:
-                    MOMENTUM_STATE[symbol]['bias_6h'] = bias_6h
-                    MOMENTUM_STATE[symbol]['bias_6h_ts'] = datetime.now(timezone.utc).timestamp()
-                if bias_2h is not None:
-                    MOMENTUM_STATE[symbol]['bias_2h'] = bias_2h
-                    MOMENTUM_STATE[symbol]['bias_2h_ts'] = datetime.now(timezone.utc).timestamp()
-                if bias_30m is not None:
-                    MOMENTUM_STATE[symbol]['bias_30m'] = bias_30m
-                    MOMENTUM_STATE[symbol]['bias_30m_ts'] = datetime.now(timezone.utc).timestamp()
-
-        logger.info(f"[OKX] {symbol} mis a jour — B1H={bias_1h} B2H={bias_2h} B4H={bias_4h} B6H={bias_6h} B1D={bias_1d} B2D={bias_2d} B3D={bias_3d} EMA200={ema200_1h:.4f}")
         update_okx_zalt_htf(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
-
-
-def update_daily_radar_bias(symbol):
-    """Met a jour uniquement le Bias 1D des assets radar suivis en info."""
-    cfg = CONFIG.get('RADAR_SYMBOLS', {}).get(symbol, {})
-    if cfg.get('bias_1d_source') == 'tv':
-        return
-    try:
-        df_1d = fetch_ohlcv_okx(symbol, '1d', limit=100)
-        if df_1d is None:
-            logger.info(f"[RADAR] {symbol} bias1d=None reason=fetch_failed")
-            return
-        bias_1d = calc_bias_okx(df_1d, ema_len=17, sma_len=40)
-        with STATE_LOCK:
-            init_symbol_states(symbol)
-            MOMENTUM_STATE[symbol]['bias_1d'] = bias_1d
-            MOMENTUM_STATE[symbol]['bias_1d_ts'] = datetime.now(timezone.utc).timestamp()
-        logger.info(f"[RADAR] {symbol} bias1d={bias_1d}")
-    except Exception as e:
-        logger.error(f"[RADAR] update_daily_radar_bias {symbol}: {e}")
-
-
-def check_daily_radar_report():
-    """Rapport daily/intraday desactive."""
-    return
 
 
 
@@ -2734,16 +2165,11 @@ def indicators_scheduler():
     # Premier calcul au démarrage après 30s
     time.sleep(30)
     while True:
-        radar_symbols = CONFIG.get('RADAR_SYMBOLS', {})
-        logger.info(f"[OKX] Calcul indicateurs pour {len(CONFIG['SYMBOLS'])} assets trade + {len(radar_symbols)} assets radar...")
+        logger.info(f"[OKX] Calcul indicateurs pour {len(CONFIG['SYMBOLS'])} assets trade...")
         for symbol in CONFIG['SYMBOLS']:
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
-        for symbol in radar_symbols:
-            update_daily_radar_bias(symbol)
-            time.sleep(0.5)  # rate limit OKX
         persist_runtime_state()
-        check_daily_radar_report()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m
         now = datetime.now(timezone.utc)
@@ -2789,9 +2215,9 @@ def startup():
                 logger.info(f'✅ Telegram webhook configuré: {wh_url}')
             elif tok and not base_url:
                 logger.warning('⚠️ PUBLIC_BASE_URL non défini — webhook Telegram non configuré')
-                logger.warning('⚠️ Les boutons Telegram (pyramiding, journal) ne fonctionneront PAS')
+                logger.warning('⚠️ Le bouton Telegram (journal) ne fonctionnera PAS')
                 # Envoyer un avertissement sur Telegram
-                send_info('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLes boutons inline (pyramiding, journal) sont désactivés.\nConfigurer PUBLIC_BASE_URL sur Railway.')
+                send_info('⚠️ <b>Bot démarré sans webhook Telegram.</b>\nLe bouton inline (journal) est désactivé.\nConfigurer PUBLIC_BASE_URL sur Railway.')
         except Exception as e:
             logger.warning(f'⚠️ Telegram webhook setup: {e}')
 

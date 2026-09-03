@@ -1145,6 +1145,7 @@ def normalize_tf(tf_raw):
         '180': '3h', '3hr': '3h', '3hour': '3h',
         '240': '4h', '4hr': '4h', '4hour': '4h',
         '360': '6h', '6hr': '6h', '6hour': '6h',
+        '720': '12h', '12hr': '12h', '12hour': '12h',
         'd': '1d', '1day': '1d',
         '2day': '2d', '3day': '3d',
     }
@@ -1241,11 +1242,10 @@ def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
             'bias_1d': None, 'bias_1d_ts': None, 'bias_2d': None, 'bias_2d_ts': None, 'bias_3d': None, 'bias_3d_ts': None,
-            'st_context_1h': None, 'st_context_4h': None, 'st_context_15m': None, 'st_context_30m': None,
-            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_3m_ts': None, 'st_context_4h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
+            'st_context_1h': None, 'st_context_4h': None, 'st_context_12h': None, 'st_context_15m': None, 'st_context_30m': None,
+            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_3m_ts': None, 'st_context_4h_ts': None, 'st_context_12h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_lt_1h_ts': None, 'st_context_lt_10m_ts': None, 'st_context_lt_15m_ts': None, 'st_context_lt_30m_ts': None, 'st_context_lt_4h_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_ai_5m': None, 'last_st_5m': None, 'st_context_5m': None, 'bias_5m': None,
             'st_1h': None, 'st_1h_ts': None, 'st_4h': None, 'st_6h': None,
-            'last_st_4h': None,   # dernier flip 4H (guard pyramiding)
             'last_st_6h': None,   # dernier flip 6H
             'last_st_15m': None,  # dernier flip 15min (guard pyramiding)
             'last_st_30m': None,  # dernier flip 30min (guard pyramiding PULSE)
@@ -1256,11 +1256,12 @@ def init_symbol_states(symbol):
             'st_context_6h': None,
             'st_context_3m': None,
             'st_context_10m': None, 'st_context_lt_10m': None,
-            'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_2h': None, 'rpz_2h_ts': None, 'rpz_30m': None, 'rpz_30m_ts': None, 'rpz_2d': None, 'rpz_2d_ts': None,
+            'rpz_1d': None, 'rpz_1d_ts': None, 'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_2h': None, 'rpz_2h_ts': None, 'rpz_30m': None, 'rpz_30m_ts': None, 'rpz_2d': None, 'rpz_2d_ts': None,
             'zalt_1m': None, 'zalt_1m_ts': None, 'last_zalt_1m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
+            'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
             'zalt_6h': None, 'zalt_6h_ts': None, 'last_zalt_6h_signal_ts': None,
             'zalt_1d': None, 'zalt_1d_ts': None, 'last_zalt_1d_signal_ts': None,
             'zalt_2d': None, 'zalt_2d_ts': None, 'last_zalt_2d_signal_ts': None,
@@ -1434,19 +1435,14 @@ def process_webhook(data):
                 m['st_context_3m_ts'] = now_ts
                 logger.info(f"[CTX 3M] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
             elif tf == '4h':
-                prev_ctx_4h = m.get('st_context_4h')
                 m['st_context_4h'] = parsed_ctx
                 m['st_context_4h_ts'] = now_ts
-                # Clôture CONTEXT4H si ST Context 4H opposé
-                pos_c4h = SCALP_POSITIONS.get(f'{symbol}_CONTEXT4H')
-                if False and pos_c4h and parsed_ctx and parsed_ctx != prev_ctx_4h:
-                    dir_c4h = pos_c4h['direction']
-                    exp_ctx = 'buy' if dir_c4h == 'LONG' else 'sell'
-                    if parsed_ctx != exp_ctx:
-                        send_close_alert(symbol, 'CONTEXT4H', dir_c4h, price, 'ST Context 4H opposé')
             elif tf == '6h':
                 m['st_context_6h'] = parsed_ctx
                 m['st_context_6h_ts'] = now_ts
+            elif tf == '12h':
+                m['st_context_12h'] = parsed_ctx
+                m['st_context_12h_ts'] = now_ts
             elif tf == '15m':
                 prev_ctx_15m_global = ST_CONTEXT_15M.get(symbol)
                 ctx15m_zone_changed_this_call = (parsed_ctx is not None and parsed_ctx != prev_ctx_15m_global)
@@ -1500,7 +1496,7 @@ def process_webhook(data):
         if alert_type == 'rpz':
             parsed_rpz = parse_rpz_value(val)
             if parsed_rpz in ('buy', 'sell'):
-                if tf in ('2d', '6h', '2h', '30m'):
+                if tf in ('1d', '2d', '6h', '2h', '30m'):
                     m[f'rpz_{tf}'] = parsed_rpz
                     m[f'rpz_{tf}_ts'] = now_ts
                     logger.info(f"[RPZ {tf.upper()}] {symbol} = {parsed_rpz}")
@@ -1513,7 +1509,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('1m', '10m', '15m', '30m', '2h', '6h', '1d', '2d'):
+                if tf in ('1m', '10m', '15m', '30m', '2h', '4h', '6h', '1d', '2d'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1553,8 +1549,6 @@ def process_webhook(data):
                 m['st_1h'] = parse_supertrend_value(val)
                 m['st_1h_ts'] = now_ts
                 m['st_1h_flipped'] = bool(prev_1h is not None and m['st_1h'] is not None and m['st_1h'] != prev_1h)
-                if m['st_1h_flipped'] and prev_1h:
-                    m['last_st_1h'] = prev_1h  # guard pyramiding CONTEXT4H
             if alert_type == 'supertrend' and tf == '2h':
                 prev_2h = m.get('st_2h')
                 m['st_2h'] = parse_supertrend_value(val)
@@ -1568,8 +1562,6 @@ def process_webhook(data):
                 m['prev_st_4h'] = prev_4h  # sauvegarder avant mise à jour
                 m['st_4h'] = parse_supertrend_value(val)
                 m['st_4h_flipped'] = bool(prev_4h is not None and m['st_4h'] is not None and m['st_4h'] != prev_4h)
-                if m['st_4h_flipped']:
-                    m['last_st_4h'] = prev_4h
                 # Relai vers bot Tapbit
                 tapbit_url = CONFIG.get('TAPBIT_BOT_URL', '')
                 if tapbit_url and symbol in CONFIG['SYMBOLS']:
@@ -1617,210 +1609,11 @@ def process_webhook(data):
                 ST_AI_30M[symbol] = st_30m_val
 
         # ========================================================================
-        # ========================================================================
-        # LOGIQUE CONFLUENCE : ST Context 3D + ST Context 4H aligné → flip ST AI 4H
-        # Anti-chop : ST Context 3D opposé OU ADX 1D DI opposé dominant → annulé
-        # ========================================================================
-        # LOGIQUE CONTEXT4H - SUPPRIMEE :
-        # Remplacee par DAILY. Bloc garde en reference mais desactive.
-        # ST Context 4H + Bias 1H + Zone ST Context 5m
-        # Bonus qualite non-bloquant : Zone ST Context 10m alignee
-        # ========================================================================
-        if False and strat in ['context', 'context4h', 'all']:
-            m = MOMENTUM_STATE[symbol]
-
-            if alert_type in ('st_context', 'bias') and tf in ('4h', '1h', '5m', '10m'):
-                ctx_4h_c = m.get('st_context_4h')
-                bias_1h_c = m.get('bias_1h')
-                ctx_5m_c = m.get('st_context_5m')
-                ctx_10m_c = m.get('st_context_10m')
-
-                if ctx_4h_c is not None and ctx_5m_c is not None:
-                    direction_c = 'LONG' if ctx_5m_c == 'buy' else 'SHORT'
-                    exp_ctx_c = 'buy' if direction_c == 'LONG' else 'sell'
-                    exp_bias_c = 'bull' if direction_c == 'LONG' else 'bear'
-                    ctx10m_bonus_c = ctx_10m_c == exp_ctx_c
-
-                    principal_ok_c = (
-                        ctx_4h_c == exp_ctx_c
-                        and bias_1h_c == exp_bias_c
-                        and ctx_5m_c == exp_ctx_c
-                    )
-
-                    logger.info(
-                        f"[CONTEXT4H CHECK] {symbol} dir={direction_c} "
-                        f"ctx4h={ctx_4h_c} bias1h={bias_1h_c} ctx5m={ctx_5m_c} "
-                        f"ctx10m={ctx_10m_c} ctx10m_bonus={ctx10m_bonus_c} principal={principal_ok_c}"
-                    )
-
-                    pos_key_c = f"{symbol}_CONTEXT4H"
-                    with STATE_LOCK:
-                        pos_c = SCALP_POSITIONS.get(pos_key_c)
-                        if pos_c and pos_c['direction'] != direction_c:
-                            SCALP_POSITIONS.pop(pos_key_c, None)
-                            PYRA_ENABLED.pop(pos_key_c, None)
-                            pos_c = None
-                        is_entry_c = bool(principal_ok_c and (pos_c is None or pos_c.get('signal_type') != 'principal_ctx4h_bias1h_ctx5m'))
-                        if is_entry_c and should_send(symbol, f"context4h_principal_{exp_ctx_c}", event_id=event_id, cooldown=14400):
-                            SCALP_POSITIONS[pos_key_c] = {
-                                'direction': direction_c,
-                                'entry_count': 1,
-                                'signal_type': 'principal_ctx4h_bias1h_ctx5m',
-                            }
-                            PYRA_ENABLED.pop(pos_key_c, None)
-                            pos_c = SCALP_POSITIONS[pos_key_c]
-                        else:
-                            is_entry_c = False
-
-                    if is_entry_c and pos_c:
-                        emoji = "\U0001f7e2" if direction_c == "LONG" else "\U0001f534"
-                        bonus_10m_txt_c = (
-                            "\u2b50 <b>BONUS 10M ALIGNÉ</b>\n"
-                            if ctx10m_bonus_c else ""
-                        )
-                        send_telegram_with_buttons(
-                            f"{emoji} <b>[CONTEXT4H - ENTREE]</b> {symbol}\n"
-                            f"--------------------\n"
-                            f"Direction: {direction_c}\n"
-                            f"Price: ${format_price(price)}\n"
-                            f"Exchange: {exchange_name.upper()}\n"
-                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"{bonus_10m_txt_c}"
-                            f"[OK] ST Context 4H: {(ctx_4h_c or 'N/A').upper()}\n"
-                            f"[OK] Bias 1H: {(bias_1h_c or 'N/A').upper()}\n"
-                            f"[OK] Zone ST Context 5m: {(ctx_5m_c or 'N/A').upper()}\n"
-                            f"[BONUS] Zone ST Context 10m: {(ctx_10m_c or 'NEUTRE').upper()}\n"
-                            f"{get_market_context_info()}",
-                            f"{symbol}_CONTEXT4H",
-                            journal_symbol=symbol, journal_strategy='CONTEXT4H',
-                            journal_direction=direction_c, journal_price=price
-                        )
-                        track_alert(symbol, 'CONTEXT4H')
-                        logger.info(f"[CONTEXT4H] Entree principale: {symbol} {direction_c}")
-
-            # LOGIQUE CONTEXT4H - ENTREE SECONDAIRE :
-            # ST Context 4H CT aligne + ST Context 30m aligne + ST Context LT 1H aligne
-            # + ST Context CT 1H neutre -> flip ST AI 1H
-            # ================================================================
-            if alert_type == 'supertrend' and tf == '1h' and m.get('st_1h_flipped'):
-                st_1h_val_c2 = m.get('st_1h')
-                if st_1h_val_c2 is not None:
-                    direction_c2 = 'LONG' if st_1h_val_c2 == 'buy' else 'SHORT'
-                    exp_c2 = 'buy' if direction_c2 == 'LONG' else 'sell'
-
-                    ctx_4h_ct_c2  = m.get('st_context_4h')
-                    ctx_30m_c2    = ST_CONTEXT_30M.get(symbol)
-                    ctx_lt_1h_c2  = ST_CONTEXT_LT_1H.get(symbol)
-                    ctx_ct_1h_c2  = m.get('st_context_1h')
-
-                    ctx4h_fresh_c2  = bool(ctx_4h_ct_c2) and is_signal_fresh(m.get('st_context_4h_ts'), 12 * 3600)
-                    ctx30m_fresh_c2 = bool(ctx_30m_c2) and is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-                    lt1h_fresh_c2   = bool(ctx_lt_1h_c2) and is_signal_fresh(m.get('st_context_lt_1h_ts'), 3 * 3600)
-                    ctx1h_fresh_c2  = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
-
-                    ct_4h_ok_c2      = ctx4h_fresh_c2 and ctx_4h_ct_c2 == exp_c2
-                    ctx_30m_ok_c2    = ctx30m_fresh_c2 and ctx_30m_c2 == exp_c2
-                    lt_1h_ok_c2      = lt1h_fresh_c2 and ctx_lt_1h_c2 == exp_c2
-                    # "CT 1H neutre" doit etre une lecture recente qui vaut None, pas une
-                    # absence/valeur perimee confondue avec un vrai neutre.
-                    ct_1h_neutral_c2 = ctx1h_fresh_c2 and ctx_ct_1h_c2 is None
-
-                    secondary_ok_c2 = ct_4h_ok_c2 and ctx_30m_ok_c2 and lt_1h_ok_c2 and ct_1h_neutral_c2
-
-                    logger.info(
-                        f"[CONTEXT4H CHECK SECONDAIRE] {symbol} dir={direction_c2} "
-                        f"ctx4h={ctx_4h_ct_c2}/{exp_c2} fresh={ctx4h_fresh_c2} "
-                        f"ctx30m={ctx_30m_c2}/{exp_c2} fresh={ctx30m_fresh_c2} "
-                        f"lt1h={ctx_lt_1h_c2}/{exp_c2} fresh={lt1h_fresh_c2} "
-                        f"ctx1h={ctx_ct_1h_c2} fresh={ctx1h_fresh_c2} neutral={ct_1h_neutral_c2} "
-                        f"secondary={secondary_ok_c2}"
-                    )
-
-                    pos_key_c2 = f"{symbol}_CONTEXT4H"
-                    with STATE_LOCK:
-                        pos_c2 = SCALP_POSITIONS.get(pos_key_c2)
-                        if pos_c2 and pos_c2['direction'] != direction_c2:
-                            SCALP_POSITIONS.pop(pos_key_c2, None)
-                            PYRA_ENABLED.pop(pos_key_c2, None)
-                            pos_c2 = None
-                        is_entry_c2 = bool(secondary_ok_c2 and (pos_c2 is None or pos_c2.get('signal_type') != 'secondary_ctx4h_30m_lt1h_neutral1h'))
-                        if is_entry_c2 and should_send(symbol, f"context4h_secondary_{exp_c2}", event_id=event_id, cooldown=14400):
-                            SCALP_POSITIONS[pos_key_c2] = {
-                                'direction': direction_c2,
-                                'entry_count': 1,
-                                'signal_type': 'secondary_ctx4h_30m_lt1h_neutral1h',
-                            }
-                            PYRA_ENABLED.pop(pos_key_c2, None)
-                            pos_c2 = SCALP_POSITIONS[pos_key_c2]
-                        else:
-                            is_entry_c2 = False
-
-                    if is_entry_c2 and pos_c2:
-                        emoji = "\U0001f7e2" if direction_c2 == "LONG" else "\U0001f534"
-                        send_telegram_with_buttons(
-                            f"{emoji} <b>[CONTEXT4H - ENTREE SECONDAIRE]</b> {symbol}\n"
-                            f"--------------------\n"
-                            f"Direction: {direction_c2}\n"
-                            f"Price: ${format_price(price)}\n"
-                            f"Exchange: {exchange_name.upper()}\n"
-                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"[OK] ST Context 4H CT: {(ctx_4h_ct_c2 or 'N/A').upper()}\n"
-                            f"[OK] ST Context 30m: {(ctx_30m_c2 or 'N/A').upper()}\n"
-                            f"[OK] ST Context LT 1H: {(ctx_lt_1h_c2 or 'N/A').upper()}\n"
-                            f"[OK] ST Context CT 1H: NEUTRE\n"
-                            f"[OK] Flip ST AI 1H: {st_1h_val_c2.upper()}\n"
-                            f"{get_market_context_info()}",
-                            f"{symbol}_CONTEXT4H",
-                            journal_symbol=symbol, journal_strategy='CONTEXT4H',
-                            journal_direction=direction_c2, journal_price=price
-                        )
-                        track_alert(symbol, 'CONTEXT4H')
-                        logger.info(f"[CONTEXT4H] Entree secondaire: {symbol} {direction_c2}")
-
-            # LOGIQUE CONTEXT4H - PYRAMIDING :
-            # Nouvelle zone ST Context 30m dans le sens de la position ouverte
-            # Cooldown 4H, necessite activation manuelle (bouton Telegram)
-            # ================================================================
-            if alert_type == 'st_context' and tf == '30m':
-                ctx_30m_pyra = ST_CONTEXT_30M.get(symbol)
-                if ctx_30m_pyra is not None:
-                    direction_pyra_c4h = 'LONG' if ctx_30m_pyra == 'buy' else 'SHORT'
-                    pos_key_c3 = f"{symbol}_CONTEXT4H"
-                    with STATE_LOCK:
-                        pos_c3 = SCALP_POSITIONS.get(pos_key_c3)
-                        is_pyra_c4h = bool(
-                            pos_c3 and pos_c3['direction'] == direction_pyra_c4h
-                            and ctx30m_zone_changed_this_call
-                            and PYRA_ENABLED.get(pos_key_c3, False)
-                        )
-                        if is_pyra_c4h and should_send(symbol, f"context4h_pyra_{ctx_30m_pyra}", event_id=event_id, cooldown=14400):
-                            pos_c3['entry_count'] += 1
-                            entry_count_c4h = pos_c3['entry_count']
-                        else:
-                            is_pyra_c4h = False
-
-                    if is_pyra_c4h:
-                        emoji = "\U0001f7e2" if direction_pyra_c4h == "LONG" else "\U0001f534"
-                        send_telegram_ttmtf(
-                            f"{emoji} <b>[CONTEXT4H - PYRAMIDING #{entry_count_c4h}]</b> {symbol}\n"
-                            f"--------------------\n"
-                            f"Direction: {direction_pyra_c4h}\n"
-                            f"Price: ${format_price(price)}\n"
-                            f"Exchange: {exchange_name.upper()}\n"
-                            f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-                            f"[OK] Nouvelle zone ST Context 30m: {ctx_30m_pyra.upper()}\n"
-                            f"{get_market_context_info()}"
-                        )
-                        track_alert(symbol, 'CONTEXT4H')
-                        logger.info(f"[CONTEXT4H] Pyramiding #{entry_count_c4h}: {symbol} {direction_pyra_c4h}")
-
-        # ========================================================================
         # STRATEGIES ACTIVES
-        # 2 DAILY principale : ZALT 2D + ST Context 2H + flip ZALT 2H
-        # 2 DAILY secondaire : RPZ 2D + ZALT 1D + ST Context 2H + flip ZALT 2H
-        # PULSE V4 principale : ZALT 6H + ST Context 30m + ST Context 10m + flip ZALT 10m
-        # PULSE V4 secondaire : ZALT 2H + RPZ 6H + ST Context 30m + ST Context 10m + flip ZALT 10m
-        # PULSE V4 info : flip ZALT 30m si ZALT 6H ou ZALT 2H + RPZ 6H aligne
+        # DAILY A : RPZ 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose
+        # DAILY B : ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)
+        # PULSE A : RPZ 6H + flip ZALT 15m + veto ST Context 30m oppose
+        # PULSE B : ST Context 30m + ST Context 15m alignes + flip ZALT 15m
         # ========================================================================
         # Stocker ST AI 4H pour sync_scalp
         if alert_type == 'supertrend' and tf == '4h':
@@ -1840,9 +1633,12 @@ def process_webhook(data):
                     m['st_6h_ts'] = time.time()
                     MOMENTUM_STATE[symbol] = m
 
-        # DAILY: trigger = flip ZALT 2H OKX (via update_okx_zalt_htf). Le webhook ne fait
-        # que rafraichir sur Context 4H (veto) pour retester si le flip 2H est encore frais.
-        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and alert_type == 'st_context' and tf == '4h':
+        # DAILY: trigger = flip ZALT 4H OKX (via update_okx_zalt_htf). Le webhook ne fait
+        # que rafraichir sur Context 4H/12H (A ou B) ou RPZ 1D (A) pour retester si le flip 4H est encore frais.
+        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
+            (alert_type == 'st_context' and tf in ('4h', '12h'))
+            or (alert_type == 'rpz' and tf == '1d')
+        ):
             evaluate_daily_rpz(
                 symbol,
                 trigger_dir=None,
@@ -1852,11 +1648,12 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE: trigger = flip ZALT 15m (TV). Rafraichi aussi sur Context 30m (veto)
-        # pour retester si le flip 15m est encore frais.
+        # PULSE: trigger = flip ZALT 15m (TV). Rafraichi aussi sur Context 15m/30m (A ou B)
+        # ou RPZ 6H (A) pour retester si le flip 15m est encore frais.
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_trade_symbol(symbol) and (
             (alert_type == 'zalt' and tf == '15m')
-            or (alert_type == 'st_context' and tf == '30m')
+            or (alert_type == 'st_context' and tf in ('15m', '30m'))
+            or (alert_type == 'rpz' and tf == '6h')
         ):
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             trigger_dir = parse_zalt_value(val) if alert_type == 'zalt' and tf == '15m' and zalt_signal in ('trend_flip', 'flip') else None
@@ -1878,8 +1675,9 @@ def process_webhook(data):
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
-                (alert_type == 'zalt' and tf in ('3m', '30m'))
-                or (alert_type == 'st_context' and tf == '15m')
+                (alert_type == 'zalt' and tf == '3m')
+                or (alert_type == 'rpz' and tf == '30m')
+                or (alert_type == 'st_context' and tf in ('3m', '15m', '30m'))
             )
         )
         if scalp_url and should_relay_scalp:
@@ -2038,11 +1836,8 @@ def telegram_callback():
 
 @app.route('/prep_report', methods=['GET', 'POST'])
 def force_prep_report():
-    """Force l'envoi immédiat des listes PREP pour toutes les stratégies."""
-    global PREP_STATE
-    PREP_STATE = {}  # Reset pour forcer le renvoi
-    check_prep_alerts()
-    return jsonify({'status': 'ok', 'message': 'Rapport PREP envoyé'}), 200
+    """Route conservee pour compatibilite. Plus de logique PREP active (CONTEXT4H retiree)."""
+    return jsonify({'status': 'ok', 'message': 'Aucune alerte PREP active'}), 200
 
 
 @app.route('/refresh', methods=['POST'])
@@ -2084,7 +1879,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : ZALT 30m (calcule en interne OKX) + ST Context 15m.
+    """Rechauffe le scalpbot : RPZ 30m (TV, relaye) + ST Context 15m/30m/3m.
     ZALT 3m (trigger) reste TradingView uniquement — n'est jamais stocke par le bot
     principal, il arrivera via le prochain webhook TradingView normal (relaye directement
     par should_relay_scalp)."""
@@ -2113,27 +1908,27 @@ def sync_scalp():
         m = state_copy.get(symbol, {})
         symbol_sent = []
 
-        zalt30 = m.get('zalt_30m')
-        if zalt30 in ('buy', 'sell'):
+        rpz30 = m.get('rpz_30m')
+        if rpz30 in ('buy', 'sell'):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
                     'tf':       '30m',
-                    'type':     'zalt',
-                    'value':    zalt30,
+                    'type':     'rpz',
+                    'value':    rpz30,
                     'price':    0,
-                    'event_id': f"sync_scalp_zalt30_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_rpz30_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('zalt30')
+                    symbol_sent.append('rpz30')
                 else:
-                    errors.append(f"{symbol}: ZALT30 HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: RPZ30 HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: ZALT30 {e}")
+                errors.append(f"{symbol}: RPZ30 {e}")
         else:
-            errors.append(f"{symbol}: ZALT 30m absent/invalide ({zalt30!r})")
+            errors.append(f"{symbol}: RPZ 30m absent/invalide ({rpz30!r})")
 
         ctx15 = m.get('st_context_15m')
         try:
@@ -2153,6 +1948,44 @@ def sync_scalp():
                 errors.append(f"{symbol}: CTX15M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: CTX15M {e}")
+
+        ctx30 = m.get('st_context_30m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '30m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx30),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx30_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx30m')
+            else:
+                errors.append(f"{symbol}: CTX30M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX30M {e}")
+
+        ctx3 = m.get('st_context_3m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '3m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx3),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx3_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx3m')
+            else:
+                errors.append(f"{symbol}: CTX3M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX3M {e}")
 
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
@@ -2219,7 +2052,7 @@ def reset_state_symbol(symbol):
         for k in ['', '_1h', '_4h', '_1d']:
             ADX_STATE.pop(f'{symbol}{k}', None)
 
-        for strat in ['PULSE', 'DAILY', 'CONTEXT4H', 'TREND2D']:
+        for strat in ['PULSE', 'DAILY', 'TREND2D']:
             PYRA_ENABLED.pop(f'{symbol}_{strat}', None)
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 
@@ -2296,7 +2129,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 ZALT_HTF_SETTINGS = {
     '30m': {'length': 50, 'mult': 1.2},
-    '2h':  {'length': 50, 'mult': 1.2},
+    '4h':  {'length': 50, 'mult': 1.2},
     '6h':  {'length': 50, 'mult': 1.2},
     '1d':  {'length': 50, 'mult': 1.3},
 }
@@ -2359,57 +2192,22 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
 
 
 
-def relay_zalt_okx_to_scalp(symbol, tf, direction, price):
-    """Relaie vers le scalpbot un ZALT 30m calcule en interne (OKX), pas via TradingView.
-    Pas de champ 'signal' : ce n'est jamais un flip TV, le trigger scalp reste uniquement
-    le flip ZALT 3m recu par TV."""
-    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
-        return
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
-    if symbol not in scalp_symbols:
-        return
-    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-    if not scalp_url:
-        return
-    relay_payload = {
-        'symbol':   symbol,
-        'strategy': 'scalp',
-        'tf':       tf,
-        'type':     'zalt',
-        'value':    direction,
-        'price':    price,
-        'event_id': f"okx_zalt_{tf}_{symbol}_{int(time.time())}",
-    }
-    try:
-        try:
-            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
-        except requests.exceptions.Timeout:
-            logger.warning(f"[RELAY OKX ZALT] {symbol} {tf} timeout, retry...")
-            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
-        if 200 <= resp.status_code < 300:
-            logger.info(f"[RELAY OKX ZALT] {symbol} {tf}={direction} → scalpbot OK")
-        else:
-            logger.warning(f"[RELAY OKX ZALT] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        logger.warning(f"[RELAY OKX ZALT] Erreur: {e}")
-
-
 def update_okx_zalt_htf(symbol):
-    """ZALT 30m/2H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
-    30m est en plus relaye vers le scalpbot (plus de TV pour ce tf). Seul le flip 2H
-    declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais Daily/Pulse/Scalp evaluate."""
+    """ZALT 30m/4H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
+    Seul le flip 4H declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais
+    Daily/Pulse/Scalp evaluate, et ne sont plus exiges par ces strategies (RPZ TV a la place)
+    ni relayes au scalpbot (RPZ 30m TV = tendance A scalp desormais)."""
     if not is_trade_symbol(symbol):
         return
     computed = {}
-    for tf, minutes in (('30m', 30), ('2h', 120), ('6h', 360), ('1d', 1440)):
+    for tf, minutes in (('30m', 30), ('4h', 240), ('6h', 360), ('1d', 1440)):
         cfg = ZALT_HTF_SETTINGS[tf]
         df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=300), minutes)
         computed[tf] = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
 
-    flipped_2h = False
+    flipped_4h = False
     flip_dir = None
     price = 0.0
-    to_relay = []
     now_ts = time.time()
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2421,30 +2219,25 @@ def update_okx_zalt_htf(symbol):
             old = m.get(f'zalt_{tf}')
             m[f'zalt_{tf}'] = payload['trend']
             m[f'zalt_{tf}_ts'] = now_ts
-            if tf == '30m':
-                to_relay.append((tf, payload['trend'], payload['close']))
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m[f'last_zalt_{tf}_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
-                if tf == '2h':
-                    flipped_2h = True
+                if tf == '4h':
+                    flipped_4h = True
                     flip_dir = payload['trend']
                     price = payload['close']
             else:
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
         persist_runtime_state()
 
-    for tf, direction, close_price in to_relay:
-        relay_zalt_okx_to_scalp(symbol, tf, direction, close_price)
-
-    if flipped_2h and flip_dir in ('buy', 'sell'):
+    if flipped_4h and flip_dir in ('buy', 'sell'):
         evaluate_daily_rpz(
             symbol,
             trigger_dir=flip_dir,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_zalt_2h_flip_{symbol}_{int(now_ts)}",
-            source='okx_zalt_2h_flip',
+            event_id=f"okx_zalt_4h_flip_{symbol}_{int(now_ts)}",
+            source='okx_zalt_4h_flip',
         )
 
 
@@ -2514,7 +2307,7 @@ def _ctx_label(value):
 
 
 def _rpz_condition(m, tf, exp_ctx):
-    max_age = {'2d': 5 * 24 * 3600, '6h': 18 * 3600, '2h': 6 * 3600, '30m': 90 * 60}.get(tf, 0)
+    max_age = {'1d': 3 * 24 * 3600, '2d': 5 * 24 * 3600, '6h': 18 * 3600, '2h': 6 * 3600, '30m': 90 * 60}.get(tf, 0)
     value, fresh = _state_signal(m, f'rpz_{tf}', max_age)
     return value, fresh, bool(fresh and value == exp_ctx)
 
@@ -2524,6 +2317,7 @@ def _zalt_condition(m, tf, exp_ctx):
         '2d': 5 * 24 * 3600,
         '1d': 3 * 24 * 3600,
         '6h': 18 * 3600,
+        '4h': 12 * 3600,
         '2h': 6 * 3600,
         '30m': 90 * 60,
         '15m': 45 * 60,
@@ -2535,14 +2329,14 @@ def _zalt_condition(m, tf, exp_ctx):
 
 
 def _st_context_condition(m, tf, exp_ctx):
-    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600}.get(tf, 0)
+    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
     return value, fresh, bool(fresh and value == exp_ctx)
 
 
 def _st_context_veto(m, tf, exp_ctx):
     """Veto seulement si le contexte est OPPOSE et frais. Neutre/None/perime = on passe (pas de veto)."""
-    max_age = {'15m': 45 * 60, '30m': 90 * 60, '4h': 12 * 3600}.get(tf, 0)
+    max_age = {'15m': 45 * 60, '30m': 90 * 60, '4h': 12 * 3600, '12h': 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
     opp = 'sell' if exp_ctx == 'buy' else 'buy'
     veto = bool(fresh and value == opp)
@@ -2582,7 +2376,9 @@ def _send_strategy_pyramiding(symbol, strategy, direction, signal_type, event_id
 
 
 def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY simplifiee: tendance ZALT 1D + trigger flip ZALT 2H (OKX) + veto Context 4H oppose."""
+    """DAILY porte A/B: trigger flip ZALT 4H (OKX) commun.
+    A: RPZ 1D + veto Context 12H oppose.
+    B: Context 12H + Context 4H alignes (pas de RPZ 1D)."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2593,37 +2389,54 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        zalt1d, zalt1d_fresh, zalt1d_ok = _zalt_condition(m, '1d', exp_ctx)
-        zalt2h, zalt2h_fresh, zalt2h_ok = _zalt_condition(m, '2h', exp_ctx)
-        zalt2h_flip_fresh = is_signal_fresh(m.get('last_zalt_2h_signal_ts'), 6 * 3600)
-        ctx4h, ctx4h_fresh, ctx4h_veto = _st_context_veto(m, '4h', exp_ctx)
-        trigger_ok = zalt2h_ok and zalt2h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
-        entry_ok = zalt1d_ok and trigger_ok and not ctx4h_veto
+        rpz1d, rpz1d_fresh, rpz1d_ok = _rpz_condition(m, '1d', exp_ctx)
+        zalt4h, zalt4h_fresh, zalt4h_ok = _zalt_condition(m, '4h', exp_ctx)
+        zalt4h_flip_fresh = is_signal_fresh(m.get('last_zalt_4h_signal_ts'), 12 * 3600)
+        trigger_ok = zalt4h_ok and zalt4h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
+
+        ctx12h_veto_val, ctx12h_veto_fresh, ctx12h_veto = _st_context_veto(m, '12h', exp_ctx)
+        ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
+        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+
+        entry_a_ok = rpz1d_ok and trigger_ok and not ctx12h_veto
+        entry_b_ok = ctx12h_ok and ctx4h_ok and trigger_ok
+        entry_ok = entry_a_ok or entry_b_ok
 
         logger.info(
             f"[DAILY CHECK] {symbol} source={source} dir={direction} "
-            f"zalt1d={zalt1d}/{exp_ctx} fresh={zalt1d_fresh} ok={zalt1d_ok} "
-            f"zalt2h={zalt2h}/{exp_ctx} fresh={zalt2h_fresh} flip_fresh={zalt2h_flip_fresh} trig={trigger_ok} "
-            f"ctx4h={ctx4h} fresh={ctx4h_fresh} veto={ctx4h_veto} "
-            f"entry={entry_ok}"
+            f"rpz1d={rpz1d}/{exp_ctx} fresh={rpz1d_fresh} ok={rpz1d_ok} "
+            f"zalt4h={zalt4h}/{exp_ctx} fresh={zalt4h_fresh} flip_fresh={zalt4h_flip_fresh} trig={trigger_ok} "
+            f"ctx12h={ctx12h_veto_val} veto={ctx12h_veto} align_ok={ctx12h_ok} "
+            f"ctx4h={ctx4h} align_ok={ctx4h_ok} "
+            f"A={entry_a_ok} B={entry_b_ok} entry={entry_ok}"
         )
 
         if entry_ok:
+            signal_type = 'daily_a_rpz1d' if entry_a_ok else 'daily_b_ctx12_ctx4'
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
+            detail_lines = ["[OK] Entree DAILY"]
+            if entry_a_ok:
+                detail_lines += [
+                    "[VOIE] A: RPZ 1D + veto Context 12H",
+                    f"[OK] RPZ 1D: {_ctx_label(rpz1d)}",
+                    f"[INFO] ST Context 12H (veto si oppose): {_ctx_label(ctx12h_veto_val)}",
+                ]
+            else:
+                detail_lines += [
+                    "[VOIE] B: Context 12H + Context 4H alignes",
+                    f"[OK] ST Context 12H: {_ctx_label(ctx12h)}",
+                    f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+                ]
+            detail_lines.append(f"[OK] Flip ZALT 4H: {_ctx_label(zalt4h)}")
             opened = _open_strategy_entry(
                 symbol,
                 'DAILY',
                 direction,
-                'zalt1d_zalt2h_flip_ctx4h_veto',
+                signal_type,
                 event_key,
                 price,
                 exchange_name,
-                [
-                    "[OK] Entree DAILY",
-                    f"[OK] ZALT 1D: {_ctx_label(zalt1d)}",
-                    f"[OK] Flip ZALT 2H: {_ctx_label(zalt2h)}",
-                    f"[INFO] ST Context 4H (veto si oppose): {_ctx_label(ctx4h)}",
-                ],
+                detail_lines,
                 cooldown=14400,
             ) or opened
     return opened
@@ -2634,7 +2447,9 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE V4 simplifiee: tendance ZALT 6H + trigger flip ZALT 15m (TV) + veto Context 30m oppose."""
+    """PULSE porte A/B: trigger flip ZALT 15m (TV) commun.
+    A: RPZ 6H + veto Context 30m oppose.
+    B: Context 30m + Context 15m alignes (pas de RPZ 6H)."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2644,37 +2459,54 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        zalt6, zalt6_fresh, zalt6_ok = _zalt_condition(m, '6h', exp_ctx)
+        rpz6, rpz6_fresh, rpz6_ok = _rpz_condition(m, '6h', exp_ctx)
         zalt15, zalt15_fresh, zalt15_ok = _zalt_condition(m, '15m', exp_ctx)
         zalt15_flip_fresh = is_signal_fresh(m.get('last_zalt_15m_signal_ts'), 45 * 60)
-        ctx30, ctx30_fresh, ctx30_veto = _st_context_veto(m, '30m', exp_ctx)
         trigger_ok = zalt15_ok and zalt15_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
-        entry_ok = zalt6_ok and trigger_ok and not ctx30_veto
+
+        ctx30_veto_val, ctx30_veto_fresh, ctx30_veto = _st_context_veto(m, '30m', exp_ctx)
+        ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
+        ctx15, ctx15_fresh, ctx15_ok = _st_context_condition(m, '15m', exp_ctx)
+
+        entry_a_ok = rpz6_ok and trigger_ok and not ctx30_veto
+        entry_b_ok = ctx30_ok and ctx15_ok and trigger_ok
+        entry_ok = entry_a_ok or entry_b_ok
 
         logger.info(
             f"[PULSEV4 CHECK] {symbol} source={source} dir={direction} "
-            f"zalt6={zalt6}/{exp_ctx} fresh={zalt6_fresh} ok={zalt6_ok} "
+            f"rpz6={rpz6}/{exp_ctx} fresh={rpz6_fresh} ok={rpz6_ok} "
             f"zalt15={zalt15}/{exp_ctx} fresh={zalt15_fresh} flip_fresh={zalt15_flip_fresh} trig={trigger_ok} "
-            f"ctx30={ctx30} fresh={ctx30_fresh} veto={ctx30_veto} "
-            f"entry={entry_ok}"
+            f"ctx30={ctx30_veto_val} veto={ctx30_veto} align_ok={ctx30_ok} "
+            f"ctx15={ctx15} align_ok={ctx15_ok} "
+            f"A={entry_a_ok} B={entry_b_ok} entry={entry_ok}"
         )
 
         if entry_ok:
+            signal_type = 'pulse_a_rpz6h' if entry_a_ok else 'pulse_b_ctx30_ctx15'
             event_key = event_id or f"pulsev4_{symbol}_{int(time.time())}_{exp_ctx}"
+            detail_lines = ["[OK] Entree PULSE"]
+            if entry_a_ok:
+                detail_lines += [
+                    "[VOIE] A: RPZ 6H + veto Context 30m",
+                    f"[OK] RPZ 6H: {_ctx_label(rpz6)}",
+                    f"[INFO] ST Context 30m (veto si oppose): {_ctx_label(ctx30_veto_val)}",
+                ]
+            else:
+                detail_lines += [
+                    "[VOIE] B: Context 30m + Context 15m alignes",
+                    f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
+                    f"[OK] ST Context 15m: {_ctx_label(ctx15)}",
+                ]
+            detail_lines.append(f"[OK] Flip ZALT 15m: {_ctx_label(zalt15)}")
             opened = _open_strategy_entry(
                 symbol,
                 'PULSEV4',
                 direction,
-                'zalt6h_zalt15m_flip_ctx30_veto',
+                signal_type,
                 event_key,
                 price,
                 exchange_name,
-                [
-                    "[OK] Entree PULSE",
-                    f"[OK] ZALT 6H: {_ctx_label(zalt6)}",
-                    f"[OK] Flip ZALT 15m: {_ctx_label(zalt15)}",
-                    f"[INFO] ST Context 30m (veto si oppose): {_ctx_label(ctx30)}",
-                ],
+                detail_lines,
                 cooldown=1800,
             ) or opened
     return opened
@@ -2892,51 +2724,6 @@ def check_daily_radar_report():
     """Rapport daily/intraday desactive."""
     return
 
-def check_prep_alerts():
-    """Envoie alertes PREP CONTEXT4H et PULSE quand les conditions sont réunies."""
-    global PREP_STATE
-    with STATE_LOCK:
-        state_copy  = dict(MOMENTUM_STATE)
-        symbols_conf = CONFIG['SYMBOLS']
-
-    # ━━ PREP CONTEXT4H ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    new_prep_c4h = {'LONG': set(), 'SHORT': set()}
-
-    for symbol, m in state_copy.items():
-        if symbol not in symbols_conf:
-            continue
-        ctx_4h_ct = m.get('st_context_4h')
-        ctx_30m   = ST_CONTEXT_30M.get(symbol)
-        ctx_lt_1h = ST_CONTEXT_LT_1H.get(symbol)
-        ctx_ct_1h = m.get('st_context_1h')
-
-        for direction in ('LONG', 'SHORT'):
-            exp = 'buy' if direction == 'LONG' else 'sell'
-            opp = 'sell' if direction == 'LONG' else 'buy'
-            ct_4h_ok     = ctx_4h_ct  == exp
-            ctx_30m_ok   = ctx_30m    == exp
-            lt_1h_ok     = ctx_lt_1h  == exp
-            ct_1h_neutral = ctx_ct_1h != exp and ctx_ct_1h != opp
-            if ct_4h_ok and ctx_30m_ok and lt_1h_ok and ct_1h_neutral:
-                new_prep_c4h[direction].add(symbol)
-
-    old_c4h   = PREP_STATE.get('CONTEXT4H', {'LONG': set(), 'SHORT': set()})
-    new_long  = new_prep_c4h['LONG']
-    new_short = new_prep_c4h['SHORT']
-    if False and (new_long != old_c4h.get('LONG', set()) or new_short != old_c4h.get('SHORT', set())):
-        lines = ["⏰<b>[PREP CONTEXT4H]</b>"]
-        if new_long:
-            lines.append("🟢 LONG  : " + "  ".join(sorted(s.replace('/USDT','') for s in new_long)))
-        if new_short:
-            lines.append("🔴 SHORT : " + "  ".join(sorted(s.replace('/USDT','') for s in new_short)))
-        if not new_long and not new_short:
-            lines.append("— Aucun asset en préparation")
-        lines.append(f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M (Shanghai)')}")
-        send_info("\n".join(lines))
-        logger.info("[PREP] CONTEXT4H envoyé")
-    PREP_STATE['CONTEXT4H'] = {'LONG': set(), 'SHORT': set()}
-
-
 
 
 
@@ -2958,7 +2745,6 @@ def indicators_scheduler():
             update_daily_radar_bias(symbol)
             time.sleep(0.5)  # rate limit OKX
         persist_runtime_state()
-        check_prep_alerts()
         check_daily_radar_report()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m

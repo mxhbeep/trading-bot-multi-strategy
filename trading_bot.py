@@ -748,36 +748,28 @@ def track_tv_signal(symbol, alert_type, tf):
 def tv_required_signals():
     return [
         {
-            'label': 'ZALT 2D',
-            'alert_type': 'zalt',
-            'tf': '2d',
-            'max_age': 5 * 24 * 3600,
-            'warmup': 5 * 24 * 3600,
-            'scope': 'all',
-        },
-        {
-            'label': 'RPZ 2D',
+            'label': 'RPZ 1D',
             'alert_type': 'rpz',
-            'tf': '2d',
-            'max_age': 5 * 24 * 3600,
-            'warmup': 5 * 24 * 3600,
-            'scope': 'all',
-        },
-        {
-            'label': 'ZALT 1D',
-            'alert_type': 'zalt',
             'tf': '1d',
             'max_age': 3 * 24 * 3600,
             'warmup': 3 * 24 * 3600,
             'scope': 'all',
         },
         {
-            'label': 'ZALT 6H',
-            'alert_type': 'zalt',
-            'tf': '6h',
-            'max_age': 18 * 3600,
-            'warmup': 19 * 3600,
-            'scope': 'active',
+            'label': 'ST Context 12H',
+            'alert_type': 'st_context',
+            'tf': '12h',
+            'max_age': 24 * 3600,
+            'warmup': 25 * 3600,
+            'scope': 'all',
+        },
+        {
+            'label': 'ST Context 4H',
+            'alert_type': 'st_context',
+            'tf': '4h',
+            'max_age': 12 * 3600,
+            'warmup': 13 * 3600,
+            'scope': 'all',
         },
         {
             'label': 'RPZ 6H',
@@ -785,7 +777,7 @@ def tv_required_signals():
             'tf': '6h',
             'max_age': 18 * 3600,
             'warmup': 19 * 3600,
-            'scope': 'active',
+            'scope': 'pulse',
         },
         {
             'label': 'ST Context 2H',
@@ -793,70 +785,49 @@ def tv_required_signals():
             'tf': '2h',
             'max_age': 6 * 3600,
             'warmup': 7 * 3600,
-            'scope': 'active',
+            'scope': 'pulse',
         },
         {
-            'label': 'ZALT 2H',
-            'alert_type': 'zalt',
-            'tf': '2h',
-            'max_age': 6 * 3600,
-            'warmup': 7 * 3600,
-            'scope': 'active',
-        },
-        {
-            'label': 'ST Context 10m',
+            'label': 'ST Context 15m',
             'alert_type': 'st_context',
-            'tf': '10m',
-            'max_age': 2 * 3600,
-            'warmup': 3 * 3600,
-            'scope': 'active',
-            'symbol_max_age': {
-                'CVX/USDT': 6 * 3600,
-                'CRV/USDT': 6 * 3600,
-            },
-            'symbol_warmup': {
-                'CVX/USDT': 6 * 3600,
-                'CRV/USDT': 6 * 3600,
-            },
+            'tf': '15m',
+            'max_age': 45 * 60,
+            'warmup': 90 * 60,
+            'scope': 'pulse',
         },
         {
-            'label': 'ZALT 10m',
-            'alert_type': 'zalt',
-            'tf': '10m',
-            'max_age': 2 * 3600,
-            'warmup': 3 * 3600,
-            'scope': 'active',
-            'symbol_max_age': {
-                'CVX/USDT': 6 * 3600,
-                'CRV/USDT': 6 * 3600,
-            },
-            'symbol_warmup': {
-                'CVX/USDT': 6 * 3600,
-                'CRV/USDT': 6 * 3600,
-            },
-        },
-        {
-            'label': 'ZALT 30m',
-            'alert_type': 'zalt',
+            'label': 'RPZ 30m',
+            'alert_type': 'rpz',
             'tf': '30m',
-            'max_age': 4 * 3600,
-            'warmup': 4 * 3600,
-            'scope': 'active',
+            'max_age': 90 * 60,
+            'warmup': 2 * 3600,
+            'scope': 'scalp',
         },
         {
             'label': 'ST Context 30m',
             'alert_type': 'st_context',
             'tf': '30m',
-            'max_age': 4 * 3600,
-            'warmup': 4 * 3600,
-            'scope': 'active',
+            'max_age': 90 * 60,
+            'warmup': 2 * 3600,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ST Context 5m',
+            'alert_type': 'st_context',
+            'tf': '5m',
+            'max_age': 22 * 60,
+            'warmup': 30 * 60,
+            'scope': 'scalp',
         },
     ]
 
 
 def tv_watchdog_symbols(req):
-    if req.get('scope') == 'all':
+    scope = req.get('scope', 'all')
+    if scope == 'all':
         return sorted(get_tracked_symbols())
+    if scope == 'pulse':
+        return sorted(s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('pulse'))
     return sorted(s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp'))
 
 
@@ -1111,18 +1082,14 @@ def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
             'st_context_1h': None, 'st_context_4h': None, 'st_context_12h': None, 'st_context_15m': None, 'st_context_30m': None,
-            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_12h_ts': None, 'st_context_6h_ts': None, 'st_context_10m_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
+            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_12h_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_context_5m': None,
             'st_1h': None, 'st_1h_ts': None, 'st_4h': None, 'st_6h': None,
             'last_st_6h': None,   # dernier flip 6H
             # Nouveaux états pour CONTEXT v2 et SCALP
             'st_6h_ts': None,
             'st_context_2h': None,
-            'st_context_6h': None,
-            'st_context_10m': None,
             'rpz_1d': None, 'rpz_1d_ts': None, 'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_2h': None, 'rpz_2h_ts': None, 'rpz_30m': None, 'rpz_30m_ts': None, 'rpz_2d': None, 'rpz_2d_ts': None,
-            'zalt_1m': None, 'zalt_1m_ts': None, 'last_zalt_1m_signal_ts': None,
-            'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
@@ -1221,9 +1188,6 @@ def process_webhook(data):
             elif tf == '4h':
                 m['st_context_4h'] = parsed_ctx
                 m['st_context_4h_ts'] = now_ts
-            elif tf == '6h':
-                m['st_context_6h'] = parsed_ctx
-                m['st_context_6h_ts'] = now_ts
             elif tf == '12h':
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
@@ -1233,9 +1197,6 @@ def process_webhook(data):
             elif tf == '30m':
                 m['st_context_30m'] = parsed_ctx
                 m['st_context_30m_ts'] = now_ts
-            elif tf == '10m':
-                m['st_context_10m'] = parsed_ctx
-                m['st_context_10m_ts'] = now_ts
             elif tf == '5m':
                 m['st_context_5m'] = parsed_ctx
                 m['st_context_5m_ts'] = now_ts
@@ -2210,7 +2171,7 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE porte A/B: trigger flip ZALT 15m (TV) commun.
+    """PULSE porte A/B: trigger flip ZALT 15m (OKX) commun.
     A: RPZ 6H + veto Context 2H oppose.
     B: Context 2H + Context 15m alignes (pas de RPZ 6H)."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_pulse_symbol(symbol):

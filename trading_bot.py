@@ -708,7 +708,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'3m': 10*60, '5m': 15*60, '10m': 30*60, '30m': 90*60, '2h': 4*3600, '6h': 9*3600, '1d': 36*3600}
+    MAX_AGE = {'5m': 22*60, '15m': 45*60, '30m': 90*60, '2h': 6*3600, '4h': 12*3600, '6h': 18*3600, '12h': 24*3600, '1d': 3*24*3600}
     while True:
         time.sleep(3600)
         now = time.time()

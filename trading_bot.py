@@ -105,10 +105,7 @@ STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_se
 
 def track_alert(symbol, strategy):
     if symbol not in WEEKLY_STATS:
-        WEEKLY_STATS[symbol] = {
-            'SAFE': 0, 'DAILY': 0, 'TREND2D': 0, 'PULSE': 0, 'PULSEV4': 0,
-            'RPZ': 0, 'MOMENTUM': 0,
-        }
+        WEEKLY_STATS[symbol] = {'DAILY': 0, 'PULSEV4': 0}
     if strategy not in WEEKLY_STATS[symbol]:
         WEEKLY_STATS[symbol][strategy] = 0
     WEEKLY_STATS[symbol][strategy] += 1
@@ -166,7 +163,8 @@ def init_redis():
 
     # ========================================================================
     # Redis : etat DAILY + PULSE V4.
-    # Relay scalp = ZALT 5m + RPZ 30m + ST Context 5m/15m/30m (avec signal=trend_flip).
+    # Relay scalp (webhook TV) = ZALT 5m + ST Context 5m/15m/30m (avec signal=trend_flip).
+    # ZALT 30m est relaye separement (calcul interne OKX, voir relay_zalt_30m_to_scalp).
     # ========================================================================
 def persist_runtime_state():
     if not REDIS_CLIENT:
@@ -631,9 +629,9 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY A: RPZ 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose\n"
+        "DAILY A: ZALT 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose\n"
         "DAILY B: ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)\n"
-        "PULSE A: RPZ 6H + flip ZALT 15m (TV) + veto ST Context 2H oppose\n"
+        "PULSE A: ZALT 6H + flip ZALT 15m (TV) + veto ST Context 2H oppose\n"
         "PULSE B: ST Context 2H + ST Context 15m alignes + flip ZALT 15m (TV)\n"
         "SCALP: gere par le scalpbot actif (7 assets)\n"
         "--------------------\n"
@@ -748,14 +746,6 @@ def track_tv_signal(symbol, alert_type, tf):
 def tv_required_signals():
     return [
         {
-            'label': 'RPZ 1D',
-            'alert_type': 'rpz',
-            'tf': '1d',
-            'max_age': 3 * 24 * 3600,
-            'warmup': 3 * 24 * 3600,
-            'scope': 'all',
-        },
-        {
             'label': 'ST Context 12H',
             'alert_type': 'st_context',
             'tf': '12h',
@@ -772,14 +762,6 @@ def tv_required_signals():
             'scope': 'all',
         },
         {
-            'label': 'RPZ 6H',
-            'alert_type': 'rpz',
-            'tf': '6h',
-            'max_age': 18 * 3600,
-            'warmup': 19 * 3600,
-            'scope': 'pulse',
-        },
-        {
             'label': 'ST Context 2H',
             'alert_type': 'st_context',
             'tf': '2h',
@@ -794,14 +776,6 @@ def tv_required_signals():
             'max_age': 45 * 60,
             'warmup': 90 * 60,
             'scope': 'pulse',
-        },
-        {
-            'label': 'RPZ 30m',
-            'alert_type': 'rpz',
-            'tf': '30m',
-            'max_age': 90 * 60,
-            'warmup': 2 * 3600,
-            'scope': 'scalp',
         },
         {
             'label': 'ST Context 30m',
@@ -952,7 +926,7 @@ def parse_supertrend_value(val):
         return None
 
 def parse_directional_trend_value(val, allow_sideways=False):
-    """Convertit une valeur directionnelle brute (ex. RPZ) en 'bull', 'bear' ou 'sideways'."""
+    """Convertit une valeur directionnelle brute (ex. ZALT) en 'bull', 'bear' ou 'sideways'."""
     s = str(val).strip().lower()
     if s in ('bull', 'buy', 'long', 'up', 'positive', 'green', '1', '2'):
         return 'bull'
@@ -974,14 +948,6 @@ def parse_directional_trend_value(val, allow_sideways=False):
     return None
 
 
-
-def parse_rpz_value(val):
-    parsed = parse_directional_trend_value(val, allow_sideways=False)
-    if parsed == 'bull':
-        return 'buy'
-    if parsed == 'bear':
-        return 'sell'
-    return None
 
 def parse_zalt_value(val):
     parsed = parse_directional_trend_value(val, allow_sideways=True)
@@ -1026,9 +992,6 @@ def normalize_alert_type(alert_type_raw):
         'ema_200': 'ema200', 'ema': 'ema200',
         'super_trend': 'supertrend', 'st': 'supertrend',
         'stcontext': 'st_context',
-        'reversal_probability_zone': 'rpz',
-        'reversal_probability': 'rpz',
-        'rpz_zone': 'rpz',
         'zerolagtrendsignal': 'zalt',
         'zerolagtrendsignals': 'zalt',
         'zero_lag_trend_signal': 'zalt',
@@ -1091,7 +1054,6 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'st_6h_ts': None,
             'st_context_2h': None,
-            'rpz_1d': None, 'rpz_1d_ts': None, 'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_2h': None, 'rpz_2h_ts': None, 'rpz_30m': None, 'rpz_30m_ts': None, 'rpz_2d': None, 'rpz_2d_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
@@ -1214,18 +1176,6 @@ def process_webhook(data):
 
 
 
-        if alert_type == 'rpz':
-            parsed_rpz = parse_rpz_value(val)
-            if parsed_rpz in ('buy', 'sell'):
-                if tf in ('1d', '2d', '6h', '2h', '30m'):
-                    m[f'rpz_{tf}'] = parsed_rpz
-                    m[f'rpz_{tf}_ts'] = now_ts
-                    logger.info(f"[RPZ {tf.upper()}] {symbol} = {parsed_rpz}")
-                else:
-                    logger.info(f"[RPZ] {symbol} tf={tf} ignore: timeframe non utilise")
-            else:
-                logger.warning(f"[WARN] RPZ valeur invalide pour {symbol}: '{val}'")
-
         if alert_type == 'zalt':
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
@@ -1299,9 +1249,9 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY A : RPZ 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose
+        # DAILY A : ZALT 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose
         # DAILY B : ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)
-        # PULSE A : RPZ 6H + flip ZALT 15m (TV) + veto ST Context 2H oppose
+        # PULSE A : ZALT 6H + flip ZALT 15m (TV) + veto ST Context 2H oppose
         # PULSE B : ST Context 2H + ST Context 15m alignes + flip ZALT 15m (TV)
         # ========================================================================
         # SuperTrend 4H — relai Tapbit uniquement
@@ -1323,11 +1273,8 @@ def process_webhook(data):
                     MOMENTUM_STATE[symbol] = m
 
         # DAILY: trigger = flip ZALT 4H OKX (via update_okx_zalt_htf). Le webhook ne fait
-        # que rafraichir sur Context 4H/12H (A ou B) ou RPZ 1D (A) pour retester si le flip 4H est encore frais.
-        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
-            (alert_type == 'st_context' and tf in ('4h', '12h'))
-            or (alert_type == 'rpz' and tf == '1d')
-        ):
+        # que rafraichir sur Context 4H/12H (A ou B) pour retester si le flip 4H est encore frais.
+        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and alert_type == 'st_context' and tf in ('4h', '12h'):
             evaluate_daily_rpz(
                 symbol,
                 trigger_dir=None,
@@ -1338,11 +1285,10 @@ def process_webhook(data):
             )
 
         # PULSE: trigger = flip ZALT 15m (TV, Pine corrige). Rafraichi aussi sur Context 2H/15m (A ou B)
-        # ou RPZ 6H (A) pour retester si le flip 15m est encore frais.
+        # pour retester si le flip 15m est encore frais.
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_pulse_symbol(symbol) and (
             (alert_type == 'zalt' and tf == '15m')
             or (alert_type == 'st_context' and tf in ('15m', '2h'))
-            or (alert_type == 'rpz' and tf == '6h')
         ):
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             trigger_dir = parse_zalt_value(val) if alert_type == 'zalt' and tf == '15m' and zalt_signal in ('trend_flip', 'flip') else None
@@ -1365,7 +1311,6 @@ def process_webhook(data):
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
                 (alert_type == 'zalt' and tf == '5m')
-                or (alert_type == 'rpz' and tf == '30m')
                 or (alert_type == 'st_context' and tf in ('5m', '15m', '30m'))
             )
         )
@@ -1540,7 +1485,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : RPZ 30m (TV, relaye) + ZALT 5m (calcule en interne OKX)
+    """Rechauffe le scalpbot : ZALT 30m + ZALT 5m (les deux calcules en interne OKX)
     + ST Context 15m/30m/5m."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
@@ -1589,27 +1534,27 @@ def sync_scalp():
         else:
             errors.append(f"{symbol}: ZALT 5m absent/invalide ({zalt5!r})")
 
-        rpz30 = m.get('rpz_30m')
-        if rpz30 in ('buy', 'sell'):
+        zalt30 = m.get('zalt_30m')
+        if zalt30 in ('buy', 'sell'):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
                     'tf':       '30m',
-                    'type':     'rpz',
-                    'value':    rpz30,
+                    'type':     'zalt',
+                    'value':    zalt30,
                     'price':    0,
-                    'event_id': f"sync_scalp_rpz30_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_zalt30_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('rpz30')
+                    symbol_sent.append('zalt30')
                 else:
-                    errors.append(f"{symbol}: RPZ30 HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: ZALT30 HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: RPZ30 {e}")
+                errors.append(f"{symbol}: ZALT30 {e}")
         else:
-            errors.append(f"{symbol}: RPZ 30m absent/invalide ({rpz30!r})")
+            errors.append(f"{symbol}: ZALT 30m absent/invalide ({zalt30!r})")
 
         ctx15 = m.get('st_context_15m')
         try:
@@ -1845,11 +1790,45 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
 
 
 
+def relay_zalt_30m_to_scalp(symbol, direction, price):
+    """Relaie vers le scalpbot un ZALT 30m calcule en interne (OKX) — tendance de la
+    voie A Scalp. Pas de champ 'signal' : ce n'est pas un trigger, juste un etat a jour
+    (le trigger scalp reste le flip ZALT 5m recu par TV)."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol':   symbol,
+        'strategy': 'scalp',
+        'tf':       '30m',
+        'type':     'zalt',
+        'value':    direction,
+        'price':    price,
+        'event_id': f"okx_zalt_30m_{symbol}_{int(time.time())}",
+    }
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX ZALT 30m] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX ZALT 30m] {symbol}={direction} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX ZALT 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT 30m] Erreur: {e}")
+
+
 def update_okx_zalt_htf(symbol):
     """ZALT 30m/4H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
-    Seul le flip 4H declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais
-    Daily/Pulse/Scalp evaluate, et ne sont plus exiges par ces strategies (RPZ TV a la place)
-    ni relayes au scalpbot (RPZ 30m TV = tendance A scalp desormais)."""
+    30m est relaye vers le scalpbot (tendance voie A Scalp). Seul le flip 4H
+    declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais Daily/Pulse/Scalp evaluate."""
     if not is_trade_symbol(symbol):
         return
     computed = {}
@@ -1861,6 +1840,7 @@ def update_okx_zalt_htf(symbol):
     flipped_4h = False
     flip_dir = None
     price = 0.0
+    relay_30m = None
     now_ts = time.time()
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -1872,6 +1852,8 @@ def update_okx_zalt_htf(symbol):
             old = m.get(f'zalt_{tf}')
             m[f'zalt_{tf}'] = payload['trend']
             m[f'zalt_{tf}_ts'] = now_ts
+            if tf == '30m':
+                relay_30m = (payload['trend'], payload['close'])
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m[f'last_zalt_{tf}_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
@@ -1882,6 +1864,9 @@ def update_okx_zalt_htf(symbol):
             else:
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
         persist_runtime_state()
+
+    if relay_30m:
+        relay_zalt_30m_to_scalp(symbol, relay_30m[0], relay_30m[1])
 
     if flipped_4h and flip_dir in ('buy', 'sell'):
         evaluate_daily_rpz(
@@ -1947,11 +1932,6 @@ def _ctx_label(value):
     return (value or 'NEUTRE').upper()
 
 
-def _rpz_condition(m, tf, exp_ctx):
-    max_age = {'1d': 3 * 24 * 3600, '2d': 5 * 24 * 3600, '6h': 18 * 3600, '2h': 6 * 3600, '30m': 90 * 60}.get(tf, 0)
-    value, fresh = _state_signal(m, f'rpz_{tf}', max_age)
-    return value, fresh, bool(fresh and value == exp_ctx)
-
 
 def _zalt_condition(m, tf, exp_ctx):
     max_age = {
@@ -1987,8 +1967,8 @@ def _st_context_veto(m, tf, exp_ctx):
 
 def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """DAILY porte A/B: trigger flip ZALT 4H (OKX) commun.
-    A: RPZ 1D + veto Context 12H oppose.
-    B: Context 12H + Context 4H alignes (pas de RPZ 1D)."""
+    A: ZALT 1D + veto Context 12H oppose.
+    B: Context 12H + Context 4H alignes (pas de ZALT 1D)."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -1999,7 +1979,7 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        rpz1d, rpz1d_fresh, rpz1d_ok = _rpz_condition(m, '1d', exp_ctx)
+        zalt1d, zalt1d_fresh, zalt1d_ok = _zalt_condition(m, '1d', exp_ctx)
         zalt4h, zalt4h_fresh, zalt4h_ok = _zalt_condition(m, '4h', exp_ctx)
         zalt4h_flip_fresh = is_signal_fresh(m.get('last_zalt_4h_signal_ts'), 12 * 3600)
         trigger_ok = zalt4h_ok and zalt4h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
@@ -2008,13 +1988,13 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
         ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
 
-        entry_a_ok = rpz1d_ok and trigger_ok and not ctx12h_veto
+        entry_a_ok = zalt1d_ok and trigger_ok and not ctx12h_veto
         entry_b_ok = ctx12h_ok and ctx4h_ok and trigger_ok
         entry_ok = entry_a_ok or entry_b_ok
 
         logger.info(
             f"[DAILY CHECK] {symbol} source={source} dir={direction} "
-            f"rpz1d={rpz1d}/{exp_ctx} fresh={rpz1d_fresh} ok={rpz1d_ok} "
+            f"zalt1d={zalt1d}/{exp_ctx} fresh={zalt1d_fresh} ok={zalt1d_ok} "
             f"zalt4h={zalt4h}/{exp_ctx} fresh={zalt4h_fresh} flip_fresh={zalt4h_flip_fresh} trig={trigger_ok} "
             f"ctx12h={ctx12h_veto_val} veto={ctx12h_veto} align_ok={ctx12h_ok} "
             f"ctx4h={ctx4h} align_ok={ctx4h_ok} "
@@ -2022,13 +2002,13 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
         )
 
         if entry_ok:
-            signal_type = 'daily_a_rpz1d' if entry_a_ok else 'daily_b_ctx12_ctx4'
+            signal_type = 'daily_a_zalt1d' if entry_a_ok else 'daily_b_ctx12_ctx4'
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = ["[OK] Entree DAILY"]
             if entry_a_ok:
                 detail_lines += [
-                    "[VOIE] A: RPZ 1D + veto Context 12H",
-                    f"[OK] RPZ 1D: {_ctx_label(rpz1d)}",
+                    "[VOIE] A: ZALT 1D + veto Context 12H",
+                    f"[OK] ZALT 1D: {_ctx_label(zalt1d)}",
                     f"[INFO] ST Context 12H (veto si oppose): {_ctx_label(ctx12h_veto_val)}",
                 ]
             else:
@@ -2058,8 +2038,8 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """PULSE porte A/B: trigger flip ZALT 15m (TV) commun.
-    A: RPZ 6H + veto Context 2H oppose.
-    B: Context 2H + Context 15m alignes (pas de RPZ 6H)."""
+    A: ZALT 6H + veto Context 2H oppose.
+    B: Context 2H + Context 15m alignes (pas de ZALT 6H)."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2069,7 +2049,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        rpz6, rpz6_fresh, rpz6_ok = _rpz_condition(m, '6h', exp_ctx)
+        zalt6, zalt6_fresh, zalt6_ok = _zalt_condition(m, '6h', exp_ctx)
         zalt15, zalt15_fresh, zalt15_ok = _zalt_condition(m, '15m', exp_ctx)
         zalt15_flip_fresh = is_signal_fresh(m.get('last_zalt_15m_signal_ts'), 45 * 60)
         trigger_ok = zalt15_ok and zalt15_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
@@ -2078,13 +2058,13 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
         ctx15, ctx15_fresh, ctx15_ok = _st_context_condition(m, '15m', exp_ctx)
 
-        entry_a_ok = rpz6_ok and trigger_ok and not ctx2h_veto
+        entry_a_ok = zalt6_ok and trigger_ok and not ctx2h_veto
         entry_b_ok = ctx2h_ok and ctx15_ok and trigger_ok
         entry_ok = entry_a_ok or entry_b_ok
 
         logger.info(
             f"[PULSEV4 CHECK] {symbol} source={source} dir={direction} "
-            f"rpz6={rpz6}/{exp_ctx} fresh={rpz6_fresh} ok={rpz6_ok} "
+            f"zalt6={zalt6}/{exp_ctx} fresh={zalt6_fresh} ok={zalt6_ok} "
             f"zalt15={zalt15}/{exp_ctx} fresh={zalt15_fresh} flip_fresh={zalt15_flip_fresh} trig={trigger_ok} "
             f"ctx2h={ctx2h_veto_val} veto={ctx2h_veto} align_ok={ctx2h_ok} "
             f"ctx15={ctx15} align_ok={ctx15_ok} "
@@ -2092,13 +2072,13 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         )
 
         if entry_ok:
-            signal_type = 'pulse_a_rpz6h' if entry_a_ok else 'pulse_b_ctx2h_ctx15'
+            signal_type = 'pulse_a_zalt6h' if entry_a_ok else 'pulse_b_ctx2h_ctx15'
             event_key = event_id or f"pulsev4_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = ["[OK] Entree PULSE"]
             if entry_a_ok:
                 detail_lines += [
-                    "[VOIE] A: RPZ 6H + veto Context 2H",
-                    f"[OK] RPZ 6H: {_ctx_label(rpz6)}",
+                    "[VOIE] A: ZALT 6H + veto Context 2H",
+                    f"[OK] ZALT 6H: {_ctx_label(zalt6)}",
                     f"[INFO] ST Context 2H (veto si oppose): {_ctx_label(ctx2h_veto_val)}",
                 ]
             else:

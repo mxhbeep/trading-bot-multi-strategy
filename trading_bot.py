@@ -957,6 +957,14 @@ def parse_zalt_value(val):
         return 'sell'
     return None
 
+def parse_rpz_value(val):
+    parsed = parse_directional_trend_value(val, allow_sideways=False)
+    if parsed == 'bull':
+        return 'buy'
+    if parsed == 'bear':
+        return 'sell'
+    return None
+
 def parse_ema200_value(val):
     normalized = str(val).strip().lower()
     if normalized in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
@@ -992,6 +1000,9 @@ def normalize_alert_type(alert_type_raw):
         'ema_200': 'ema200', 'ema': 'ema200',
         'super_trend': 'supertrend', 'st': 'supertrend',
         'stcontext': 'st_context',
+        'reversal_probability_zone': 'rpz',
+        'reversal_probability': 'rpz',
+        'rpz_zone': 'rpz',
         'zerolagtrendsignal': 'zalt',
         'zerolagtrendsignals': 'zalt',
         'zero_lag_trend_signal': 'zalt',
@@ -1054,6 +1065,7 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'st_6h_ts': None,
             'st_context_2h': None,
+            'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
@@ -1190,6 +1202,27 @@ def process_webhook(data):
                     logger.info(f"[ZALT] {symbol} tf={tf} ignore: timeframe non utilise")
             else:
                 logger.warning(f"[WARN] ZALT valeur invalide pour {symbol}: '{val}'")
+
+        if alert_type == 'rpz':
+            parsed_rpz = parse_rpz_value(val)
+            if parsed_rpz in ('buy', 'sell'):
+                if tf in ('6h', '1d'):
+                    old_rpz = m.get(f'rpz_{tf}')
+                    m[f'rpz_{tf}'] = parsed_rpz
+                    m[f'rpz_{tf}_ts'] = now_ts
+                    logger.info(f"[RPZ {tf.upper()}] {symbol} = {parsed_rpz}")
+                    if old_rpz in ('buy', 'sell') and old_rpz != parsed_rpz:
+                        if should_send(symbol, f"rpz_flip_info_{tf}", cooldown=600):
+                            direction_label = 'BUY' if parsed_rpz == 'buy' else 'SELL'
+                            send_info(
+                                f"ℹ️ <b>[RPZ FLIP]</b> {symbol}\n"
+                                f"TF: {tf.upper()} | Direction: {direction_label}\n"
+                                f"Price: ${format_price(price)}"
+                            )
+                else:
+                    logger.info(f"[RPZ] {symbol} tf={tf} ignore: timeframe non utilise")
+            else:
+                logger.warning(f"[WARN] RPZ valeur invalide pour {symbol}: '{val}'")
 
         ema200_value = None
         if alert_type == 'ema200' and tf == '1h':

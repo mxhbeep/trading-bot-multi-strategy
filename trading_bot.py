@@ -706,7 +706,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'5m': 22*60, '15m': 45*60, '30m': 90*60, '2h': 6*3600, '4h': 12*3600, '6h': 18*3600, '12h': 24*3600, '1d': 3*24*3600}
+    MAX_AGE = {'1m': 10*60, '5m': 22*60, '10m': 45*60, '15m': 45*60, '2h': 6*3600, '4h': 12*3600, '6h': 18*3600, '12h': 24*3600, '1d': 3*24*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -778,11 +778,11 @@ def tv_required_signals():
             'scope': 'pulse',
         },
         {
-            'label': 'ST Context 30m',
+            'label': 'ST Context 10m',
             'alert_type': 'st_context',
-            'tf': '30m',
-            'max_age': 90 * 60,
-            'warmup': 2 * 3600,
+            'tf': '10m',
+            'max_age': 45 * 60,
+            'warmup': 90 * 60,
             'scope': 'scalp',
         },
         {
@@ -791,6 +791,22 @@ def tv_required_signals():
             'tf': '5m',
             'max_age': 22 * 60,
             'warmup': 30 * 60,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ST Context 1m',
+            'alert_type': 'st_context',
+            'tf': '1m',
+            'max_age': 10 * 60,
+            'warmup': 15 * 60,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ZALT 1m',
+            'alert_type': 'zalt',
+            'tf': '1m',
+            'max_age': 10 * 60,
+            'warmup': 15 * 60,
             'scope': 'scalp',
         },
     ]
@@ -1065,7 +1081,10 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'st_6h_ts': None,
             'st_context_2h': None,
+            'st_context_1m': None, 'st_context_1m_ts': None,
+            'st_context_10m': None, 'st_context_10m_ts': None,
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
+            'bias_30m': None, 'bias_30m_ts': None,  # Scalp porte B, calcule interne OKX
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
@@ -1153,7 +1172,10 @@ def process_webhook(data):
         now_ts = datetime.now(timezone.utc).timestamp()
         if alert_type == 'st_context':
             parsed_ctx = parse_st_context_value(val)
-            if tf == '1h':
+            if tf == '1m':
+                m['st_context_1m'] = parsed_ctx
+                m['st_context_1m_ts'] = now_ts
+            elif tf == '1h':
                 m['st_context_1h'] = parsed_ctx
                 m['st_context_1h_ts'] = now_ts
                 logger.info(f"[CTX 1H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
@@ -1185,6 +1207,9 @@ def process_webhook(data):
             elif tf == '3d':
                 ST_CONTEXT_3D[symbol] = parsed_ctx
                 m['st_context_3d_ts'] = now_ts
+            elif tf == '10m':
+                m['st_context_10m'] = parsed_ctx
+                m['st_context_10m_ts'] = now_ts
 
 
 
@@ -1343,8 +1368,8 @@ def process_webhook(data):
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
-                (alert_type == 'zalt' and tf == '5m')
-                or (alert_type == 'st_context' and tf in ('5m', '15m', '30m'))
+                (alert_type == 'zalt' and tf == '1m')
+                or (alert_type == 'st_context' and tf in ('1m', '5m', '10m'))
             )
         )
         if scalp_url and should_relay_scalp:
@@ -1518,8 +1543,8 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : ZALT 30m + ZALT 5m (les deux calcules en interne OKX)
-    + ST Context 15m/30m/5m."""
+    """Rechauffe le scalpbot : ZALT 1m + ST Context 1m/5m/10m + Bias 30m
+    (ZALT 1m et Bias 30m calcules/recus en interne, CTX 1m/5m/10m relayes depuis TV)."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1545,87 +1570,81 @@ def sync_scalp():
         m = state_copy.get(symbol, {})
         symbol_sent = []
 
-        zalt5 = m.get('zalt_5m')
-        if zalt5 in ('buy', 'sell'):
+        zalt1 = m.get('zalt_1m')
+        if zalt1 in ('buy', 'sell'):
             try:
                 payload = {
                     'symbol':   symbol,
                     'strategy': 'scalp',
-                    'tf':       '5m',
+                    'tf':       '1m',
                     'type':     'zalt',
-                    'value':    zalt5,
+                    'value':    zalt1,
                     'price':    0,
-                    'event_id': f"sync_scalp_zalt5_{symbol}_{int(time.time())}",
+                    'event_id': f"sync_scalp_zalt1_{symbol}_{int(time.time())}",
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('zalt5')
+                    symbol_sent.append('zalt1m')
                 else:
-                    errors.append(f"{symbol}: ZALT5 HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: ZALT1M HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: ZALT5 {e}")
+                errors.append(f"{symbol}: ZALT1M {e}")
         else:
-            errors.append(f"{symbol}: ZALT 5m absent/invalide ({zalt5!r})")
+            errors.append(f"{symbol}: ZALT 1m absent/invalide ({zalt1!r})")
 
-        zalt30 = m.get('zalt_30m')
-        if zalt30 in ('buy', 'sell'):
-            try:
-                payload = {
-                    'symbol':   symbol,
-                    'strategy': 'scalp',
-                    'tf':       '30m',
-                    'type':     'zalt',
-                    'value':    zalt30,
-                    'price':    0,
-                    'event_id': f"sync_scalp_zalt30_{symbol}_{int(time.time())}",
-                }
-                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-                if resp.status_code == 200:
-                    symbol_sent.append('zalt30')
-                else:
-                    errors.append(f"{symbol}: ZALT30 HTTP {resp.status_code}")
-            except Exception as e:
-                errors.append(f"{symbol}: ZALT30 {e}")
-        else:
-            errors.append(f"{symbol}: ZALT 30m absent/invalide ({zalt30!r})")
+        bias30 = m.get('bias_30m')
+        try:
+            payload = {
+                'symbol': symbol,
+                'tf':     '30m',
+                'type':   'bias',
+                'value':  bias30 if bias30 in ('buy', 'sell') else 'neutral',
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('bias30m')
+            else:
+                errors.append(f"{symbol}: BIAS30M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: BIAS30M {e}")
 
-        ctx15 = m.get('st_context_15m')
+        ctx1 = m.get('st_context_1m')
         try:
             payload = {
                 'symbol':   symbol,
                 'strategy': 'scalp',
-                'tf':       '15m',
+                'tf':       '1m',
                 'type':     'st_context',
-                'value':    ctx_to_sync_value(ctx15),
+                'value':    ctx_to_sync_value(ctx1),
                 'price':    0,
-                'event_id': f"sync_scalp_ctx15_{symbol}_{int(time.time())}",
+                'event_id': f"sync_scalp_ctx1_{symbol}_{int(time.time())}",
             }
             resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
             if resp.status_code == 200:
-                symbol_sent.append('ctx15m')
+                symbol_sent.append('ctx1m')
             else:
-                errors.append(f"{symbol}: CTX15M HTTP {resp.status_code}")
+                errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
         except Exception as e:
-            errors.append(f"{symbol}: CTX15M {e}")
+            errors.append(f"{symbol}: CTX1M {e}")
 
-        ctx30 = m.get('st_context_30m')
+        ctx10 = m.get('st_context_10m')
         try:
             payload = {
                 'symbol':   symbol,
                 'strategy': 'scalp',
-                'tf':       '30m',
+                'tf':       '10m',
                 'type':     'st_context',
-                'value':    ctx_to_sync_value(ctx30),
+                'value':    ctx_to_sync_value(ctx10),
                 'price':    0,
-                'event_id': f"sync_scalp_ctx30_{symbol}_{int(time.time())}",
+                'event_id': f"sync_scalp_ctx10_{symbol}_{int(time.time())}",
             }
             resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
             if resp.status_code == 200:
-                symbol_sent.append('ctx30m')
+                symbol_sent.append('ctx10m')
             else:
-                errors.append(f"{symbol}: CTX30M HTTP {resp.status_code}")
+                errors.append(f"{symbol}: CTX10M HTTP {resp.status_code}")
         except Exception as e:
-            errors.append(f"{symbol}: CTX30M {e}")
+            errors.append(f"{symbol}: CTX10M {e}")
 
         ctx5 = m.get('st_context_5m')
         try:
@@ -1823,45 +1842,11 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
 
 
 
-def relay_zalt_30m_to_scalp(symbol, direction, price):
-    """Relaie vers le scalpbot un ZALT 30m calcule en interne (OKX) — tendance de la
-    voie A Scalp. Pas de champ 'signal' : ce n'est pas un trigger, juste un etat a jour
-    (le trigger scalp reste le flip ZALT 5m recu par TV)."""
-    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
-        return
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
-    if symbol not in scalp_symbols:
-        return
-    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-    if not scalp_url:
-        return
-    relay_payload = {
-        'symbol':   symbol,
-        'strategy': 'scalp',
-        'tf':       '30m',
-        'type':     'zalt',
-        'value':    direction,
-        'price':    price,
-        'event_id': f"okx_zalt_30m_{symbol}_{int(time.time())}",
-    }
-    try:
-        try:
-            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
-        except requests.exceptions.Timeout:
-            logger.warning(f"[RELAY OKX ZALT 30m] {symbol} timeout, retry...")
-            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
-        if 200 <= resp.status_code < 300:
-            logger.info(f"[RELAY OKX ZALT 30m] {symbol}={direction} → scalpbot OK")
-        else:
-            logger.warning(f"[RELAY OKX ZALT 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        logger.warning(f"[RELAY OKX ZALT 30m] Erreur: {e}")
-
-
 def update_okx_zalt_htf(symbol):
     """ZALT 30m/4H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
-    30m est relaye vers le scalpbot (tendance voie A Scalp). Seul le flip 4H
-    declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais Daily/Pulse/Scalp evaluate."""
+    Seul le flip 4H declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais
+    Daily/Pulse/Scalp evaluate. ZALT 30m n'est plus relaye au scalpbot (remplace par
+    Bias 30m, voir update_okx_bias_30m)."""
     if not is_trade_symbol(symbol):
         return
     computed = {}
@@ -1873,7 +1858,6 @@ def update_okx_zalt_htf(symbol):
     flipped_4h = False
     flip_dir = None
     price = 0.0
-    relay_30m = None
     now_ts = time.time()
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -1885,8 +1869,6 @@ def update_okx_zalt_htf(symbol):
             old = m.get(f'zalt_{tf}')
             m[f'zalt_{tf}'] = payload['trend']
             m[f'zalt_{tf}_ts'] = now_ts
-            if tf == '30m':
-                relay_30m = (payload['trend'], payload['close'])
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m[f'last_zalt_{tf}_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
@@ -1898,9 +1880,6 @@ def update_okx_zalt_htf(symbol):
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
         persist_runtime_state()
 
-    if relay_30m:
-        relay_zalt_30m_to_scalp(symbol, relay_30m[0], relay_30m[1])
-
     if flipped_4h and flip_dir in ('buy', 'sell'):
         evaluate_daily_rpz(
             symbol,
@@ -1910,6 +1889,73 @@ def update_okx_zalt_htf(symbol):
             event_id=f"okx_zalt_4h_flip_{symbol}_{int(now_ts)}",
             source='okx_zalt_4h_flip',
         )
+
+
+def calc_bias_30m_okx(df, ema_len=17, sma_len=40):
+    """Bias 30m interne (Scalp porte B). EMA17 vs SMA40 sur closes 30m confirmees.
+    buy si close > ema et ema > sma. sell si close < ema et ema < sma. sinon None (neutre)."""
+    try:
+        close = df['close']
+        ema_val = close.ewm(span=ema_len, adjust=False).mean().iloc[-1]
+        sma_val = close.rolling(window=sma_len).mean().iloc[-1]
+        close_val = float(close.iloc[-1])
+        if close_val > ema_val and ema_val > sma_val:
+            return 'buy'
+        if close_val < ema_val and ema_val < sma_val:
+            return 'sell'
+        return None
+    except Exception:
+        return None
+
+
+def relay_bias_30m_to_scalp(symbol, value):
+    """Relaie vers le scalpbot le Bias 30m calcule en interne (OKX) — porte B Scalp.
+    Pas de champ 'signal' ni 'price' : ce n'est pas un trigger, juste un etat a jour."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol': symbol,
+        'tf': '30m',
+        'type': 'bias',
+        'value': value if value in ('buy', 'sell') else 'neutral',
+    }
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX BIAS 30m] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX BIAS 30m] {symbol}={relay_payload['value']} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX BIAS 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX BIAS 30m] Erreur: {e}")
+
+
+def update_okx_bias_30m(symbol):
+    """Bias 30m calcule en interne (OKX), uniquement pour les assets scalp=True.
+    Comme ZALT HTF : pas d'alerte TV, fetch OKX direct sur bougies 30m confirmees."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('scalp'):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
+    bias_value = calc_bias_30m_okx(df) if df is not None else None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['bias_30m'] = bias_value
+        m['bias_30m_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[BIAS OKX] {symbol} 30m={bias_value}")
+    relay_bias_30m_to_scalp(symbol, bias_value)
 
 
 
@@ -2136,14 +2182,15 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 
 def update_indicators_for_symbol(symbol):
-    """Calcule les ZALT HTF (30m/4H/6H/1D) via OKX. ZALT 15m/5m reviennent sur TV
-    (Pine corrige, plus de doublon avec le calcul interne LTF)."""
+    """Calcule les ZALT HTF (30m/4H/6H/1D) via OKX, plus Bias 30m (scalp=True) pour la
+    porte B Scalp. ZALT 15m/5m reviennent sur TV (Pine corrige, plus de doublon interne)."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
         return
     try:
         update_okx_zalt_htf(symbol)
+        update_okx_bias_30m(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

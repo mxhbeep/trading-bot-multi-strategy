@@ -629,11 +629,10 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY A: ZALT 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose\n"
-        "DAILY B: ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)\n"
-        "PULSE A: ZALT 6H + flip ZALT 15m (TV) + veto ST Context 2H oppose\n"
-        "PULSE B: ST Context 2H + ST Context 15m alignes + flip ZALT 15m (TV)\n"
-        "SCALP: gere par le scalpbot actif (7 assets)\n"
+        "DAILY A: Bias 1D + CTX 30m zone + flip ZALT 30m (OKX) + veto Bias 4H oppose\n"
+        "DAILY B: retest — arme sur CTX 4H, entree CTX 30m + flip ZALT 30m (Bias 1D non bloquant)\n"
+        "PULSE: Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose\n"
+        "SCALP: gere par le scalpbot actif (10 assets)\n"
         "--------------------\n"
         f"{now}"
     )
@@ -706,7 +705,7 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'1m': 10*60, '5m': 22*60, '10m': 45*60, '15m': 45*60, '2h': 6*3600, '4h': 12*3600, '6h': 18*3600, '12h': 24*3600, '1d': 3*24*3600}
+    MAX_AGE = {'1m': 10*60, '5m': 22*60, '10m': 45*60, '30m': 90*60, '4h': 12*3600}
     while True:
         time.sleep(3600)
         now = time.time()
@@ -746,14 +745,6 @@ def track_tv_signal(symbol, alert_type, tf):
 def tv_required_signals():
     return [
         {
-            'label': 'ST Context 12H',
-            'alert_type': 'st_context',
-            'tf': '12h',
-            'max_age': 24 * 3600,
-            'warmup': 25 * 3600,
-            'scope': 'all',
-        },
-        {
             'label': 'ST Context 4H',
             'alert_type': 'st_context',
             'tf': '4h',
@@ -762,23 +753,31 @@ def tv_required_signals():
             'scope': 'all',
         },
         {
-            'label': 'ST Context 2H',
+            'label': 'ST Context 30m',
             'alert_type': 'st_context',
-            'tf': '2h',
-            'max_age': 6 * 3600,
-            'warmup': 7 * 3600,
-            'scope': 'pulse',
+            'tf': '30m',
+            'max_age': 90 * 60,
+            'warmup': 2 * 3600,
+            'scope': 'all',
         },
         {
-            'label': 'ST Context 15m',
+            'label': 'ST Context 10m (Pulse)',
             'alert_type': 'st_context',
-            'tf': '15m',
+            'tf': '10m',
             'max_age': 45 * 60,
             'warmup': 90 * 60,
             'scope': 'pulse',
         },
         {
-            'label': 'ST Context 10m',
+            'label': 'ZALT 10m',
+            'alert_type': 'zalt',
+            'tf': '10m',
+            'max_age': 45 * 60,
+            'warmup': 90 * 60,
+            'scope': 'pulse',
+        },
+        {
+            'label': 'ST Context 10m (Scalp)',
             'alert_type': 'st_context',
             'tf': '10m',
             'max_age': 45 * 60,
@@ -1085,6 +1084,9 @@ def init_symbol_states(symbol):
             'st_context_10m': None, 'st_context_10m_ts': None,
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp porte B, calcule interne OKX
+            'bias_4h': None, 'bias_4h_ts': None,    # Pulse tendance + Daily veto, calcule interne OKX
+            'bias_1d': None, 'bias_1d_ts': None,    # Daily A/B tendance, calcule interne OKX
+            'daily_armed_dir': None, 'daily_armed_ts': None,  # Daily porte B (retest CTX 4H)
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
@@ -1184,6 +1186,15 @@ def process_webhook(data):
                 m['st_context_2h_ts'] = now_ts
                 logger.info(f"[CTX 2H] symbol={symbol} raw={val} parsed={parsed_ctx} ts={now_ts}")
             elif tf == '4h':
+                old_ctx4h = m.get('st_context_4h')
+                if old_ctx4h in ('buy', 'sell') and parsed_ctx is None:
+                    m['daily_armed_dir'] = old_ctx4h
+                    m['daily_armed_ts'] = now_ts
+                    logger.info(f"[DAILY ARM] {symbol} armed_dir={old_ctx4h} (CTX 4H -> neutre)")
+                elif m.get('daily_armed_dir') and parsed_ctx == ('sell' if m['daily_armed_dir'] == 'buy' else 'buy'):
+                    logger.info(f"[DAILY DISARM] {symbol} armed_dir etait {m['daily_armed_dir']} (CTX 4H zone opposee)")
+                    m['daily_armed_dir'] = None
+                    m['daily_armed_ts'] = None
                 m['st_context_4h'] = parsed_ctx
                 m['st_context_4h_ts'] = now_ts
             elif tf == '12h':
@@ -1307,10 +1318,9 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY A : ZALT 1D + flip ZALT 4H (OKX) + veto ST Context 12H oppose
-        # DAILY B : ST Context 12H + ST Context 4H alignes + flip ZALT 4H (OKX)
-        # PULSE A : ZALT 6H + flip ZALT 15m (TV) + veto ST Context 2H oppose
-        # PULSE B : ST Context 2H + ST Context 15m alignes + flip ZALT 15m (TV)
+        # DAILY A : Bias 1D + CTX 30m zone + flip ZALT 30m (OKX) + veto Bias 4H oppose
+        # DAILY B : retest — arme sur CTX 4H, entree CTX 30m + flip ZALT 30m (Bias 1D non bloquant)
+        # PULSE   : Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose
         # ========================================================================
         # SuperTrend 4H — relai Tapbit uniquement
         if alert_type == 'supertrend' and tf == '4h':
@@ -1330,29 +1340,35 @@ def process_webhook(data):
                     m['st_6h_ts'] = time.time()
                     MOMENTUM_STATE[symbol] = m
 
-        # DAILY: trigger = flip ZALT 4H OKX (via update_okx_zalt_htf). Le webhook ne fait
-        # que rafraichir sur Context 4H/12H (A ou B) pour retester si le flip 4H est encore frais.
-        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and alert_type == 'st_context' and tf in ('4h', '12h'):
+        # DAILY: trigger = flip ZALT 30m OKX (via update_okx_zalt_htf) + CTX 30m en zone.
+        # Le webhook rafraichit sur Context 30m/4H (A ou B), et accepte aussi un flip ZALT
+        # 30m recu par TV en plus du calcul interne (fallback, meme mecanisme que Scalp).
+        if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
+            (alert_type == 'st_context' and tf in ('30m', '4h'))
+            or (alert_type == 'zalt' and tf == '30m')
+        ):
+            daily_trigger_dir = None
+            if alert_type == 'zalt' and tf == '30m' and zalt_signal in ('trend_flip', 'flip'):
+                daily_trigger_dir = parsed_zalt
             evaluate_daily_rpz(
                 symbol,
-                trigger_dir=None,
+                trigger_dir=daily_trigger_dir,
                 price=price,
                 exchange_name=exchange_name,
                 event_id=event_id,
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE: trigger = flip ZALT 15m (TV, Pine corrige). Rafraichi aussi sur Context 2H/15m (A ou B)
-        # pour retester si le flip 15m est encore frais.
+        # PULSE: trigger = flip ZALT 10m (TV) + CTX 10m en zone. Rafraichi sur Context
+        # 10m/30m pour retester si le flip est encore frais.
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_pulse_symbol(symbol) and (
-            (alert_type == 'zalt' and tf == '15m')
-            or (alert_type == 'st_context' and tf in ('15m', '2h'))
+            (alert_type == 'zalt' and tf == '10m')
+            or (alert_type == 'st_context' and tf in ('10m', '30m'))
         ):
-            zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
-            trigger_dir = parse_zalt_value(val) if alert_type == 'zalt' and tf == '15m' and zalt_signal in ('trend_flip', 'flip') else None
+            pulse_trigger_dir = parsed_zalt if alert_type == 'zalt' and tf == '10m' and zalt_signal in ('trend_flip', 'flip') else None
             evaluate_pulse_v3(
                 symbol,
-                trigger_dir=trigger_dir,
+                trigger_dir=pulse_trigger_dir,
                 price=price,
                 exchange_name=exchange_name,
                 event_id=event_id,
@@ -1844,9 +1860,9 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
 
 def update_okx_zalt_htf(symbol):
     """ZALT 30m/4H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
-    Seul le flip 4H declenche evaluate_daily_rpz — 30m/6H/1D ne declenchent jamais
-    Daily/Pulse/Scalp evaluate. ZALT 30m n'est plus relaye au scalpbot (remplace par
-    Bias 30m, voir update_okx_bias_30m)."""
+    Seul le flip 30m declenche evaluate_daily_rpz (Daily trigger) — 4H/6H/1D calcules mais
+    plus consommes par aucune strategie (tendance = Bias desormais, voir update_okx_bias_htf).
+    ZALT 30m n'est plus relaye au scalpbot (remplace par Bias 30m, voir update_okx_bias_30m)."""
     if not is_trade_symbol(symbol):
         return
     computed = {}
@@ -1855,7 +1871,7 @@ def update_okx_zalt_htf(symbol):
         df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=300), minutes)
         computed[tf] = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
 
-    flipped_4h = False
+    flipped_30m = False
     flip_dir = None
     price = 0.0
     now_ts = time.time()
@@ -1872,27 +1888,28 @@ def update_okx_zalt_htf(symbol):
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m[f'last_zalt_{tf}_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
-                if tf == '4h':
-                    flipped_4h = True
+                if tf == '30m':
+                    flipped_30m = True
                     flip_dir = payload['trend']
                     price = payload['close']
             else:
                 logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
         persist_runtime_state()
 
-    if flipped_4h and flip_dir in ('buy', 'sell'):
+    if flipped_30m and flip_dir in ('buy', 'sell'):
         evaluate_daily_rpz(
             symbol,
             trigger_dir=flip_dir,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_zalt_4h_flip_{symbol}_{int(now_ts)}",
-            source='okx_zalt_4h_flip',
+            event_id=f"okx_zalt_30m_flip_{symbol}_{int(now_ts)}",
+            source='okx_zalt_30m_flip',
         )
 
 
-def calc_bias_30m_okx(df, ema_len=17, sma_len=40):
-    """Bias 30m interne (Scalp porte B). EMA17 vs SMA40 sur closes 30m confirmees.
+def calc_bias_okx(df, ema_len=17, sma_len=40):
+    """Bias interne (Daily 1D/4H veto, Pulse 4H tendance, Scalp 30m porte B).
+    EMA17 vs SMA40 sur closes confirmees, meme formule quel que soit le TF.
     buy si close > ema et ema > sma. sell si close < ema et ema < sma. sinon None (neutre)."""
     try:
         close = df['close']
@@ -1946,7 +1963,7 @@ def update_okx_bias_30m(symbol):
     if not cfg.get('scalp'):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
-    bias_value = calc_bias_30m_okx(df) if df is not None else None
+    bias_value = calc_bias_okx(df) if df is not None else None
     now_ts = time.time()
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -1956,6 +1973,28 @@ def update_okx_bias_30m(symbol):
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 30m={bias_value}")
     relay_bias_30m_to_scalp(symbol, bias_value)
+
+
+def update_okx_bias_htf(symbol):
+    """Bias 4H (Pulse tendance + Daily A/B veto) et 1D (Daily A/B tendance), calcules en
+    interne (OKX), pour tous les assets tradés — Daily s'applique a tout is_trade_symbol,
+    pas seulement pulse=True. Pas de relais scalp (Bias 4H/1D non consommes par Scalp)."""
+    if not is_trade_symbol(symbol):
+        return
+    df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240)
+    df_1d = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1d', limit=100), 1440)
+    bias_4h = calc_bias_okx(df_4h) if df_4h is not None else None
+    bias_1d = calc_bias_okx(df_1d) if df_1d is not None else None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['bias_4h'] = bias_4h
+        m['bias_4h_ts'] = now_ts
+        m['bias_1d'] = bias_1d
+        m['bias_1d_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[BIAS OKX] {symbol} 4h={bias_4h} 1d={bias_1d}")
 
 
 
@@ -2028,6 +2067,21 @@ def _zalt_condition(m, tf, exp_ctx):
     return value, fresh, bool(fresh and value == exp_ctx)
 
 
+def _bias_condition(m, tf, exp_ctx):
+    max_age = {'30m': 90 * 60, '4h': 12 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
+    value, fresh = _state_signal(m, f'bias_{tf}', max_age)
+    return value, fresh, bool(fresh and value == exp_ctx)
+
+
+def _bias_veto(m, tf, exp_ctx):
+    """Veto seulement si le Bias est OPPOSE et frais. Neutre/None/perime = pas de veto."""
+    max_age = {'30m': 90 * 60, '4h': 12 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
+    value, fresh = _state_signal(m, f'bias_{tf}', max_age)
+    opp = 'sell' if exp_ctx == 'buy' else 'buy'
+    veto = bool(fresh and value == opp)
+    return value, fresh, veto
+
+
 def _st_context_condition(m, tf, exp_ctx):
     max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
@@ -2045,11 +2099,14 @@ def _st_context_veto(m, tf, exp_ctx):
 
 
 def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY porte A/B: trigger flip ZALT 4H (OKX) commun.
-    A: ZALT 1D + veto Context 12H oppose.
-    B: Context 12H + Context 4H alignes (pas de ZALT 1D)."""
+    """DAILY porte A/B: trigger flip ZALT 30m (OKX) + CTX 30m en zone, commun.
+    A: Bias 1D aligne + veto Bias 4H oppose.
+    B (retest): arme quand CTX 4H passe buy/sell -> neutre (daily_armed_dir/ts), desarme
+    sur zone opposee ou 24h. Bias 1D non bloquant sur cette voie (ligne [ATTENTION] si
+    pas aligne)."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
+    ARM_TIMEOUT = 24 * 3600
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
@@ -2058,45 +2115,57 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        zalt1d, zalt1d_fresh, zalt1d_ok = _zalt_condition(m, '1d', exp_ctx)
-        zalt4h, zalt4h_fresh, zalt4h_ok = _zalt_condition(m, '4h', exp_ctx)
-        zalt4h_flip_fresh = is_signal_fresh(m.get('last_zalt_4h_signal_ts'), 12 * 3600)
-        trigger_ok = zalt4h_ok and zalt4h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
+        zalt30, zalt30_fresh, zalt30_ok = _zalt_condition(m, '30m', exp_ctx)
+        zalt30_flip_fresh = is_signal_fresh(m.get('last_zalt_30m_signal_ts'), 90 * 60)
+        ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
+        trigger_ok = zalt30_ok and zalt30_flip_fresh and ctx30_ok and (trigger_dir is None or trigger_dir == exp_ctx)
 
-        ctx12h_veto_val, ctx12h_veto_fresh, ctx12h_veto = _st_context_veto(m, '12h', exp_ctx)
-        ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
-        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+        bias1d, bias1d_fresh, bias1d_ok = _bias_condition(m, '1d', exp_ctx)
+        bias4h_veto_val, bias4h_veto_fresh, bias4h_veto = _bias_veto(m, '4h', exp_ctx)
+        entry_a_ok = bias1d_ok and trigger_ok and not bias4h_veto
 
-        entry_a_ok = zalt1d_ok and trigger_ok and not ctx12h_veto
-        entry_b_ok = ctx12h_ok and ctx4h_ok and trigger_ok
+        armed_fresh = is_signal_fresh(m.get('daily_armed_ts'), ARM_TIMEOUT)
+        armed = bool(armed_fresh and m.get('daily_armed_dir') == exp_ctx)
+        entry_b_ok = armed and trigger_ok
+
         entry_ok = entry_a_ok or entry_b_ok
+
+        bias1d_val = m.get('bias_1d')
+        bias_attention = None
+        if entry_b_ok:
+            if bias1d_val not in ('buy', 'sell'):
+                bias_attention = 'absent' if bias1d_val is None else 'neutre'
+            elif bias1d_val != exp_ctx:
+                bias_attention = 'oppose'
 
         logger.info(
             f"[DAILY CHECK] {symbol} source={source} dir={direction} "
-            f"zalt1d={zalt1d}/{exp_ctx} fresh={zalt1d_fresh} ok={zalt1d_ok} "
-            f"zalt4h={zalt4h}/{exp_ctx} fresh={zalt4h_fresh} flip_fresh={zalt4h_flip_fresh} trig={trigger_ok} "
-            f"ctx12h={ctx12h_veto_val} veto={ctx12h_veto} align_ok={ctx12h_ok} "
-            f"ctx4h={ctx4h} align_ok={ctx4h_ok} "
+            f"zalt30={zalt30}/{exp_ctx} fresh={zalt30_fresh} flip_fresh={zalt30_flip_fresh} "
+            f"ctx30={ctx30} ok={ctx30_ok} trig={trigger_ok} "
+            f"bias1d={bias1d}/{exp_ctx} ok={bias1d_ok} "
+            f"bias4h={bias4h_veto_val} veto={bias4h_veto} "
+            f"armed={armed} armed_dir={m.get('daily_armed_dir')} "
             f"A={entry_a_ok} B={entry_b_ok} entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'daily_a_zalt1d' if entry_a_ok else 'daily_b_ctx12_ctx4'
+            signal_type = 'daily_a_bias1d' if entry_a_ok else 'daily_b_retest'
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = ["[OK] Entree DAILY"]
             if entry_a_ok:
                 detail_lines += [
-                    "[VOIE] A: ZALT 1D + veto Context 12H",
-                    f"[OK] ZALT 1D: {_ctx_label(zalt1d)}",
-                    f"[INFO] ST Context 12H (veto si oppose): {_ctx_label(ctx12h_veto_val)}",
+                    "[VOIE] A: Bias 1D + veto Bias 4H",
+                    f"[OK] Bias 1D: {_ctx_label(bias1d)}",
+                    f"[INFO] Bias 4H (veto si oppose): {_ctx_label(bias4h_veto_val)}",
                 ]
             else:
                 detail_lines += [
-                    "[VOIE] B: Context 12H + Context 4H alignes",
-                    f"[OK] ST Context 12H: {_ctx_label(ctx12h)}",
-                    f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+                    "[VOIE] B: retest — arme sur CTX 4H, entree sur CTX 30m + flip",
                 ]
-            detail_lines.append(f"[OK] Flip ZALT 4H: {_ctx_label(zalt4h)}")
+                if bias_attention:
+                    detail_lines.append(f"[ATTENTION] Bias 1D: {bias_attention}")
+            detail_lines.append(f"[OK] ST Context 30m: {_ctx_label(ctx30)}")
+            detail_lines.append(f"[OK] Flip ZALT 30m: {_ctx_label(zalt30)}")
             opened = _open_strategy_entry(
                 symbol,
                 'DAILY',
@@ -2116,9 +2185,8 @@ def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, 
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE porte A/B: trigger flip ZALT 15m (TV) commun.
-    A: ZALT 6H + veto Context 2H oppose.
-    B: Context 2H + Context 15m alignes (pas de ZALT 6H)."""
+    """PULSE porte unique: Bias 4H aligne (pas neutre) + CTX 10m en zone + flip ZALT 10m
+    (TV) + veto si CTX 30m oppose."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2128,45 +2196,34 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        zalt6, zalt6_fresh, zalt6_ok = _zalt_condition(m, '6h', exp_ctx)
-        zalt15, zalt15_fresh, zalt15_ok = _zalt_condition(m, '15m', exp_ctx)
-        zalt15_flip_fresh = is_signal_fresh(m.get('last_zalt_15m_signal_ts'), 45 * 60)
-        trigger_ok = zalt15_ok and zalt15_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
+        bias4h, bias4h_fresh, bias4h_ok = _bias_condition(m, '4h', exp_ctx)
+        ctx10, ctx10_fresh, ctx10_ok = _st_context_condition(m, '10m', exp_ctx)
+        zalt10, zalt10_fresh, zalt10_ok = _zalt_condition(m, '10m', exp_ctx)
+        zalt10_flip_fresh = is_signal_fresh(m.get('last_zalt_10m_signal_ts'), 45 * 60)
+        ctx30_veto_val, ctx30_veto_fresh, ctx30_veto = _st_context_veto(m, '30m', exp_ctx)
 
-        ctx2h_veto_val, ctx2h_veto_fresh, ctx2h_veto = _st_context_veto(m, '2h', exp_ctx)
-        ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
-        ctx15, ctx15_fresh, ctx15_ok = _st_context_condition(m, '15m', exp_ctx)
-
-        entry_a_ok = zalt6_ok and trigger_ok and not ctx2h_veto
-        entry_b_ok = ctx2h_ok and ctx15_ok and trigger_ok
-        entry_ok = entry_a_ok or entry_b_ok
+        trigger_ok = ctx10_ok and zalt10_ok and zalt10_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
+        entry_ok = bias4h_ok and trigger_ok and not ctx30_veto
 
         logger.info(
             f"[PULSEV4 CHECK] {symbol} source={source} dir={direction} "
-            f"zalt6={zalt6}/{exp_ctx} fresh={zalt6_fresh} ok={zalt6_ok} "
-            f"zalt15={zalt15}/{exp_ctx} fresh={zalt15_fresh} flip_fresh={zalt15_flip_fresh} trig={trigger_ok} "
-            f"ctx2h={ctx2h_veto_val} veto={ctx2h_veto} align_ok={ctx2h_ok} "
-            f"ctx15={ctx15} align_ok={ctx15_ok} "
-            f"A={entry_a_ok} B={entry_b_ok} entry={entry_ok}"
+            f"bias4h={bias4h}/{exp_ctx} fresh={bias4h_fresh} ok={bias4h_ok} "
+            f"ctx10={ctx10}/{exp_ctx} ok={ctx10_ok} "
+            f"zalt10={zalt10}/{exp_ctx} fresh={zalt10_fresh} flip_fresh={zalt10_flip_fresh} trig={trigger_ok} "
+            f"ctx30={ctx30_veto_val} veto={ctx30_veto} "
+            f"entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'pulse_a_zalt6h' if entry_a_ok else 'pulse_b_ctx2h_ctx15'
+            signal_type = 'pulse_bias4h'
             event_key = event_id or f"pulsev4_{symbol}_{int(time.time())}_{exp_ctx}"
-            detail_lines = ["[OK] Entree PULSE"]
-            if entry_a_ok:
-                detail_lines += [
-                    "[VOIE] A: ZALT 6H + veto Context 2H",
-                    f"[OK] ZALT 6H: {_ctx_label(zalt6)}",
-                    f"[INFO] ST Context 2H (veto si oppose): {_ctx_label(ctx2h_veto_val)}",
-                ]
-            else:
-                detail_lines += [
-                    "[VOIE] B: Context 2H + Context 15m alignes",
-                    f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
-                    f"[OK] ST Context 15m: {_ctx_label(ctx15)}",
-                ]
-            detail_lines.append(f"[OK] Flip ZALT 15m: {_ctx_label(zalt15)}")
+            detail_lines = [
+                "[OK] Entree PULSE",
+                f"[OK] Bias 4H: {_ctx_label(bias4h)}",
+                f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
+                f"[OK] Flip ZALT 10m: {_ctx_label(zalt10)}",
+                f"[INFO] ST Context 30m (veto si oppose): {_ctx_label(ctx30_veto_val)}",
+            ]
             opened = _open_strategy_entry(
                 symbol,
                 'PULSEV4',
@@ -2182,8 +2239,8 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 
 def update_indicators_for_symbol(symbol):
-    """Calcule les ZALT HTF (30m/4H/6H/1D) via OKX, plus Bias 30m (scalp=True) pour la
-    porte B Scalp. ZALT 15m/5m reviennent sur TV (Pine corrige, plus de doublon interne)."""
+    """Calcule les ZALT HTF (30m/4H/6H/1D) via OKX, Bias 30m (scalp=True, porte B Scalp),
+    et Bias 4H/1D (tous assets tradés, tendance Pulse/Daily + veto Daily)."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
@@ -2191,6 +2248,7 @@ def update_indicators_for_symbol(symbol):
     try:
         update_okx_zalt_htf(symbol)
         update_okx_bias_30m(symbol)
+        update_okx_bias_htf(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 

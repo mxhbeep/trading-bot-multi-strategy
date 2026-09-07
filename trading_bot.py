@@ -1072,13 +1072,11 @@ SCALP_POSITIONS: dict = {}      # pos_key -> position dict
 def init_symbol_states(symbol):
     if symbol not in MOMENTUM_STATE:
         MOMENTUM_STATE[symbol] = {
-            'st_context_1h': None, 'st_context_4h': None, 'st_context_12h': None, 'st_context_15m': None, 'st_context_30m': None,
-            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_12h_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
+            'st_context_1h': None, 'st_context_4h': None, 'st_context_15m': None, 'st_context_30m': None,
+            'st_context_1h_ts': None, 'st_context_2h_ts': None, 'st_context_4h_ts': None, 'st_context_15m_ts': None, 'st_context_30m_ts': None, 'st_context_1d_ts': None, 'st_context_3d_ts': None, 'st_context_5m_ts': None, 'last_st_context_5m_dir': None, 'last_st_context_5m_ts': None,
             'st_context_5m': None,
-            'st_1h': None, 'st_1h_ts': None, 'st_4h': None, 'st_6h': None,
-            'last_st_6h': None,   # dernier flip 6H
+            'st_4h': None, 'st_4h_ts': None,
             # Nouveaux états pour CONTEXT v2 et SCALP
-            'st_6h_ts': None,
             'st_context_2h': None,
             'st_context_1m': None, 'st_context_1m_ts': None,
             'st_context_10m': None, 'st_context_10m_ts': None,
@@ -1088,11 +1086,6 @@ def init_symbol_states(symbol):
             'bias_1d': None, 'bias_1d_ts': None,    # Daily A/B tendance, calcule interne OKX
             'daily_armed_dir': None, 'daily_armed_ts': None,  # Daily porte B (retest CTX 4H)
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
-            'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
-            'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,
-            'zalt_6h': None, 'zalt_6h_ts': None, 'last_zalt_6h_signal_ts': None,
-            'zalt_1d': None, 'zalt_1d_ts': None, 'last_zalt_1d_signal_ts': None,
-            'zalt_2d': None, 'zalt_2d_ts': None, 'last_zalt_2d_signal_ts': None,
         }
 
 
@@ -1197,9 +1190,6 @@ def process_webhook(data):
                     m['daily_armed_ts'] = None
                 m['st_context_4h'] = parsed_ctx
                 m['st_context_4h_ts'] = now_ts
-            elif tf == '12h':
-                m['st_context_12h'] = parsed_ctx
-                m['st_context_12h_ts'] = now_ts
             elif tf == '15m':
                 m['st_context_15m'] = parsed_ctx
                 m['st_context_15m_ts'] = now_ts
@@ -1228,7 +1218,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('1m', '5m', '10m', '15m', '30m', '2h', '4h', '6h', '1d', '2d'):
+                if tf in ('1m', '5m', '10m', '30m'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1279,22 +1269,9 @@ def process_webhook(data):
         if strat in ['momentum', 'context', 'scalp', 'pulse', 'daily', 'trend2d', 'all']:
             m = MOMENTUM_STATE[symbol]
 
-            if alert_type == 'supertrend' and tf == '1h':
-                prev_1h = m.get('st_1h')
-                m['st_1h'] = parse_supertrend_value(val)
-                m['st_1h_ts'] = now_ts
-                m['st_1h_flipped'] = bool(prev_1h is not None and m['st_1h'] is not None and m['st_1h'] != prev_1h)
-            if alert_type == 'supertrend' and tf == '2h':
-                prev_2h = m.get('st_2h')
-                m['st_2h'] = parse_supertrend_value(val)
-                m['st_2h_flipped'] = bool(prev_2h is not None and m['st_2h'] is not None and m['st_2h'] != prev_2h)
-                if m['st_2h_flipped'] and prev_2h:
-                    m['last_st_2h'] = prev_2h
             if alert_type == 'supertrend' and tf == '4h':
-                prev_4h = m.get('st_4h')
-                m['prev_st_4h'] = prev_4h  # sauvegarder avant mise à jour
                 m['st_4h'] = parse_supertrend_value(val)
-                m['st_4h_flipped'] = bool(prev_4h is not None and m['st_4h'] is not None and m['st_4h'] != prev_4h)
+                m['st_4h_ts'] = now_ts
                 # Relai vers bot Tapbit
                 tapbit_url = CONFIG.get('TAPBIT_BOT_URL', '')
                 if tapbit_url and symbol in CONFIG['SYMBOLS']:
@@ -1307,14 +1284,6 @@ def process_webhook(data):
                         except Exception as e:
                             logger.debug(f"[TAPBIT] Relai 4H échoué {sym}: {e}")
                     threading.Thread(target=_relay_4h, daemon=True).start()
-            if alert_type == 'supertrend' and tf == '6h':
-                prev_6h = m.get('st_6h')
-                m['prev_st_6h'] = prev_6h
-                m['st_6h'] = parse_supertrend_value(val)
-                m['st_6h_ts'] = now_ts
-                m['st_6h_flipped'] = bool(prev_6h is not None and m['st_6h'] is not None and m['st_6h'] != prev_6h)
-                if m['st_6h_flipped']:
-                    m['last_st_6h'] = prev_6h
 
         # ========================================================================
         # STRATEGIES ACTIVES
@@ -1322,24 +1291,6 @@ def process_webhook(data):
         # DAILY B : retest — arme sur CTX 4H, entree CTX 30m + flip ZALT 30m (Bias 1D non bloquant)
         # PULSE   : Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose
         # ========================================================================
-        # SuperTrend 4H — relai Tapbit uniquement
-        if alert_type == 'supertrend' and tf == '4h':
-            st_4h_val = parse_supertrend_value(val)
-            if st_4h_val is not None:
-                with STATE_LOCK:
-                    m = MOMENTUM_STATE.get(symbol, {})
-                    m['st_4h'] = st_4h_val
-                    MOMENTUM_STATE[symbol] = m
-        # Stocker ST AI 6H pour les reliquats de suivi et diagnostics.
-        if alert_type == 'supertrend' and tf == '6h':
-            st_6h_val = parse_supertrend_value(val)
-            if st_6h_val is not None:
-                with STATE_LOCK:
-                    m = MOMENTUM_STATE.get(symbol, {})
-                    m['st_6h'] = st_6h_val
-                    m['st_6h_ts'] = time.time()
-                    MOMENTUM_STATE[symbol] = m
-
         # DAILY: trigger = flip ZALT 30m OKX (via update_okx_zalt_htf) + CTX 30m en zone.
         # Le webhook rafraichit sur Context 30m/4H (A ou B), et accepte aussi un flip ZALT
         # 30m recu par TV en plus du calcul interne (fallback, meme mecanisme que Scalp).
@@ -1350,7 +1301,7 @@ def process_webhook(data):
             daily_trigger_dir = None
             if alert_type == 'zalt' and tf == '30m' and zalt_signal in ('trend_flip', 'flip'):
                 daily_trigger_dir = parsed_zalt
-            evaluate_daily_rpz(
+            evaluate_daily(
                 symbol,
                 trigger_dir=daily_trigger_dir,
                 price=price,
@@ -1859,17 +1810,15 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
 
 
 def update_okx_zalt_htf(symbol):
-    """ZALT 30m/4H/6H/1D calcules en interne depuis OKX. ZALT 2D reste sur alerte TradingView.
-    Seul le flip 30m declenche evaluate_daily_rpz (Daily trigger) — 4H/6H/1D calcules mais
-    plus consommes par aucune strategie (tendance = Bias desormais, voir update_okx_bias_htf).
-    ZALT 30m n'est plus relaye au scalpbot (remplace par Bias 30m, voir update_okx_bias_30m)."""
+    """ZALT 30m calcule en interne depuis OKX — seul TF encore utilise (Daily trigger).
+    4H/6H/1D retires du calcul: plus aucune strategie ne les consommait (tendance =
+    Bias desormais, voir update_okx_bias_htf). ZALT 2D reste sur alerte TradingView.
+    ZALT 30m n'est plus relaye au scalpbot (remplace par Bias 30m)."""
     if not is_trade_symbol(symbol):
         return
-    computed = {}
-    for tf, minutes in (('30m', 30), ('4h', 240), ('6h', 360), ('1d', 1440)):
-        cfg = ZALT_HTF_SETTINGS[tf]
-        df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=300), minutes)
-        computed[tf] = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+    cfg = ZALT_HTF_SETTINGS['30m']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=300), 30)
+    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
 
     flipped_30m = False
     flip_dir = None
@@ -1878,26 +1827,24 @@ def update_okx_zalt_htf(symbol):
     with STATE_LOCK:
         init_symbol_states(symbol)
         m = MOMENTUM_STATE[symbol]
-        for tf, payload in computed.items():
-            if not payload:
-                logger.info(f"[ZALT OKX] {symbol} {tf}=None")
-                continue
-            old = m.get(f'zalt_{tf}')
-            m[f'zalt_{tf}'] = payload['trend']
-            m[f'zalt_{tf}_ts'] = now_ts
+        if not payload:
+            logger.info(f"[ZALT OKX] {symbol} 30m=None")
+        else:
+            old = m.get('zalt_30m')
+            m['zalt_30m'] = payload['trend']
+            m['zalt_30m_ts'] = now_ts
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
-                m[f'last_zalt_{tf}_signal_ts'] = now_ts
-                logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']} FLIP")
-                if tf == '30m':
-                    flipped_30m = True
-                    flip_dir = payload['trend']
-                    price = payload['close']
+                m['last_zalt_30m_signal_ts'] = now_ts
+                logger.info(f"[ZALT OKX] {symbol} 30m={payload['trend']} FLIP")
+                flipped_30m = True
+                flip_dir = payload['trend']
+                price = payload['close']
             else:
-                logger.info(f"[ZALT OKX] {symbol} {tf}={payload['trend']}")
+                logger.info(f"[ZALT OKX] {symbol} 30m={payload['trend']}")
         persist_runtime_state()
 
     if flipped_30m and flip_dir in ('buy', 'sell'):
-        evaluate_daily_rpz(
+        evaluate_daily(
             symbol,
             trigger_dir=flip_dir,
             price=price,
@@ -2098,7 +2045,7 @@ def _st_context_veto(m, tf, exp_ctx):
 
 
 
-def evaluate_daily_rpz(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """DAILY porte A/B: trigger flip ZALT 30m (OKX) + CTX 30m en zone, commun.
     A: Bias 1D aligne + veto Bias 4H oppose.
     B (retest): arme quand CTX 4H passe buy/sell -> neutre (daily_armed_dir/ts), desarme

@@ -630,9 +630,9 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY A: CTX 2D + CTX 12H + CTX 2H alignes + flip ZALT 2H (OKX)\n"
+        "DAILY A: CTX 2D + LT 12H + CTX 2H alignes + flip ZALT 2H (OKX)\n"
         "DAILY B: Bias 2D + CTX 4H zone + flip ZALT 4H (OKX)\n"
-        "SWING (test): CTX 12H (LT priorise) + flip ZALT 12H + veto CTX 2D oppose\n"
+        "SWING (test): CTX 12H + CTX 2D + CTX LT 12H alignes + flip ZALT 12H\n"
         "PULSE: Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose\n"
         "SCALP: gere par le scalpbot actif (10 assets)\n"
         "--------------------\n"
@@ -1105,10 +1105,10 @@ def init_symbol_states(symbol):
             'st_context_2h': None,
             'st_context_1m': None, 'st_context_1m_ts': None,
             'st_context_10m': None, 'st_context_10m_ts': None,
-            'st_context_lt_12h': None, 'st_context_lt_12h_ts': None,  # SWING (priorise le LT)
+            'st_context_lt_12h': None, 'st_context_lt_12h_ts': None,  # SWING (LT 12H) + Daily A (LT 12H)
             'st_context_lt_10m': None, 'st_context_lt_10m_ts': None,  # Scalp porte A
-            'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance
-            'st_context_12h': None, 'st_context_12h_ts': None,  # Daily A (court terme, priorise sur LT)
+            'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance, SWING antichop
+            'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp porte B, calcule interne OKX
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse tendance + Daily veto, calcule interne OKX
@@ -1314,10 +1314,10 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY A : CTX 2D + CTX 12H (LT/court, repli) + CTX 2H alignes + flip ZALT 2H (OKX)
+        # DAILY A : CTX 2D + LT 12H (uniquement, pas de repli) + CTX 2H alignes + flip ZALT 2H (OKX)
         # DAILY B : Bias 2D + CTX 4H zone + flip ZALT 4H (OKX)
         # PULSE   : Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose
-        # SWING   : (test) CTX 12H (LT priorise) + flip ZALT 12H + veto CTX 2D oppose
+        # SWING   : (test) CTX 12H + CTX 2D + CTX LT 12H alignes + flip ZALT 12H
         # ========================================================================
         # DAILY: porte A = flip ZALT 2H (OKX, fallback TV) + CTX 2D/12H/2H alignes.
         # porte B = flip ZALT 4H (OKX, fallback TV) + CTX 4H en zone.
@@ -1338,8 +1338,9 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # SWING (test): trigger propre = flip ZALT 12H (OKX, fallback TV) + CTX 12H
-        # (LT priorise) + veto CTX 2D. Rafraichit sur CTX 12H court/LT et CTX 2D.
+        # SWING (test): trigger propre = flip ZALT 12H (OKX, fallback TV). Entree =
+        # CTX 12H + CTX 2D + CTX LT 12H alignes (les trois, pas de repli/veto).
+        # Rafraichit sur ces trois signaux.
         if CONFIG.get('ENABLE_SWING', True) and is_trade_symbol(symbol) and (
             (alert_type == 'st_context' and tf in ('12h', '2d'))
             or (alert_type == 'st_context_lt' and tf == '12h')
@@ -2231,27 +2232,13 @@ def _st_context_veto(m, tf, exp_ctx):
     return value, fresh, veto
 
 
-def _ctx_or_lt_condition(m, tf, exp_ctx, prefer_lt=False):
-    """Alignement CTX pour un TF donne, avec repli entre court terme (st_context_{tf})
-    et long terme (st_context_lt_{tf}). prefer_lt=False (Daily A): court terme d'abord,
-    repli sur le LT si absent/perime — sert si Max envoie du LT a la place du court.
-    prefer_lt=True (SWING): l'inverse, priorise le LT (c'est le JSON qu'il va creer)."""
-    max_age = {'10m': 30 * 60, '12h': 24 * 3600}.get(tf, 0)
-    short_val, short_fresh = _state_signal(m, f'st_context_{tf}', max_age)
-    lt_val, lt_fresh = _state_signal(m, f'st_context_lt_{tf}', max_age)
-    if prefer_lt:
-        value, fresh = (lt_val, lt_fresh) if lt_fresh else (short_val, short_fresh)
-    else:
-        value, fresh = (short_val, short_fresh) if short_fresh else (lt_val, lt_fresh)
-    return value, fresh, bool(fresh and value == exp_ctx)
-
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """DAILY porte A/B, deux logiques independantes.
-    A: ST Context 2D + 12H (court terme priorise, repli sur le LT si absent) + 2H alignes
-    (meme zone) + flip ZALT 2H (OKX). Pas de Bias implique.
-    B: Bias 2D aligne + ST Context 4H en zone + flip ZALT 4H (OKX).
+    A: CTX 2D + LT 12H (st_context_lt_12h uniquement, pas de repli sur CTX 12H) + CTX 2H
+    alignes (meme zone) + flip ZALT 2H (OKX). Pas de Bias implique.
+    B: Bias 2D aligne + CTX 4H en zone + flip ZALT 4H (OKX).
     Une seule notif si A et B le meme jour (dedup par position ouverte, _open_strategy_entry)."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
@@ -2265,12 +2252,13 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
 
         ctx2d, ctx2d_fresh, ctx2d_ok = _st_context_condition(m, '2d', exp_ctx)
-        ctx12h, ctx12h_fresh, ctx12h_ok = _ctx_or_lt_condition(m, '12h', exp_ctx, prefer_lt=False)
+        lt12h_val, lt12h_fresh = _state_signal(m, 'st_context_lt_12h', 24 * 3600)
+        lt12h_ok = bool(lt12h_fresh and lt12h_val == exp_ctx)
         ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
         zalt2h, zalt2h_fresh, zalt2h_ok = _zalt_condition(m, '2h', exp_ctx)
         zalt2h_flip_fresh = is_signal_fresh(m.get('last_zalt_2h_signal_ts'), 6 * 3600)
         trigger_a_ok = zalt2h_ok and zalt2h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
-        entry_a_ok = ctx2d_ok and ctx12h_ok and ctx2h_ok and trigger_a_ok
+        entry_a_ok = ctx2d_ok and lt12h_ok and ctx2h_ok and trigger_a_ok
 
         bias2d, bias2d_fresh, bias2d_ok = _bias_condition(m, '2d', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
@@ -2283,23 +2271,23 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
         logger.info(
             f"[DAILY CHECK] {symbol} source={source} dir={direction} "
-            f"ctx2d={ctx2d} ok={ctx2d_ok} ctx12h={ctx12h} ok={ctx12h_ok} ctx2h={ctx2h} ok={ctx2h_ok} "
+            f"[CTX 2D]={ctx2d} ok={ctx2d_ok} [LT 12H]={lt12h_val} ok={lt12h_ok} [CTX 2H]={ctx2h} ok={ctx2h_ok} "
             f"zalt2h={zalt2h}/{exp_ctx} fresh={zalt2h_fresh} flip_fresh={zalt2h_flip_fresh} trigA={trigger_a_ok} "
             f"bias2d={bias2d}/{exp_ctx} ok={bias2d_ok} "
-            f"zalt4h={zalt4h}/{exp_ctx} fresh={zalt4h_fresh} flip_fresh={zalt4h_flip_fresh} ctx4h={ctx4h} trigB={trigger_b_ok} "
+            f"zalt4h={zalt4h}/{exp_ctx} fresh={zalt4h_fresh} flip_fresh={zalt4h_flip_fresh} [CTX 4H]={ctx4h} trigB={trigger_b_ok} "
             f"A={entry_a_ok} B={entry_b_ok} entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'daily_a_2d12h2h' if entry_a_ok else 'daily_b_bias2d_4h'
+            signal_type = 'daily_a_2d_lt12h_2h' if entry_a_ok else 'daily_b_bias2d_4h'
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = ["[OK] Entree DAILY"]
             if entry_a_ok:
                 detail_lines += [
-                    "[VOIE] A: CTX 2D + CTX 12H + CTX 2H alignes + flip ZALT 2H",
-                    f"[OK] ST Context 2D: {_ctx_label(ctx2d)}",
-                    f"[OK] ST Context 12H: {_ctx_label(ctx12h)}",
-                    f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
+                    "[VOIE] A: CTX 2D + LT 12H + CTX 2H alignes + flip ZALT 2H",
+                    f"[OK] CTX 2D: {_ctx_label(ctx2d)}",
+                    f"[OK] LT 12H: {_ctx_label(lt12h_val)}",
+                    f"[OK] CTX 2H: {_ctx_label(ctx2h)}",
                     f"[OK] Flip ZALT 2H: {_ctx_label(zalt2h)}",
                 ]
             else:
@@ -2325,9 +2313,9 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING (test) — decouple de Daily desormais : ST Context 12H aligne (LT priorise,
-    repli sur le court terme si absent — c'est le JSON qu'il va creer) + flip ZALT 12H
-    (OKX, trigger propre a SWING) + veto si ST Context 2D frais oppose. Pas de porte B."""
+    """SWING (test) — trois alignements independants requis (pas de repli, pas de simple
+    veto) : CTX 12H == dir, CTX 2D == dir, LT 12H == dir. Neutre/absent sur l'un des trois
+    = pas d'entree. Trigger propre : flip ZALT 12H (OKX). Pas de porte B."""
     if not CONFIG.get('ENABLE_SWING', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2338,32 +2326,35 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        ctx12h, ctx12h_fresh, ctx12h_ok = _ctx_or_lt_condition(m, '12h', exp_ctx, prefer_lt=True)
+        ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
+        ctx2d, ctx2d_fresh, ctx2d_ok = _st_context_condition(m, '2d', exp_ctx)
+        lt12h_val, lt12h_fresh = _state_signal(m, 'st_context_lt_12h', 24 * 3600)
+        lt12h_ok = bool(lt12h_fresh and lt12h_val == exp_ctx)
 
         zalt12h, zalt12h_fresh, zalt12h_ok = _zalt_condition(m, '12h', exp_ctx)
         zalt12h_flip_fresh = is_signal_fresh(m.get('last_zalt_12h_signal_ts'), 24 * 3600)
         trigger_ok = zalt12h_ok and zalt12h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
 
-        ctx2d_veto_val, ctx2d_veto_fresh, ctx2d_veto = _st_context_veto(m, '2d', exp_ctx)
-
-        entry_ok = ctx12h_ok and trigger_ok and not ctx2d_veto
+        entry_ok = ctx12h_ok and ctx2d_ok and lt12h_ok and trigger_ok
 
         logger.info(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
-            f"ctx12h={ctx12h}/{exp_ctx} fresh={ctx12h_fresh} ok={ctx12h_ok} "
+            f"[CTX 12H]={ctx12h}/{exp_ctx} ok={ctx12h_ok} "
+            f"[CTX 2D]={ctx2d}/{exp_ctx} ok={ctx2d_ok} "
+            f"[LT 12H]={lt12h_val}/{exp_ctx} ok={lt12h_ok} "
             f"zalt12h={zalt12h}/{exp_ctx} fresh={zalt12h_fresh} flip_fresh={zalt12h_flip_fresh} trig={trigger_ok} "
-            f"ctx2d={ctx2d_veto_val} veto={ctx2d_veto} "
             f"entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'swing_lt12h'
+            signal_type = 'swing_12h_2d_lt12h'
             event_key = event_id or f"swing_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = [
                 "[OK] Entree SWING (test)",
-                f"[OK] ST Context 12H: {_ctx_label(ctx12h)}",
+                f"[OK] CTX 12H: {_ctx_label(ctx12h)}",
+                f"[OK] LT 12H: {_ctx_label(lt12h_val)}",
+                f"[OK] CTX 2D: {_ctx_label(ctx2d)}",
                 f"[OK] Flip ZALT 12H: {_ctx_label(zalt12h)}",
-                f"[INFO] ST Context 2D (veto si oppose): {_ctx_label(ctx2d_veto_val)}",
             ]
             opened = _open_strategy_entry(
                 symbol,

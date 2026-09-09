@@ -1079,6 +1079,10 @@ def init_symbol_states(symbol):
             'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp porte B, calcule interne OKX
+            'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,
+            'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_extended': None, 'rci_30m_ts': None,
+            'rci_5m_10': None, 'rci_5m_30': None, 'rci_5m_50': None,
+            'rci_5m_dir': None, 'rci_5m_chop': None, 'rci_5m_ts': None,
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse tendance + Daily veto, calcule interne OKX
             'bias_2d': None, 'bias_2d_ts': None,    # Daily A/B tendance (interne OKX, agregation 1D par paires)
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
@@ -1721,7 +1725,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 
 ZALT_HTF_SETTINGS = {
-    '30m': {'length': 50, 'mult': 1.1},
+    '30m': {'length': 34, 'mult': 1.0},
     '4h':  {'length': 50, 'mult': 1.2},
     '6h':  {'length': 50, 'mult': 1.2},
     '1d':  {'length': 50, 'mult': 1.3},
@@ -1784,12 +1788,88 @@ def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
     return {'trend': direction, 'flip': flip, 'close': float(close.iloc[-1])}
 
 
+def calc_rci(closes, length):
+    """Equivalent Pine ta.rci(source, length) : correlation de rang de Spearman entre
+    le prix et le temps sur une fenetre glissante de `length` barres, mise a l'echelle
+    [-100, 100]. Positif = tendance haussiere recente (le plus recent est le plus haut),
+    negatif = tendance baissiere. Gere les ex-aequo comme Pine (rang moyen)."""
+    if closes is None or len(closes) < length:
+        return None
+    window = closes.iloc[-length:].reset_index(drop=True)
+    price_rank = window.rank(method='average')
+    time_rank = pd.Series(range(1, length + 1), dtype=float)
+    d2_sum = ((time_rank.values - price_rank.values) ** 2).sum()
+    n = length
+    rci = (1 - 6 * d2_sum / (n * (n ** 2 - 1))) * 100
+    return float(rci)
+
+
+def calc_rci_multi(df, lengths=(10, 30, 50)):
+    """Calcule RCI aux lengths donnes sur un meme DataFrame OHLCV (colonne 'close').
+    Retourne {length: valeur_ou_None}."""
+    if df is None:
+        return {length: None for length in lengths}
+    d = df.copy().reset_index(drop=True)
+    close = d['close']
+    return {length: calc_rci(close, length) for length in lengths}
+
+
+def classify_rci(rci30, rci50, extreme_level=70):
+    """Classifie un couple RCI30/RCI50 (30m ou 5m) selon les regles Scalp 5.0.
+    Direction claire : RCI30 et RCI50 meme signe. Chop : signes opposes OU l'un des
+    deux proche de 0 (abs < 10). Extended (uniquement pertinent au 30m, pas de veto
+    au 5m) : RCI50 au-dela de +/-extreme_level.
+    Retourne (direction 'buy'|'sell'|None, is_chop, is_extended)."""
+    if rci30 is None or rci50 is None:
+        return None, True, False
+    is_chop = bool(abs(rci30) < 10 or abs(rci50) < 10 or (rci30 > 0) != (rci50 > 0))
+    direction = None if is_chop else ('buy' if rci50 > 0 else 'sell')
+    is_extended = bool(rci50 > extreme_level or rci50 < -extreme_level)
+    return direction, is_chop, is_extended
+
+
+
+
+def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
+    """Relaie vers le scalpbot le ZALT 30m calcule en interne (OKX) — armement Scalp
+    porte unique. signal=trend_flip seulement si c'est un vrai flip, sinon simple
+    refresh d'etat. Sans ce relais l'armement est mort (deja arrive)."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol':   symbol,
+        'strategy': 'scalp',
+        'tf':       '30m',
+        'type':     'zalt',
+        'value':    direction,
+        'price':    price,
+        'event_id': f"okx_zalt_30m_{symbol}_{int(time.time())}",
+    }
+    if is_flip:
+        relay_payload['signal'] = 'trend_flip'
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX ZALT 30m] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX ZALT 30m] {symbol}={direction} flip={is_flip} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX ZALT 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT 30m] Erreur: {e}")
 
 
 def update_okx_zalt_htf(symbol):
-    """ZALT 30m calcule en interne depuis OKX — 50/1.1. Plus aucune strategie n'utilise
-    son flip comme trigger (Daily A est passe sur ZALT 2H, SWING sur ZALT 12H) : valeur
-    de fond seule, conservee au calcul (voir ZALT_HTF_SETTINGS)."""
+    """ZALT 30m calcule en interne depuis OKX — 34/1.0 (test 'Scalp 5.0'). Relaye au
+    scalpbot (etat + flip) : c'est l'armement de la porte unique Scalp desormais."""
     if not is_trade_symbol(symbol):
         return
     cfg = ZALT_HTF_SETTINGS['30m']
@@ -1802,16 +1882,22 @@ def update_okx_zalt_htf(symbol):
         m = MOMENTUM_STATE[symbol]
         if not payload:
             logger.info(f"[ZALT OKX] {symbol} 30m=None")
+            direction, is_flip, price = None, False, 0.0
         else:
             old = m.get('zalt_30m')
             m['zalt_30m'] = payload['trend']
             m['zalt_30m_ts'] = now_ts
-            if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
+            is_flip = bool(payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend'])
+            if is_flip:
                 m['last_zalt_30m_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} 30m={payload['trend']} FLIP")
             else:
                 logger.info(f"[ZALT OKX] {symbol} 30m={payload['trend']}")
+            direction, price = payload['trend'], payload['close']
         persist_runtime_state()
+
+    if direction in ('buy', 'sell'):
+        relay_zalt_30m_to_scalp(symbol, direction, price, is_flip)
 
 
 def update_okx_zalt_12h(symbol):
@@ -1919,6 +2005,94 @@ def calc_bias_okx(df, ema_len=17, sma_len=40):
         return None
     except Exception:
         return None
+
+
+def relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, is_extended):
+    """Relaie vers le scalpbot le RCI calcule en interne (OKX) — armement/entree Scalp.
+    value=buy/sell/chop selon la classification, champ 'extended' separe (bool) pour ne
+    pas perdre l'info de direction meme quand extended=True. Pas de champ 'signal' :
+    ce n'est jamais un trigger."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol': symbol,
+        'tf': tf,
+        'type': 'rci',
+        'value': direction if direction in ('buy', 'sell') else 'chop',
+        'chop': bool(is_chop),
+        'extended': bool(is_extended),
+        'rci10': rci_values.get(10),
+        'rci30': rci_values.get(30),
+        'rci50': rci_values.get(50),
+    }
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX RCI {tf}] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX RCI {tf}] {symbol}={relay_payload['value']} chop={is_chop} extended={is_extended} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX RCI {tf}] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX RCI {tf}] Erreur: {e}")
+
+
+def update_okx_rci_30m(symbol):
+    """RCI 10/30/50 sur bougies 30m confirmees (OKX), uniquement scalp=True — filtre
+    de direction + veto extreme (chasse) de la porte unique Scalp."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('scalp'):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    direction, is_chop, is_extended = classify_rci(rci_values.get(30), rci_values.get(50))
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['rci_30m_10'] = rci_values.get(10)
+        m['rci_30m_30'] = rci_values.get(30)
+        m['rci_30m_50'] = rci_values.get(50)
+        m['rci_30m_dir'] = direction
+        m['rci_30m_chop'] = is_chop
+        m['rci_30m_extended'] = is_extended
+        m['rci_30m_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} dir={direction} chop={is_chop} extended={is_extended}")
+    relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, is_extended)
+
+
+def update_okx_rci_5m(symbol):
+    """RCI 10/30/50 sur bougies 5m confirmees (OKX), uniquement scalp=True — zone
+    d'entree/pyramidage de la porte unique Scalp. Pas de veto extreme a ce niveau."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('scalp'):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '5m', limit=100), 5)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    direction, is_chop, is_extended = classify_rci(rci_values.get(30), rci_values.get(50))
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['rci_5m_10'] = rci_values.get(10)
+        m['rci_5m_30'] = rci_values.get(30)
+        m['rci_5m_50'] = rci_values.get(50)
+        m['rci_5m_dir'] = direction
+        m['rci_5m_chop'] = is_chop
+        m['rci_5m_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[RCI OKX 5m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} dir={direction} chop={is_chop}")
+    relay_rci_to_scalp(symbol, '5m', rci_values, direction, is_chop, is_extended)
+
 
 
 def relay_bias_30m_to_scalp(symbol, value):
@@ -2285,8 +2459,9 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 
 def update_indicators_for_symbol(symbol):
-    """Calcule ZALT 30m (fond seul), 4H (Daily porte A/B trigger partage) et 12H (SWING
-    trigger) via OKX, Bias 30m (scalp=True, porte Scalp), et Bias 4H (Pulse tendance) /
+    """Calcule ZALT 30m (relaye au scalpbot, armement Scalp 5.0), 4H (Daily porte A/B
+    trigger partage) et 12H (SWING trigger) via OKX, Bias 30m (scalp=True, porte Scalp),
+    RCI 30m (scalp=True, filtre/veto extreme Scalp), et Bias 4H (Pulse tendance) /
     2D (Daily A/B tendance) via OKX."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
@@ -2298,6 +2473,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_zalt_12h(symbol)
         update_okx_bias_30m(symbol)
         update_okx_bias_htf(symbol)
+        update_okx_rci_30m(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
@@ -2327,6 +2503,35 @@ def indicators_scheduler():
         wait = (next_15m - now).total_seconds()
         logger.info(f"[OKX] Prochain calcul dans {int(wait)}s")
         time.sleep(max(60, wait))
+
+
+
+
+def rci_5m_scheduler():
+    """Recalcule RCI 5m (Scalp 5.0, zone d'entree/pyra) toutes les 5 minutes, scope
+    scalp=True uniquement (15 assets) — cycle dedie plus rapide que les indicateurs
+    generaux (15 min) car cette donnee sert a confirmer l'entree en temps reel."""
+    logger.info("[OKX] Scheduler RCI 5m demarre (toutes les 5 minutes, scalp=True)")
+    time.sleep(45)
+    while True:
+        scalp_symbols = [s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')]
+        logger.info(f"[OKX] Calcul RCI 5m pour {len(scalp_symbols)} assets scalp...")
+        for symbol in scalp_symbols:
+            try:
+                update_okx_rci_5m(symbol)
+            except Exception as e:
+                logger.error(f"[OKX] RCI 5m {symbol}: {e}")
+            time.sleep(0.5)  # rate limit OKX
+        persist_runtime_state()
+        logger.info("[OKX] Mise a jour RCI 5m terminee")
+        now = datetime.now(timezone.utc)
+        minutes_to_next = 5 - (now.minute % 5)
+        next_5m = now + timedelta(minutes=minutes_to_next)
+        next_5m = next_5m.replace(second=10, microsecond=0)
+        wait = (next_5m - now).total_seconds()
+        logger.info(f"[OKX] Prochain calcul RCI 5m dans {int(wait)}s")
+        time.sleep(max(30, wait))
+
 
 
 
@@ -2370,6 +2575,9 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
+
+        rci_5m_thread = threading.Thread(target=rci_5m_scheduler, daemon=True)
+        rci_5m_thread.start()
 
         watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
         watchdog_thread.start()

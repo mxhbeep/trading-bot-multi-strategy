@@ -1354,7 +1354,7 @@ def process_webhook(data):
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
                 (alert_type == 'zalt' and tf == '1m')
-                or (alert_type == 'st_context' and tf == '1m')
+                or (alert_type == 'st_context' and tf in ('1m', '30m'))
             )
         )
         if scalp_url and should_relay_scalp:
@@ -1528,8 +1528,8 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : ZALT 1m + ST Context 1m + Bias 30m
-    (ZALT 1m et Bias 30m calcules en interne, CTX 1m relaye depuis TV)."""
+    """Rechauffe le scalpbot : ZALT 1m + ST Context 1m/30m + Bias 30m
+    (ZALT 1m et Bias 30m calcules en interne, CTX 1m/30m relayes depuis TV)."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1611,6 +1611,25 @@ def sync_scalp():
                 errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: CTX1M {e}")
+
+        ctx30 = m.get('st_context_30m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '30m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx30),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx30_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx30m')
+            else:
+                errors.append(f"{symbol}: CTX30M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX30M {e}")
 
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")

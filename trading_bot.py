@@ -633,7 +633,7 @@ def send_start_notification():
         "DAILY A: CTX 2D + LT 12H alignes + flip ZALT 4H (OKX)\n"
         "DAILY B: Bias 2D + flip ZALT 4H (OKX)\n"
         "SWING (test): CTX 12H + CTX 2D + CTX LT 12H alignes + flip ZALT 12H\n"
-        "PULSE: Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose\n"
+        "PULSE: ZALT 4H + CTX 15m zone + flip ZALT 15m (TV) | Bias 4H en info\n"
         "SCALP: gere par le scalpbot actif (15 assets)\n"
         "--------------------\n"
         f"{now}"
@@ -771,17 +771,17 @@ def tv_required_signals():
             'scope': 'all',
         },
         {
-            'label': 'ST Context 10m (Pulse)',
+            'label': 'ST Context 15m (Pulse)',
             'alert_type': 'st_context',
-            'tf': '10m',
+            'tf': '15m',
             'max_age': 45 * 60,
             'warmup': 90 * 60,
             'scope': 'pulse',
         },
         {
-            'label': 'ZALT 10m',
+            'label': 'ZALT 15m',
             'alert_type': 'zalt',
-            'tf': '10m',
+            'tf': '15m',
             'max_age': 45 * 60,
             'warmup': 90 * 60,
             'scope': 'pulse',
@@ -1079,6 +1079,7 @@ def init_symbol_states(symbol):
             'rci_5m_dir': None, 'rci_5m_chop': None, 'rci_5m_ts': None,
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse tendance + Daily veto, calcule interne OKX
             'bias_2d': None, 'bias_2d_ts': None,    # Daily A/B tendance (interne OKX, agregation 1D par paires)
+            'zalt_15m': None, 'zalt_15m_ts': None, 'last_zalt_15m_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,  # SWING (test)
             'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,  # Daily porte A/B (partage)
@@ -1209,7 +1210,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('1m', '5m', '10m', '30m', '4h', '12h'):
+                if tf in ('1m', '5m', '10m', '15m', '30m', '4h', '12h'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1280,7 +1281,7 @@ def process_webhook(data):
         # STRATEGIES ACTIVES
         # DAILY A : CTX 2D + LT 12H (uniquement, pas de repli) + flip ZALT 4H (OKX)
         # DAILY B : Bias 2D + flip ZALT 4H (OKX)
-        # PULSE   : Bias 4H + CTX 10m zone + flip ZALT 10m (TV) + veto CTX 30m oppose
+        # PULSE   : ZALT 4H + CTX 15m zone + flip ZALT 15m (TV), Bias 4H en info
         # SWING   : (test) CTX 12H + CTX 2D + CTX LT 12H alignes + flip ZALT 12H
         # ========================================================================
         # DAILY: porte A et B partagent le meme trigger = flip ZALT 4H (OKX, fallback
@@ -1322,13 +1323,13 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE: trigger = flip ZALT 10m (TV) + CTX 10m en zone. Rafraichi sur Context
-        # 10m/30m pour retester si le flip est encore frais.
+        # PULSE: trigger = flip ZALT 15m (TV) + CTX 15m en zone. Rafraichi sur
+        # ZALT 4H / Context 15m pour retester si le flip est encore frais.
         if CONFIG.get('ENABLE_PULSE_V4', True) and is_pulse_symbol(symbol) and (
-            (alert_type == 'zalt' and tf == '10m')
-            or (alert_type == 'st_context' and tf in ('10m', '30m'))
+            (alert_type == 'zalt' and tf in ('15m', '4h'))
+            or (alert_type == 'st_context' and tf == '15m')
         ):
-            pulse_trigger_dir = parsed_zalt if alert_type == 'zalt' and tf == '10m' and zalt_signal in ('trend_flip', 'flip') else None
+            pulse_trigger_dir = parsed_zalt if alert_type == 'zalt' and tf == '15m' and zalt_signal in ('trend_flip', 'flip') else None
             evaluate_pulse_v3(
                 symbol,
                 trigger_dir=pulse_trigger_dir,
@@ -1761,7 +1762,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 ZALT_HTF_SETTINGS = {
     '30m': {'length': 34, 'mult': 1.0},
-    '4h':  {'length': 50, 'mult': 1.2},
+    '4h':  {'length': 55, 'mult': 1.15},
     '6h':  {'length': 50, 'mult': 1.2},
     '1d':  {'length': 50, 'mult': 1.3},
     '12h': {'length': 50, 'mult': 1.2},
@@ -2475,8 +2476,8 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE porte unique: Bias 4H aligne (pas neutre) + CTX 10m en zone + flip ZALT 10m
-    (TV) + veto si CTX 30m oppose."""
+    """PULSE porte unique: ZALT 4H aligne + CTX 15m en zone + flip ZALT 15m.
+    Bias 4H reste une info non bloquante dans l'alerte."""
     if not CONFIG.get('ENABLE_PULSE_V4', True) or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2487,32 +2488,33 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
         bias4h, bias4h_fresh, bias4h_ok = _bias_condition(m, '4h', exp_ctx)
-        ctx10, ctx10_fresh, ctx10_ok = _st_context_condition(m, '10m', exp_ctx)
-        zalt10, zalt10_fresh, zalt10_ok = _zalt_condition(m, '10m', exp_ctx)
-        zalt10_flip_fresh = is_signal_fresh(m.get('last_zalt_10m_signal_ts'), 45 * 60)
-        ctx30_veto_val, ctx30_veto_fresh, ctx30_veto = _st_context_veto(m, '30m', exp_ctx)
+        zalt4h, zalt4h_fresh, zalt4h_ok = _zalt_condition(m, '4h', exp_ctx)
+        ctx15, ctx15_fresh, ctx15_ok = _st_context_condition(m, '15m', exp_ctx)
+        zalt15, zalt15_fresh, zalt15_ok = _zalt_condition(m, '15m', exp_ctx)
+        zalt15_flip_fresh = is_signal_fresh(m.get('last_zalt_15m_signal_ts'), 45 * 60)
 
-        trigger_ok = ctx10_ok and zalt10_ok and zalt10_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
-        entry_ok = bias4h_ok and trigger_ok and not ctx30_veto
+        trigger_ok = ctx15_ok and zalt15_ok and zalt15_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
+        entry_ok = zalt4h_ok and trigger_ok
 
         logger.info(
             f"[PULSEV4 CHECK] {symbol} source={source} dir={direction} "
-            f"bias4h={bias4h}/{exp_ctx} fresh={bias4h_fresh} ok={bias4h_ok} "
-            f"ctx10={ctx10}/{exp_ctx} ok={ctx10_ok} "
-            f"zalt10={zalt10}/{exp_ctx} fresh={zalt10_fresh} flip_fresh={zalt10_flip_fresh} trig={trigger_ok} "
-            f"ctx30={ctx30_veto_val} veto={ctx30_veto} "
+            f"zalt4h={zalt4h}/{exp_ctx} fresh={zalt4h_fresh} ok={zalt4h_ok} "
+            f"ctx15={ctx15}/{exp_ctx} ok={ctx15_ok} "
+            f"zalt15={zalt15}/{exp_ctx} fresh={zalt15_fresh} flip_fresh={zalt15_flip_fresh} trig={trigger_ok} "
+            f"bias4h={bias4h}/{exp_ctx} fresh={bias4h_fresh} info_aligned={bias4h_ok} "
             f"entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'pulse_bias4h'
+            signal_type = 'pulse_zalt4h'
             event_key = event_id or f"pulsev4_{symbol}_{int(time.time())}_{exp_ctx}"
+            bias_info = "[QUALITE] Bias 4H aligne" if bias4h_ok else f"[INFO] Bias 4H non bloquant: {_ctx_label(bias4h)}"
             detail_lines = [
                 "[OK] Entree PULSE",
-                f"[OK] Bias 4H: {_ctx_label(bias4h)}",
-                f"[OK] ST Context 10m: {_ctx_label(ctx10)}",
-                f"[OK] Flip ZALT 10m: {_ctx_label(zalt10)}",
-                f"[INFO] ST Context 30m (veto si oppose): {_ctx_label(ctx30_veto_val)}",
+                f"[OK] ZALT 4H: {_ctx_label(zalt4h)}",
+                f"[OK] ST Context 15m: {_ctx_label(ctx15)}",
+                f"[OK] Flip ZALT 15m: {_ctx_label(zalt15)}",
+                bias_info,
             ]
             opened = _open_strategy_entry(
                 symbol,

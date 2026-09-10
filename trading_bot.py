@@ -42,6 +42,7 @@ CONFIG = {
         'ENA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'ETC/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'ETHFI/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
         'FET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'FIL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -2128,10 +2129,10 @@ def relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, is_extended, 
 
 
 def update_okx_rci_30m(symbol):
-    """RCI 10/30/50 sur bougies 30m confirmees (OKX), uniquement scalp=True — entree
-    scalp secondaire. Zone = RCI30 et RCI50 meme signe (voir classify_rci_zone)."""
-    cfg = get_symbol_config(symbol)
-    if not cfg.get('scalp'):
+    """RCI 10/30/50 sur bougies 30m confirmees (OKX), pour tous les assets tradés —
+    entree scalp secondaire (scalp=True) et alerte info Bias2H+RCI (tous assets).
+    Zone = RCI30 et RCI50 meme signe (voir classify_rci_zone)."""
+    if not is_trade_symbol(symbol):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
     rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
@@ -2240,9 +2241,9 @@ def check_bias2h_rci30_info(symbol, price=0.0):
     """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
     aligne + RCI court (longueur 10, calcule sur bougies 30m) en zone extreme de
     retournement : Bias BUY -> RCI10 <= -80 (survente), Bias SELL -> RCI10 >= +80
-    (surachat). Anti-chop : bloque l'alerte si CTX 10m OU CTX 30m frais est oppose au
-    sens teste. Rappelle de verifier le RCI 2H manuellement pour confirmer le signal.
-    Remplace l'ancienne notification RPZ (retiree)."""
+    (surachat). Anti-chop : bloque l'alerte si CTX 10m frais est oppose au sens teste
+    (uniquement CTX 10m, pas CTX 30m). Rappelle de verifier le RCI 2H manuellement pour
+    confirmer le signal. Remplace l'ancienne notification RPZ (retiree)."""
     notify = None
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2269,11 +2270,6 @@ def check_bias2h_rci30_info(symbol, price=0.0):
         if ctx10_fresh and ctx10 == opp:
             return
 
-        ctx30 = m.get('st_context_30m')
-        ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-        if ctx30_fresh and ctx30 == opp:
-            return
-
         if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=1800):
             notify = (exp, rci30_short)
 
@@ -2293,10 +2289,10 @@ def check_bias2h_rci30_info(symbol, price=0.0):
 
 
 def update_okx_bias_2h(symbol):
-    """Bias 2H calcule en interne (OKX), uniquement pour les assets scalp=True — entree
-    scalp secondaire. Meme pattern que Bias 30m : pas d'alerte TV, fetch OKX direct."""
-    cfg = get_symbol_config(symbol)
-    if not cfg.get('scalp'):
+    """Bias 2H calcule en interne (OKX), pour tous les assets tradés — entree scalp
+    secondaire (scalp=True) et alerte info Bias2H+RCI (tous assets). Meme pattern que
+    Bias 30m : pas d'alerte TV, fetch OKX direct."""
+    if not is_trade_symbol(symbol):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=100), 120)
     bias_value = calc_bias_okx(df) if df is not None else None

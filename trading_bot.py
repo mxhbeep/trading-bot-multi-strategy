@@ -2293,8 +2293,11 @@ def update_okx_bias_30m(symbol):
 
 def check_bias2h_rci30_info(symbol, price=0.0):
     """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
-    aligne + RCI 30m en zone, meme sens. Anti-chop : bloque l'alerte si CTX 10m frais
-    est oppose au sens teste. Remplace l'ancienne notification RPZ (retiree)."""
+    aligne + RCI court (longueur 10, sur bougies 30m) en zone extreme de retournement
+    (meme pattern que RCI 10m sur l'entree principale) : Bias BUY -> RCI10 <= -80
+    (survente), Bias SELL -> RCI10 >= +80 (surachat). Anti-chop : bloque l'alerte si
+    CTX 10m frais est oppose au sens teste. Remplace l'ancienne notification RPZ
+    (retiree)."""
     notify = None
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2305,9 +2308,12 @@ def check_bias2h_rci30_info(symbol, price=0.0):
             return
         exp = bias2h
 
-        rci30_dir = m.get('rci_30m_dir')
+        rci30_short = m.get('rci_30m_10')
         rci30_fresh = is_signal_fresh(m.get('rci_30m_ts'), 90 * 60)
-        rci30_ok = bool(rci30_fresh and rci30_dir == exp and not m.get('rci_30m_chop'))
+        if exp == 'buy':
+            rci30_ok = rci30_fresh and rci30_short is not None and float(rci30_short) <= -80
+        else:
+            rci30_ok = rci30_fresh and rci30_short is not None and float(rci30_short) >= 80
         if not rci30_ok:
             return
 

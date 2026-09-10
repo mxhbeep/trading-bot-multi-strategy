@@ -786,6 +786,14 @@ def tv_required_signals():
             'warmup': 15 * 60,
             'scope': 'scalp',
         },
+        {
+            'label': 'ST Context 10m (Scalp secondaire)',
+            'alert_type': 'st_context',
+            'tf': '10m',
+            'max_age': 45 * 60,
+            'warmup': 90 * 60,
+            'scope': 'scalp',
+        },
     ]
 
 
@@ -1063,8 +1071,11 @@ def init_symbol_states(symbol):
             'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp (porte unique), calcule interne OKX
+            'bias_2h': None, 'bias_2h_ts': None,    # Scalp entree secondaire, calcule interne OKX
             'rci_10m_10': None, 'rci_10m_30': None, 'rci_10m_50': None,
             'rci_10m_dir': None, 'rci_10m_chop': None, 'rci_10m_ts': None,
+            'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
+            'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse: info qualite non bloquante, calcule interne OKX
             'bias_2d': None, 'bias_2d_ts': None,    # Daily A/B tendance (interne OKX, agregation 1D par paires)
             'zalt_15m': None, 'zalt_15m_ts': None, 'last_zalt_15m_signal_ts': None,
@@ -1334,7 +1345,7 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
-            and (alert_type == 'st_context' and tf in ('1m', '30m'))
+            and (alert_type == 'st_context' and tf in ('1m', '10m', '30m'))
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
@@ -1507,7 +1518,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : Bias 30m + RCI 10m + ST Context 1m/30m + ZALT 30m."""
+    """Rechauffe le scalpbot : Bias 30m/2H + RCI 10m/30m + ST Context 1m/10m/30m + ZALT 30m."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1571,6 +1582,22 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: BIAS30M {e}")
 
+        bias2h = m.get('bias_2h')
+        try:
+            payload = {
+                'symbol': symbol,
+                'tf':     '2h',
+                'type':   'bias',
+                'value':  bias2h if bias2h in ('buy', 'sell') else 'neutral',
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('bias2h')
+            else:
+                errors.append(f"{symbol}: BIAS2H HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: BIAS2H {e}")
+
         rci10 = m.get('rci_10m_10')
         rci_dir = m.get('rci_10m_dir')
         try:
@@ -1594,6 +1621,29 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: RCI10M {e}")
 
+        rci30 = m.get('rci_30m_30')
+        rci30_dir = m.get('rci_30m_dir')
+        try:
+            payload = {
+                'symbol': symbol,
+                'tf':     '30m',
+                'type':   'rci',
+                'value':  rci30_dir if rci30_dir in ('buy', 'sell') else 'chop',
+                'chop':   rci30_dir not in ('buy', 'sell'),
+                'extended': False,
+                'rci10':  m.get('rci_30m_10'),
+                'rci30':  rci30,
+                'rci50':  m.get('rci_30m_50'),
+                'price':  0,
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('rci30m')
+            else:
+                errors.append(f"{symbol}: RCI30M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: RCI30M {e}")
+
         ctx1 = m.get('st_context_1m')
         try:
             payload = {
@@ -1612,6 +1662,25 @@ def sync_scalp():
                 errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: CTX1M {e}")
+
+        ctx10 = m.get('st_context_10m')
+        try:
+            payload = {
+                'symbol':   symbol,
+                'strategy': 'scalp',
+                'tf':       '10m',
+                'type':     'st_context',
+                'value':    ctx_to_sync_value(ctx10),
+                'price':    0,
+                'event_id': f"sync_scalp_ctx10_{symbol}_{int(time.time())}",
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('ctx10m')
+            else:
+                errors.append(f"{symbol}: CTX10M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: CTX10M {e}")
 
         ctx30 = m.get('st_context_30m')
         try:
@@ -1833,6 +1902,17 @@ def calc_rci_multi(df, lengths=(10, 30, 50)):
     d = df.copy().reset_index(drop=True)
     close = d['close']
     return {length: calc_rci(close, length) for length in lengths}
+
+
+def classify_rci_zone(rci30, rci50):
+    """Classifie une zone RCI30/RCI50 : meme signe = zone claire (buy si positif, sell
+    si negatif). Signes opposes ou l'un des deux absent = pas de zone claire (chop).
+    Utilise par l'entree scalp secondaire (RCI 30m en zone)."""
+    if rci30 is None or rci50 is None:
+        return None, True
+    is_chop = (rci30 > 0) != (rci50 > 0)
+    direction = None if is_chop else ('buy' if rci50 > 0 else 'sell')
+    return direction, is_chop
 
 
 
@@ -2134,6 +2214,31 @@ def update_okx_rci_10m(symbol):
     relay_rci_to_scalp(symbol, '10m', rci_values, direction, is_chop, is_extended, price=price)
 
 
+def update_okx_rci_30m(symbol):
+    """RCI 10/30/50 sur bougies 30m confirmees (OKX), uniquement scalp=True — entree
+    scalp secondaire. Zone = RCI30 et RCI50 meme signe (voir classify_rci_zone)."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('scalp'):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    direction, is_chop = classify_rci_zone(rci_values.get(30), rci_values.get(50))
+    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['rci_30m_10'] = rci_values.get(10)
+        m['rci_30m_30'] = rci_values.get(30)
+        m['rci_30m_50'] = rci_values.get(50)
+        m['rci_30m_dir'] = direction
+        m['rci_30m_chop'] = is_chop
+        m['rci_30m_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
+    relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
+
+
 
 def relay_bias_30m_to_scalp(symbol, value):
     """Relaie vers le scalpbot le Bias 30m calcule en interne (OKX) — porte B Scalp.
@@ -2166,6 +2271,38 @@ def relay_bias_30m_to_scalp(symbol, value):
         logger.warning(f"[RELAY OKX BIAS 30m] Erreur: {e}")
 
 
+def relay_bias_2h_to_scalp(symbol, value):
+    """Relaie vers le scalpbot le Bias 2H calcule en interne (OKX) — entree scalp
+    secondaire. Pas de champ 'signal' ni 'price' : ce n'est pas un trigger, juste un
+    etat a jour."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol': symbol,
+        'tf': '2h',
+        'type': 'bias',
+        'value': value if value in ('buy', 'sell') else 'neutral',
+    }
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX BIAS 2H] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX BIAS 2H] {symbol}={relay_payload['value']} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX BIAS 2H] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX BIAS 2H] Erreur: {e}")
+
+
 def update_okx_bias_30m(symbol):
     """Bias 30m calcule en interne (OKX), uniquement pour les assets scalp=True.
     Comme ZALT HTF : pas d'alerte TV, fetch OKX direct sur bougies 30m confirmees."""
@@ -2183,6 +2320,25 @@ def update_okx_bias_30m(symbol):
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 30m={bias_value}")
     relay_bias_30m_to_scalp(symbol, bias_value)
+
+
+def update_okx_bias_2h(symbol):
+    """Bias 2H calcule en interne (OKX), uniquement pour les assets scalp=True — entree
+    scalp secondaire. Meme pattern que Bias 30m : pas d'alerte TV, fetch OKX direct."""
+    cfg = get_symbol_config(symbol)
+    if not cfg.get('scalp'):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=100), 120)
+    bias_value = calc_bias_okx(df) if df is not None else None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['bias_2h'] = bias_value
+        m['bias_2h_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[BIAS OKX] {symbol} 2h={bias_value}")
+    relay_bias_2h_to_scalp(symbol, bias_value)
 
 
 def update_okx_bias_htf(symbol):
@@ -2501,9 +2657,9 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 def update_indicators_for_symbol(symbol):
     """Calcule ZALT 30m (relaye au scalpbot, Bias 30m porte scalp), 15m (Pulse trigger),
-    4H (Daily porte A/B trigger partage) et 12H (SWING trigger) via OKX, Bias 30m
-    (scalp=True, porte Scalp), et Bias 4H (Pulse info qualite) / 2D (Daily A/B tendance)
-    via OKX. RCI 10m scalp est calcule dans son scheduler dedie."""
+    4H (Daily porte A/B trigger partage) et 12H (SWING trigger) via OKX, Bias 30m/2H et
+    RCI 30m (scalp=True, entree secondaire scalp), et Bias 4H (Pulse info qualite) /
+    2D (Daily A/B tendance) via OKX. RCI 10m scalp est calcule dans son scheduler dedie."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
@@ -2514,6 +2670,8 @@ def update_indicators_for_symbol(symbol):
         update_okx_zalt_4h(symbol)
         update_okx_zalt_12h(symbol)
         update_okx_bias_30m(symbol)
+        update_okx_bias_2h(symbol)
+        update_okx_rci_30m(symbol)
         update_okx_bias_htf(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")

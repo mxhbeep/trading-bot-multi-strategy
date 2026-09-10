@@ -84,7 +84,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V4': True,
     'ENABLE_DAILY': True,
-    'ENABLE_SWING': True,  # test — tendance ZALT 12H, meme trigger que Daily
+    'ENABLE_SWING': True,  # test — armement CTX 12H + ZALT 12H, entree RCI 12H
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -632,7 +632,7 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY A: CTX 2D + LT 12H alignes + flip ZALT 4H (OKX)\n"
         "DAILY B: Bias 2D + flip ZALT 4H (OKX)\n"
-        "SWING (test): CTX 12H + CTX 2D + CTX LT 12H alignes + flip ZALT 12H\n"
+        "SWING (test): armement CTX 12H + ZALT 12H, entree sur prochaine zone RCI 12H\n"
         "PULSE: ZALT 4H + CTX 15m zone + flip ZALT 15m (TV) | Bias 4H en info\n"
         "SCALP: gere par le scalpbot actif (15 assets)\n"
         "--------------------\n"
@@ -1065,14 +1065,17 @@ def init_symbol_states(symbol):
             'st_context_1m': None, 'st_context_1m_ts': None,
             'st_context_10m': None, 'st_context_10m_ts': None,
             'st_context_5m': None, 'st_context_5m_ts': None,  # Scalp porte A (relais)
-            'st_context_lt_12h': None, 'st_context_lt_12h_ts': None,  # SWING (LT 12H) + Daily A (LT 12H)
+            'st_context_lt_12h': None, 'st_context_lt_12h_ts': None,  # Daily A (LT 12H)
             'st_context_lt_10m': None, 'st_context_lt_10m_ts': None,  # Scalp porte A
-            'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance, SWING antichop
-            'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
+            'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance
+            'st_context_12h': None, 'st_context_12h_ts': None,  # SWING armement
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp (porte unique), calcule interne OKX
             'rci_10m_10': None, 'rci_10m_30': None, 'rci_10m_50': None,
             'rci_10m_dir': None, 'rci_10m_chop': None, 'rci_10m_ts': None,
+            'rci_12h_10': None, 'rci_12h_30': None, 'rci_12h_50': None,
+            'rci_12h_dir': None, 'rci_12h_chop': None, 'rci_12h_ts': None,
+            'swing_armed_dir': None, 'swing_armed_ts': None,
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse: info qualite non bloquante, calcule interne OKX
             'bias_2d': None, 'bias_2d_ts': None,    # Daily A/B tendance (interne OKX, agregation 1D par paires)
             'zalt_15m': None, 'zalt_15m_ts': None, 'last_zalt_15m_signal_ts': None,
@@ -1278,7 +1281,7 @@ def process_webhook(data):
         # DAILY A : CTX 2D + LT 12H (uniquement, pas de repli) + flip ZALT 4H (OKX)
         # DAILY B : Bias 2D + flip ZALT 4H (OKX)
         # PULSE   : ZALT 4H + CTX 15m zone + flip ZALT 15m (TV), Bias 4H en info
-        # SWING   : (test) CTX 12H + CTX 2D + CTX LT 12H alignes + flip ZALT 12H
+        # SWING   : (test) armement CTX 12H + ZALT 12H, entree sur prochaine zone RCI 12H
         # ========================================================================
         # DAILY: porte A et B partagent le meme trigger = flip ZALT 4H (OKX, fallback
         # TV) + CTX 4H en zone. A verifie en plus CTX 2D + LT 12H, B verifie Bias 2D.
@@ -1299,20 +1302,15 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # SWING (test): trigger propre = flip ZALT 12H (OKX, fallback TV). Entree =
-        # CTX 12H + CTX 2D + CTX LT 12H alignes (les trois, pas de repli/veto).
-        # Rafraichit sur ces trois signaux.
+        # SWING (test): CTX 12H + ZALT 12H arment la direction. L'entree vient ensuite
+        # du prochain RCI 12H extreme dans le sens arme.
         if CONFIG.get('ENABLE_SWING', True) and is_pulse_symbol(symbol) and (
-            (alert_type == 'st_context' and tf in ('12h', '2d'))
-            or (alert_type == 'st_context_lt' and tf == '12h')
+            (alert_type == 'st_context' and tf == '12h')
             or (alert_type == 'zalt' and tf == '12h')
         ):
-            swing_trigger_dir = None
-            if alert_type == 'zalt' and tf == '12h' and zalt_signal in ('trend_flip', 'flip'):
-                swing_trigger_dir = parsed_zalt
             evaluate_swing(
                 symbol,
-                trigger_dir=swing_trigger_dir,
+                trigger_dir=None,
                 price=price,
                 exchange_name=exchange_name,
                 event_id=event_id,
@@ -1516,7 +1514,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : Bias 30m + RCI 10m + ST Context 1m/30m + ZALT 30m."""
+    """Rechauffe le scalpbot : Bias 30m + ST Context 1m/30m + ZALT 30m."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1579,29 +1577,6 @@ def sync_scalp():
                 errors.append(f"{symbol}: BIAS30M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: BIAS30M {e}")
-
-        rci10 = m.get('rci_10m_10')
-        rci_dir = m.get('rci_10m_dir')
-        try:
-            payload = {
-                'symbol': symbol,
-                'tf':     '10m',
-                'type':   'rci',
-                'value':  rci_dir if rci_dir in ('buy', 'sell') else 'chop',
-                'chop':   rci_dir not in ('buy', 'sell'),
-                'extended': False,
-                'rci10':  rci10,
-                'rci30':  m.get('rci_10m_30'),
-                'rci50':  m.get('rci_10m_50'),
-                'price':  0,
-            }
-            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-            if resp.status_code == 200:
-                symbol_sent.append('rci10m')
-            else:
-                errors.append(f"{symbol}: RCI10M HTTP {resp.status_code}")
-        except Exception as e:
-            errors.append(f"{symbol}: RCI10M {e}")
 
         ctx1 = m.get('st_context_1m')
         try:
@@ -1919,8 +1894,9 @@ def update_okx_zalt_htf(symbol):
 
 
 def update_okx_zalt_12h(symbol):
-    """ZALT 12H calcule en interne depuis OKX — trigger SWING. Le flip 12H declenche
-    directement evaluate_swing avec son propre trigger_dir. SWING = is_pulse_symbol
+    """ZALT 12H calcule en interne depuis OKX — armement SWING avec CTX 12H.
+    Le flip 12H n'est pas une entree : l'entree vient de la prochaine zone RCI 12H.
+    SWING = is_pulse_symbol
     (33 assets), pas tout is_trade_symbol : evite de calculer pour rien sur les
     15 assets Daily-only."""
     if not is_pulse_symbol(symbol):
@@ -1929,8 +1905,7 @@ def update_okx_zalt_12h(symbol):
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
     payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
 
-    flipped_12h = False
-    flip_dir = None
+    zalt_dir = None
     price = 0.0
     now_ts = time.time()
     with STATE_LOCK:
@@ -1942,30 +1917,29 @@ def update_okx_zalt_12h(symbol):
             old = m.get('zalt_12h')
             m['zalt_12h'] = payload['trend']
             m['zalt_12h_ts'] = now_ts
+            zalt_dir = payload['trend']
+            price = payload['close']
             if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
                 m['last_zalt_12h_signal_ts'] = now_ts
                 logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']} FLIP")
-                flipped_12h = True
-                flip_dir = payload['trend']
-                price = payload['close']
             else:
                 logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']}")
         persist_runtime_state()
 
-    if flipped_12h and flip_dir in ('buy', 'sell'):
+    if zalt_dir in ('buy', 'sell'):
         evaluate_swing(
             symbol,
-            trigger_dir=flip_dir,
+            trigger_dir=None,
             price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_zalt_12h_flip_{symbol}_{int(now_ts)}",
-            source='okx_zalt_12h_flip',
+            event_id=f"okx_zalt_12h_state_{symbol}_{int(now_ts)}",
+            source='okx_zalt_12h_state',
         )
 
 
 def update_okx_zalt_4h(symbol):
     """ZALT 4H calcule en interne depuis OKX — trigger DAILY porte B (avec CTX 4H en zone).
-    Contrairement au 30m (porte A) et au 12H (SWING, jamais trigger), le flip 4H declenche
+    Contrairement au 30m (relais scalp) et au 12H (SWING armement seulement), le flip 4H declenche
     directement evaluate_daily avec son propre trigger_dir (porte B uniquement)."""
     if not is_trade_symbol(symbol):
         return
@@ -2111,8 +2085,9 @@ def relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, is_extended, 
 
 
 def update_okx_rci_10m(symbol):
-    """RCI 10/30/50 sur bougies 10m confirmees (OKX), uniquement scalp=True.
-    La zone scalp utilise uniquement le RCI court 10 : <= -75 = buy, >= +75 = sell."""
+    """Desactive : OKX ne fournit pas de bougies 10m.
+    Le RCI 10m scalp est verifie manuellement sur TradingView."""
+    return
     cfg = get_symbol_config(symbol)
     if not cfg.get('scalp'):
         return
@@ -2141,6 +2116,47 @@ def update_okx_rci_10m(symbol):
         persist_runtime_state()
     logger.info(f"[RCI OKX 10m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
     relay_rci_to_scalp(symbol, '10m', rci_values, direction, is_chop, is_extended, price=price)
+
+
+def update_okx_rci_12h(symbol):
+    """RCI 10/30/50 sur bougies 12H confirmees (OKX), uniquement pulse=True.
+    Pour SWING, la zone utilise le RCI court 10 : <= -75 = buy, >= +75 = sell."""
+    if not is_pulse_symbol(symbol):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=100), 720)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    rci10 = rci_values.get(10)
+    direction = None
+    if rci10 is not None:
+        if float(rci10) <= -75:
+            direction = 'buy'
+        elif float(rci10) >= 75:
+            direction = 'sell'
+    is_chop = direction is None
+    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+    old_dir = None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        old_dir = m.get('rci_12h_dir')
+        m['rci_12h_10'] = rci_values.get(10)
+        m['rci_12h_30'] = rci_values.get(30)
+        m['rci_12h_50'] = rci_values.get(50)
+        m['rci_12h_dir'] = direction
+        m['rci_12h_chop'] = is_chop
+        m['rci_12h_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[RCI OKX 12H] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
+    if direction in ('buy', 'sell') and old_dir != direction:
+        evaluate_swing(
+            symbol,
+            trigger_dir=direction,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_rci_12h_zone_{symbol}_{int(now_ts)}",
+            source='okx_rci_12h_zone',
+        )
 
 
 
@@ -2394,9 +2410,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING (test) — trois alignements independants requis (pas de repli, pas de simple
-    veto) : CTX 12H == dir, CTX 2D == dir, LT 12H == dir. Neutre/absent sur l'un des trois
-    = pas d'entree. Trigger propre : flip ZALT 12H (OKX). Pas de porte B."""
+    """SWING (test) — armement CTX 12H + ZALT 12H alignes.
+    Entree sur la prochaine zone RCI 12H dans le sens arme."""
     if not CONFIG.get('ENABLE_SWING', True) or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2408,34 +2423,47 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
         ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
-        ctx2d, ctx2d_fresh, ctx2d_ok = _st_context_condition(m, '2d', exp_ctx)
-        lt12h_val, lt12h_fresh = _state_signal(m, 'st_context_lt_12h', 24 * 3600)
-        lt12h_ok = bool(lt12h_fresh and lt12h_val == exp_ctx)
-
         zalt12h, zalt12h_fresh, zalt12h_ok = _zalt_condition(m, '12h', exp_ctx)
-        zalt12h_flip_fresh = is_signal_fresh(m.get('last_zalt_12h_signal_ts'), 24 * 3600)
-        trigger_ok = zalt12h_ok and zalt12h_flip_fresh and (trigger_dir is None or trigger_dir == exp_ctx)
-
-        entry_ok = ctx12h_ok and ctx2d_ok and lt12h_ok and trigger_ok
-
-        logger.info(
-            f"[SWING CHECK] {symbol} source={source} dir={direction} "
-            f"[CTX 12H]={ctx12h}/{exp_ctx} ok={ctx12h_ok} "
-            f"[CTX 2D]={ctx2d}/{exp_ctx} ok={ctx2d_ok} "
-            f"[LT 12H]={lt12h_val}/{exp_ctx} ok={lt12h_ok} "
-            f"zalt12h={zalt12h}/{exp_ctx} fresh={zalt12h_fresh} flip_fresh={zalt12h_flip_fresh} trig={trigger_ok} "
-            f"entry={entry_ok}"
+        arm_ok = ctx12h_ok and zalt12h_ok
+        was_armed_ok = bool(
+            m.get('swing_armed_dir') == exp_ctx
+            and is_signal_fresh(m.get('swing_armed_ts'), 7 * 24 * 3600)
         )
 
+        if arm_ok and m.get('swing_armed_dir') != exp_ctx:
+            m['swing_armed_dir'] = exp_ctx
+            m['swing_armed_ts'] = time.time()
+            persist_runtime_state()
+            logger.info(f"[SWING ARM] {symbol} armed_dir={exp_ctx} source={source}")
+
+        rci12 = m.get('rci_12h_10')
+        rci12_fresh = is_signal_fresh(m.get('rci_12h_ts'), 36 * 3600)
+        rci12_ok = bool(
+            rci12_fresh and rci12 is not None and
+            ((exp_ctx == 'buy' and float(rci12) <= -75) or (exp_ctx == 'sell' and float(rci12) >= 75))
+        )
+        armed_ok = bool(
+            m.get('swing_armed_dir') == exp_ctx
+            and is_signal_fresh(m.get('swing_armed_ts'), 7 * 24 * 3600)
+        )
+        trigger_ok = bool(trigger_dir == exp_ctx and rci12_ok)
+        entry_ok = was_armed_ok and trigger_ok
+
         if entry_ok:
-            signal_type = 'swing_12h_2d_lt12h'
+            logger.info(
+                f"[SWING CHECK] {symbol} source={source} dir={direction} "
+                f"armed={armed_ok} armed_before_signal={was_armed_ok} ctx12h={ctx12h}/{exp_ctx} ok={ctx12h_ok} "
+                f"zalt12h={zalt12h}/{exp_ctx} ok={zalt12h_ok} "
+                f"rci12={rci12} ok={rci12_ok} entry=True"
+            )
+            signal_type = 'swing_rci12h'
             event_key = event_id or f"swing_{symbol}_{int(time.time())}_{exp_ctx}"
+            rci_zone = "RCI 12H <= -75" if exp_ctx == 'buy' else "RCI 12H >= +75"
             detail_lines = [
                 "[OK] Entree SWING (test)",
                 f"[OK] CTX 12H: {_ctx_label(ctx12h)}",
-                f"[OK] LT 12H: {_ctx_label(lt12h_val)}",
-                f"[OK] CTX 2D: {_ctx_label(ctx2d)}",
-                f"[OK] Flip ZALT 12H: {_ctx_label(zalt12h)}",
+                f"[OK] ZALT 12H: {_ctx_label(zalt12h)}",
+                f"[OK] Zone {rci_zone}: {float(rci12):.1f}",
             ]
             opened = _open_strategy_entry(
                 symbol,
@@ -2448,6 +2476,16 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 detail_lines,
                 cooldown=14400,
             ) or opened
+            m['swing_armed_dir'] = None
+            m['swing_armed_ts'] = None
+            persist_runtime_state()
+        else:
+            logger.info(
+                f"[SWING CHECK] {symbol} source={source} dir={direction} "
+                f"arm={arm_ok} armed={armed_ok} armed_before_signal={was_armed_ok} ctx12h={ctx12h}/{exp_ctx} ok={ctx12h_ok} "
+                f"zalt12h={zalt12h}/{exp_ctx} ok={zalt12h_ok} "
+                f"rci12={rci12} ok={rci12_ok} trigger={trigger_ok} entry=False"
+            )
     return opened
 
 
@@ -2510,9 +2548,10 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 def update_indicators_for_symbol(symbol):
     """Calcule ZALT 30m (relaye au scalpbot, Bias 30m porte scalp), 15m (Pulse trigger),
-    4H (Daily porte A/B trigger partage) et 12H (SWING trigger) via OKX, Bias 30m
-    (scalp=True, porte Scalp), et Bias 4H (Pulse info qualite) / 2D (Daily A/B tendance)
-    via OKX. RCI 10m scalp est calcule dans son scheduler dedie."""
+    4H (Daily porte A/B trigger partage) et 12H (SWING armement) via OKX, Bias 30m
+    (scalp=True, porte Scalp), RCI 12H (SWING entree), et Bias 4H (Pulse info qualite)
+    / 2D (Daily A/B tendance) via OKX. RCI 10m scalp est verifie manuellement
+    sur TradingView car OKX ne fournit pas de bougies 10m."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
@@ -2524,6 +2563,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_zalt_12h(symbol)
         update_okx_bias_30m(symbol)
         update_okx_bias_htf(symbol)
+        update_okx_rci_12h(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
@@ -2553,34 +2593,6 @@ def indicators_scheduler():
         wait = (next_15m - now).total_seconds()
         logger.info(f"[OKX] Prochain calcul dans {int(wait)}s")
         time.sleep(max(60, wait))
-
-
-
-
-def rci_10m_scheduler():
-    """Recalcule RCI 10m (Scalp simple, zone extreme +/-75) toutes les 10 minutes,
-    scope scalp=True uniquement."""
-    logger.info("[OKX] Scheduler RCI 10m demarre (toutes les 10 minutes, scalp=True)")
-    time.sleep(45)
-    while True:
-        scalp_symbols = [s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')]
-        logger.info(f"[OKX] Calcul RCI 10m pour {len(scalp_symbols)} assets scalp...")
-        for symbol in scalp_symbols:
-            try:
-                update_okx_rci_10m(symbol)
-            except Exception as e:
-                logger.error(f"[OKX] RCI 10m {symbol}: {e}")
-            time.sleep(0.5)  # rate limit OKX
-        persist_runtime_state()
-        logger.info("[OKX] Mise a jour RCI 10m terminee")
-        now = datetime.now(timezone.utc)
-        minutes_to_next = 10 - (now.minute % 10)
-        next_10m = now + timedelta(minutes=minutes_to_next)
-        next_10m = next_10m.replace(second=10, microsecond=0)
-        wait = (next_10m - now).total_seconds()
-        logger.info(f"[OKX] Prochain calcul RCI 10m dans {int(wait)}s")
-        time.sleep(max(30, wait))
-
 
 
 
@@ -2624,9 +2636,6 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
-
-        rci_10m_thread = threading.Thread(target=rci_10m_scheduler, daemon=True)
-        rci_10m_thread.start()
 
         watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
         watchdog_thread.start()

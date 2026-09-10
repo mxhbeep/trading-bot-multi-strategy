@@ -1070,14 +1070,10 @@ def init_symbol_states(symbol):
             'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance, SWING antichop
             'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
             'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
-            'bias_30m': None, 'bias_30m_ts': None,  # Scalp porte B, calcule interne OKX
-            'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,
-            'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_extended': None, 'rci_30m_ts': None,
+            'bias_30m': None, 'bias_30m_ts': None,  # Scalp (porte unique), calcule interne OKX
             'rci_10m_10': None, 'rci_10m_30': None, 'rci_10m_50': None,
             'rci_10m_dir': None, 'rci_10m_chop': None, 'rci_10m_ts': None,
-            'rci_5m_10': None, 'rci_5m_30': None, 'rci_5m_50': None,
-            'rci_5m_dir': None, 'rci_5m_chop': None, 'rci_5m_ts': None,
-            'bias_4h': None, 'bias_4h_ts': None,    # Pulse tendance + Daily veto, calcule interne OKX
+            'bias_4h': None, 'bias_4h_ts': None,    # Pulse: info qualite non bloquante, calcule interne OKX
             'bias_2d': None, 'bias_2d_ts': None,    # Daily A/B tendance (interne OKX, agregation 1D par paires)
             'zalt_15m': None, 'zalt_15m_ts': None, 'last_zalt_15m_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
@@ -1210,7 +1206,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('1m', '5m', '10m', '15m', '30m', '4h', '12h'):
+                if tf in ('30m', '4h', '12h'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1347,10 +1343,7 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
-            and (
-                (alert_type == 'zalt' and tf == '1m')
-                or (alert_type == 'st_context' and tf in ('1m', '30m'))
-            )
+            and (alert_type == 'st_context' and tf in ('1m', '30m'))
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
@@ -1761,6 +1754,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 
 ZALT_HTF_SETTINGS = {
+    '15m': {'length': 34, 'mult': 1.0},
     '30m': {'length': 34, 'mult': 1.0},
     '4h':  {'length': 55, 'mult': 1.15},
     '6h':  {'length': 50, 'mult': 1.2},
@@ -1850,18 +1844,6 @@ def calc_rci_multi(df, lengths=(10, 30, 50)):
     return {length: calc_rci(close, length) for length in lengths}
 
 
-def classify_rci(rci30, rci50, extreme_level=70):
-    """Classifie un couple RCI30/RCI50 (30m ou 5m) selon les regles Scalp 5.0.
-    Direction claire : RCI30 et RCI50 meme signe. Chop : signes opposes OU l'un des
-    deux proche de 0 (abs < 10). Extended (uniquement pertinent au 30m, pas de veto
-    au 5m) : RCI50 au-dela de +/-extreme_level.
-    Retourne (direction 'buy'|'sell'|None, is_chop, is_extended)."""
-    if rci30 is None or rci50 is None:
-        return None, True, False
-    is_chop = bool(abs(rci30) < 10 or abs(rci50) < 10 or (rci30 > 0) != (rci50 > 0))
-    direction = None if is_chop else ('buy' if rci50 > 0 else 'sell')
-    is_extended = bool(rci50 > extreme_level or rci50 < -extreme_level)
-    return direction, is_chop, is_extended
 
 
 
@@ -1904,8 +1886,8 @@ def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
 
 
 def update_okx_zalt_htf(symbol):
-    """ZALT 30m calcule en interne depuis OKX — 34/1.0 (test 'Scalp 5.0'). Relaye au
-    scalpbot (etat + flip) : c'est l'armement de la porte unique Scalp desormais."""
+    """ZALT 30m calcule en interne depuis OKX — 34/1.0. Relaye au scalpbot (etat + flip) :
+    info qualite non bloquante (aligne/oppose/neutre) dans la strategie scalp simple."""
     if not is_trade_symbol(symbol):
         return
     cfg = ZALT_HTF_SETTINGS['30m']
@@ -2025,6 +2007,51 @@ def update_okx_zalt_4h(symbol):
         )
 
 
+def update_okx_zalt_15m(symbol):
+    """ZALT 15m calcule en interne depuis OKX — trigger PULSE (avec CTX 15m en zone).
+    Reglages 34/1.0 par defaut (meme famille que le 30m, a ajuster si besoin — aucune
+    valeur precise n'a ete communiquee). Gatee sur is_pulse_symbol (33 assets, seul
+    consommateur), pas is_trade_symbol. Remplace l'alerte TV ZALT 15m."""
+    if not is_pulse_symbol(symbol):
+        return
+    cfg = ZALT_HTF_SETTINGS['15m']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=300), 15)
+    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+
+    flipped_15m = False
+    flip_dir = None
+    price = 0.0
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        if not payload:
+            logger.info(f"[ZALT OKX] {symbol} 15m=None")
+        else:
+            old = m.get('zalt_15m')
+            m['zalt_15m'] = payload['trend']
+            m['zalt_15m_ts'] = now_ts
+            if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
+                m['last_zalt_15m_signal_ts'] = now_ts
+                logger.info(f"[ZALT OKX] {symbol} 15m={payload['trend']} FLIP")
+                flipped_15m = True
+                flip_dir = payload['trend']
+                price = payload['close']
+            else:
+                logger.info(f"[ZALT OKX] {symbol} 15m={payload['trend']}")
+        persist_runtime_state()
+
+    if flipped_15m and flip_dir in ('buy', 'sell'):
+        evaluate_pulse_v3(
+            symbol,
+            trigger_dir=flip_dir,
+            price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_zalt_15m_flip_{symbol}_{int(now_ts)}",
+            source='okx_zalt_15m_flip',
+        )
+
+
 def calc_bias_okx(df, ema_len=17, sma_len=40):
     """Bias interne (Daily 1D/4H veto, Pulse 4H tendance, Scalp 30m porte B).
     EMA17 vs SMA40 sur closes confirmees, meme formule quel que soit le TF.
@@ -2081,55 +2108,6 @@ def relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, is_extended, 
             logger.warning(f"[RELAY OKX RCI {tf}] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         logger.warning(f"[RELAY OKX RCI {tf}] Erreur: {e}")
-
-
-def update_okx_rci_30m(symbol):
-    """RCI 10/30/50 sur bougies 30m confirmees (OKX), uniquement scalp=True — filtre
-    de direction + veto extreme (chasse) de la porte unique Scalp."""
-    cfg = get_symbol_config(symbol)
-    if not cfg.get('scalp'):
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
-    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
-    direction, is_chop, is_extended = classify_rci(rci_values.get(30), rci_values.get(50))
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['rci_30m_10'] = rci_values.get(10)
-        m['rci_30m_30'] = rci_values.get(30)
-        m['rci_30m_50'] = rci_values.get(50)
-        m['rci_30m_dir'] = direction
-        m['rci_30m_chop'] = is_chop
-        m['rci_30m_extended'] = is_extended
-        m['rci_30m_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} dir={direction} chop={is_chop} extended={is_extended}")
-    relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, is_extended)
-
-
-def update_okx_rci_5m(symbol):
-    """RCI 10/30/50 sur bougies 5m confirmees (OKX), uniquement scalp=True — zone
-    d'entree/pyramidage de la porte unique Scalp. Pas de veto extreme a ce niveau."""
-    cfg = get_symbol_config(symbol)
-    if not cfg.get('scalp'):
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '5m', limit=100), 5)
-    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
-    direction, is_chop, is_extended = classify_rci(rci_values.get(30), rci_values.get(50))
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['rci_5m_10'] = rci_values.get(10)
-        m['rci_5m_30'] = rci_values.get(30)
-        m['rci_5m_50'] = rci_values.get(50)
-        m['rci_5m_dir'] = direction
-        m['rci_5m_chop'] = is_chop
-        m['rci_5m_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(f"[RCI OKX 5m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} dir={direction} chop={is_chop}")
-    relay_rci_to_scalp(symbol, '5m', rci_values, direction, is_chop, is_extended)
 
 
 def update_okx_rci_10m(symbol):
@@ -2531,16 +2509,17 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 
 def update_indicators_for_symbol(symbol):
-    """Calcule ZALT 30m (relaye au scalpbot, armement Scalp 5.0), 4H (Daily porte A/B
-    trigger partage) et 12H (SWING trigger) via OKX, Bias 30m (scalp=True, porte Scalp),
-    et Bias 4H (Pulse tendance) / 2D (Daily A/B tendance) via OKX.
-    RCI 10m scalp est calcule dans son scheduler dedie."""
+    """Calcule ZALT 30m (relaye au scalpbot, Bias 30m porte scalp), 15m (Pulse trigger),
+    4H (Daily porte A/B trigger partage) et 12H (SWING trigger) via OKX, Bias 30m
+    (scalp=True, porte Scalp), et Bias 4H (Pulse info qualite) / 2D (Daily A/B tendance)
+    via OKX. RCI 10m scalp est calcule dans son scheduler dedie."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
         return
     try:
         update_okx_zalt_htf(symbol)
+        update_okx_zalt_15m(symbol)
         update_okx_zalt_4h(symbol)
         update_okx_zalt_12h(symbol)
         update_okx_bias_30m(symbol)

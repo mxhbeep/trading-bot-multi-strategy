@@ -2240,7 +2240,8 @@ def check_bias2h_rci30_info(symbol, price=0.0):
     """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
     aligne + RCI court (longueur 10, calcule sur bougies 30m) en zone extreme de
     retournement : Bias BUY -> RCI10 <= -80 (survente), Bias SELL -> RCI10 >= +80
-    (surachat). Anti-chop : bloque l'alerte si CTX 10m frais est oppose au sens teste.
+    (surachat). Anti-chop : bloque l'alerte si CTX 10m OU CTX 30m frais est oppose au
+    sens teste. Rappelle de verifier le RCI 2H manuellement pour confirmer le signal.
     Remplace l'ancienne notification RPZ (retiree)."""
     notify = None
     with STATE_LOCK:
@@ -2261,10 +2262,16 @@ def check_bias2h_rci30_info(symbol, price=0.0):
         if not rci30_ok:
             return
 
+        opp = 'sell' if exp == 'buy' else 'buy'
+
         ctx10 = m.get('st_context_10m')
         ctx10_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 45 * 60)
-        opp = 'sell' if exp == 'buy' else 'buy'
         if ctx10_fresh and ctx10 == opp:
+            return
+
+        ctx30 = m.get('st_context_30m')
+        ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+        if ctx30_fresh and ctx30 == opp:
             return
 
         if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=1800):
@@ -2280,7 +2287,8 @@ def check_bias2h_rci30_info(symbol, price=0.0):
         f"ℹ️ <b>[INFO Bias 2H + RCI court 30m]</b> {symbol}\n"
         f"Direction: {direction_label}\n"
         f"RCI court (10) 30m: {rci_txt} ({zone_label})\n"
-        f"Price: ${format_price(price)}"
+        f"Price: ${format_price(price)}\n"
+        f"[MANUEL] Verifier le RCI 2H pour confirmer le signal"
     )
 
 

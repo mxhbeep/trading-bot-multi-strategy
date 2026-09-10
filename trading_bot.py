@@ -1060,8 +1060,6 @@ def init_symbol_states(symbol):
             'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp (porte unique), calcule interne OKX
             'bias_2h': None, 'bias_2h_ts': None,    # Scalp entree secondaire, calcule interne OKX
-            'rci_10m_10': None, 'rci_10m_30': None, 'rci_10m_50': None,
-            'rci_10m_dir': None, 'rci_10m_chop': None, 'rci_10m_ts': None,
             'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
             'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse: info qualite non bloquante, calcule interne OKX
@@ -1486,7 +1484,9 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : Bias 30m/2H + RCI 10m/30m + ST Context 1m/10m/30m + ZALT 30m."""
+    """Rechauffe le scalpbot : Bias 30m/2H + RCI 30m + ST Context 1m/10m/30m + ZALT 30m.
+    RCI 10m n'est plus calcule (OKX n'a pas de granularite 10 minutes) : plus rien a
+    rechauffer pour ce signal, le scalpbot le garde uniquement en reception passive."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1565,29 +1565,6 @@ def sync_scalp():
                 errors.append(f"{symbol}: BIAS2H HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: BIAS2H {e}")
-
-        rci10 = m.get('rci_10m_10')
-        rci_dir = m.get('rci_10m_dir')
-        try:
-            payload = {
-                'symbol': symbol,
-                'tf':     '10m',
-                'type':   'rci',
-                'value':  rci_dir if rci_dir in ('buy', 'sell') else 'chop',
-                'chop':   rci_dir not in ('buy', 'sell'),
-                'extended': False,
-                'rci10':  rci10,
-                'rci30':  m.get('rci_10m_30'),
-                'rci50':  m.get('rci_10m_50'),
-                'price':  0,
-            }
-            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-            if resp.status_code == 200:
-                symbol_sent.append('rci10m')
-            else:
-                errors.append(f"{symbol}: RCI10M HTTP {resp.status_code}")
-        except Exception as e:
-            errors.append(f"{symbol}: RCI10M {e}")
 
         rci30 = m.get('rci_30m_30')
         rci30_dir = m.get('rci_30m_dir')
@@ -2149,38 +2126,6 @@ def relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, is_extended, 
         logger.warning(f"[RELAY OKX RCI {tf}] Erreur: {e}")
 
 
-def update_okx_rci_10m(symbol):
-    """RCI 10/30/50 sur bougies 10m confirmees (OKX), uniquement scalp=True.
-    La zone scalp utilise uniquement le RCI court 10 : <= -75 = buy, >= +75 = sell."""
-    cfg = get_symbol_config(symbol)
-    if not cfg.get('scalp'):
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '10m', limit=100), 10)
-    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
-    rci10 = rci_values.get(10)
-    direction = None
-    if rci10 is not None:
-        if float(rci10) <= -75:
-            direction = 'buy'
-        elif float(rci10) >= 75:
-            direction = 'sell'
-    is_chop = direction is None
-    is_extended = False
-    price = float(df['close'].iloc[-1]) if not df.empty else None
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['rci_10m_10'] = rci_values.get(10)
-        m['rci_10m_30'] = rci_values.get(30)
-        m['rci_10m_50'] = rci_values.get(50)
-        m['rci_10m_dir'] = direction
-        m['rci_10m_chop'] = is_chop
-        m['rci_10m_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(f"[RCI OKX 10m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
-    relay_rci_to_scalp(symbol, '10m', rci_values, direction, is_chop, is_extended, price=price)
-
 
 def update_okx_rci_30m(symbol):
     """RCI 10/30/50 sur bougies 30m confirmees (OKX), uniquement scalp=True — entree
@@ -2293,11 +2238,10 @@ def update_okx_bias_30m(symbol):
 
 def check_bias2h_rci30_info(symbol, price=0.0):
     """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
-    aligne + RCI court (longueur 10, sur bougies 30m) en zone extreme de retournement
-    (meme pattern que RCI 10m sur l'entree principale) : Bias BUY -> RCI10 <= -80
-    (survente), Bias SELL -> RCI10 >= +80 (surachat). Anti-chop : bloque l'alerte si
-    CTX 10m frais est oppose au sens teste. Remplace l'ancienne notification RPZ
-    (retiree)."""
+    aligne + RCI court (longueur 10, calcule sur bougies 30m) en zone extreme de
+    retournement : Bias BUY -> RCI10 <= -80 (survente), Bias SELL -> RCI10 >= +80
+    (surachat). Anti-chop : bloque l'alerte si CTX 10m frais est oppose au sens teste.
+    Remplace l'ancienne notification RPZ (retiree)."""
     notify = None
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2324,17 +2268,18 @@ def check_bias2h_rci30_info(symbol, price=0.0):
             return
 
         if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=1800):
-            notify = (exp, m.get('rci_30m_30'), m.get('rci_30m_50'))
+            notify = (exp, rci30_short)
 
     if not notify:
         return
-    exp, rci30_30, rci30_50 = notify
+    exp, rci30_short = notify
     direction_label = 'BUY' if exp == 'buy' else 'SELL'
-    rci30_txt = f"{float(rci30_30):.1f} / {float(rci30_50):.1f}" if rci30_30 is not None and rci30_50 is not None else "n/a"
+    rci_txt = f"{float(rci30_short):.1f}" if rci30_short is not None else "n/a"
+    zone_label = "OS <= -80" if exp == 'buy' else "OB >= +80"
     send_info(
-        f"ℹ️ <b>[INFO Bias 2H + RCI 30m]</b> {symbol}\n"
+        f"ℹ️ <b>[INFO Bias 2H + RCI court 30m]</b> {symbol}\n"
         f"Direction: {direction_label}\n"
-        f"RCI 30m: {rci30_txt}\n"
+        f"RCI court (10) 30m: {rci_txt} ({zone_label})\n"
         f"Price: ${format_price(price)}"
     )
 
@@ -2678,7 +2623,8 @@ def update_indicators_for_symbol(symbol):
     """Calcule ZALT 30m (relaye au scalpbot, Bias 30m porte scalp), 15m (Pulse trigger),
     4H (Daily porte A/B trigger partage) et 12H (SWING trigger) via OKX, Bias 30m/2H et
     RCI 30m (scalp=True, entree secondaire scalp), et Bias 4H (Pulse info qualite) /
-    2D (Daily A/B tendance) via OKX. RCI 10m scalp est calcule dans son scheduler dedie."""
+    2D (Daily A/B tendance) via OKX. RCI 10m n'est plus calcule (OKX n'a pas de
+    granularite 10 minutes) : retire, plus de scheduler dedie."""
     # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
     OKX_SKIP = {'TAO/USDT'}
     if symbol in OKX_SKIP:
@@ -2725,30 +2671,6 @@ def indicators_scheduler():
 
 
 
-def rci_10m_scheduler():
-    """Recalcule RCI 10m (Scalp simple, zone extreme +/-75) toutes les 10 minutes,
-    scope scalp=True uniquement."""
-    logger.info("[OKX] Scheduler RCI 10m demarre (toutes les 10 minutes, scalp=True)")
-    time.sleep(45)
-    while True:
-        scalp_symbols = [s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')]
-        logger.info(f"[OKX] Calcul RCI 10m pour {len(scalp_symbols)} assets scalp...")
-        for symbol in scalp_symbols:
-            try:
-                update_okx_rci_10m(symbol)
-            except Exception as e:
-                logger.error(f"[OKX] RCI 10m {symbol}: {e}")
-            time.sleep(0.5)  # rate limit OKX
-        persist_runtime_state()
-        logger.info("[OKX] Mise a jour RCI 10m terminee")
-        now = datetime.now(timezone.utc)
-        minutes_to_next = 10 - (now.minute % 10)
-        next_10m = now + timedelta(minutes=minutes_to_next)
-        next_10m = next_10m.replace(second=10, microsecond=0)
-        wait = (next_10m - now).total_seconds()
-        logger.info(f"[OKX] Prochain calcul RCI 10m dans {int(wait)}s")
-        time.sleep(max(30, wait))
-
 
 
 
@@ -2792,9 +2714,6 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
-
-        rci_10m_thread = threading.Thread(target=rci_10m_scheduler, daemon=True)
-        rci_10m_thread.start()
 
         watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
         watchdog_thread.start()

@@ -958,14 +958,6 @@ def parse_zalt_value(val):
         return 'sell'
     return None
 
-def parse_rpz_value(val):
-    parsed = parse_directional_trend_value(val, allow_sideways=False)
-    if parsed == 'bull':
-        return 'buy'
-    if parsed == 'bear':
-        return 'sell'
-    return None
-
 def parse_ema200_value(val):
     normalized = str(val).strip().lower()
     if normalized in {'', 'none', 'null', 'na', 'n/a', 'nan'}:
@@ -1001,9 +993,6 @@ def normalize_alert_type(alert_type_raw):
         'ema_200': 'ema200', 'ema': 'ema200',
         'super_trend': 'supertrend', 'st': 'supertrend',
         'stcontext': 'st_context',
-        'reversal_probability_zone': 'rpz',
-        'reversal_probability': 'rpz',
-        'rpz_zone': 'rpz',
         'zerolagtrendsignal': 'zalt',
         'zerolagtrendsignals': 'zalt',
         'zero_lag_trend_signal': 'zalt',
@@ -1069,7 +1058,6 @@ def init_symbol_states(symbol):
             'st_context_lt_10m': None, 'st_context_lt_10m_ts': None,  # Scalp porte A
             'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance, SWING antichop
             'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
-            'rpz_6h': None, 'rpz_6h_ts': None, 'rpz_1d': None, 'rpz_1d_ts': None,  # info seulement, jamais lu par les strategies
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp (porte unique), calcule interne OKX
             'bias_2h': None, 'bias_2h_ts': None,    # Scalp entree secondaire, calcule interne OKX
             'rci_10m_10': None, 'rci_10m_30': None, 'rci_10m_50': None,
@@ -1188,6 +1176,7 @@ def process_webhook(data):
             elif tf == '10m':
                 m['st_context_10m'] = parsed_ctx
                 m['st_context_10m_ts'] = now_ts
+                check_bias2h_rci30_info(symbol, price=price)
             elif tf == '5m':
                 m['st_context_5m'] = parsed_ctx
                 m['st_context_5m_ts'] = now_ts
@@ -1219,27 +1208,6 @@ def process_webhook(data):
                     logger.info(f"[ZALT] {symbol} tf={tf} ignore: timeframe non utilise")
             else:
                 logger.warning(f"[WARN] ZALT valeur invalide pour {symbol}: '{val}'")
-
-        if alert_type == 'rpz':
-            parsed_rpz = parse_rpz_value(val)
-            if parsed_rpz in ('buy', 'sell'):
-                if tf in ('6h', '1d'):
-                    old_rpz = m.get(f'rpz_{tf}')
-                    m[f'rpz_{tf}'] = parsed_rpz
-                    m[f'rpz_{tf}_ts'] = now_ts
-                    logger.info(f"[RPZ {tf.upper()}] {symbol} = {parsed_rpz}")
-                    if old_rpz in ('buy', 'sell') and old_rpz != parsed_rpz:
-                        if should_send(symbol, f"rpz_flip_info_{tf}", cooldown=600):
-                            direction_label = 'BUY' if parsed_rpz == 'buy' else 'SELL'
-                            send_info(
-                                f"ℹ️ <b>[RPZ FLIP]</b> {symbol}\n"
-                                f"TF: {tf.upper()} | Direction: {direction_label}\n"
-                                f"Price: ${format_price(price)}"
-                            )
-                else:
-                    logger.info(f"[RPZ] {symbol} tf={tf} ignore: timeframe non utilise")
-            else:
-                logger.warning(f"[WARN] RPZ valeur invalide pour {symbol}: '{val}'")
 
         ema200_value = None
         if alert_type == 'ema200' and tf == '1h':
@@ -2237,6 +2205,7 @@ def update_okx_rci_30m(symbol):
         persist_runtime_state()
     logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
     relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
+    check_bias2h_rci30_info(symbol, price=price or 0.0)
 
 
 
@@ -2322,6 +2291,48 @@ def update_okx_bias_30m(symbol):
     relay_bias_30m_to_scalp(symbol, bias_value)
 
 
+def check_bias2h_rci30_info(symbol, price=0.0):
+    """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
+    aligne + RCI 30m en zone, meme sens. Anti-chop : bloque l'alerte si CTX 10m frais
+    est oppose au sens teste. Remplace l'ancienne notification RPZ (retiree)."""
+    notify = None
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        bias2h = m.get('bias_2h')
+        bias2h_fresh = is_signal_fresh(m.get('bias_2h_ts'), 5 * 3600)
+        if not (bias2h_fresh and bias2h in ('buy', 'sell')):
+            return
+        exp = bias2h
+
+        rci30_dir = m.get('rci_30m_dir')
+        rci30_fresh = is_signal_fresh(m.get('rci_30m_ts'), 90 * 60)
+        rci30_ok = bool(rci30_fresh and rci30_dir == exp and not m.get('rci_30m_chop'))
+        if not rci30_ok:
+            return
+
+        ctx10 = m.get('st_context_10m')
+        ctx10_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 45 * 60)
+        opp = 'sell' if exp == 'buy' else 'buy'
+        if ctx10_fresh and ctx10 == opp:
+            return
+
+        if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=1800):
+            notify = (exp, m.get('rci_30m_30'), m.get('rci_30m_50'))
+
+    if not notify:
+        return
+    exp, rci30_30, rci30_50 = notify
+    direction_label = 'BUY' if exp == 'buy' else 'SELL'
+    rci30_txt = f"{float(rci30_30):.1f} / {float(rci30_50):.1f}" if rci30_30 is not None and rci30_50 is not None else "n/a"
+    send_info(
+        f"ℹ️ <b>[INFO Bias 2H + RCI 30m]</b> {symbol}\n"
+        f"Direction: {direction_label}\n"
+        f"RCI 30m: {rci30_txt}\n"
+        f"Price: ${format_price(price)}"
+    )
+
+
 def update_okx_bias_2h(symbol):
     """Bias 2H calcule en interne (OKX), uniquement pour les assets scalp=True — entree
     scalp secondaire. Meme pattern que Bias 30m : pas d'alerte TV, fetch OKX direct."""
@@ -2339,6 +2350,8 @@ def update_okx_bias_2h(symbol):
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 2h={bias_value}")
     relay_bias_2h_to_scalp(symbol, bias_value)
+    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+    check_bias2h_rci30_info(symbol, price=price)
 
 
 def update_okx_bias_htf(symbol):

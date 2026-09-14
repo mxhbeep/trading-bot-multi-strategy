@@ -2299,7 +2299,7 @@ def check_context2h_rci2h_ctx10m_info(symbol, price=0.0):
             rci2h_dir = m.get('rci_2h_dir')
             rci2h_fresh = is_signal_fresh(m.get('rci_2h_ts'), 6 * 3600)
             rci2h_ok = bool(rci2h_fresh and rci2h_dir == exp)
-            if ctx2h_ok and rci2h_ok and ctx10_ok and should_send(symbol, f"info_ctx2h_rci2h_ctx10m_{exp}", cooldown=1800):
+            if ctx2h_ok and rci2h_ok and ctx10_ok and should_send(symbol, f"info_ctx2h_rci2h_ctx10m_{exp}", cooldown=2 * 3600):
                 notify = (exp, ctx2h, ctx10, m.get('rci_2h_10'), m.get('rci_2h_30'), m.get('rci_2h_50'))
                 break
 
@@ -2426,7 +2426,7 @@ def check_bias2h_rci30_info(symbol, price=0.0):
             return
         quality = bool(ctx30_fresh and ctx30 == exp)
 
-        if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=3600):
+        if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=2 * 3600):
             notify = (exp, rci30_short, ctx10, ctx30, ctx30_fresh, quality)
 
     if not notify:
@@ -2753,7 +2753,7 @@ def check_pulse_v4_prep(symbol, price=0.0, source='state_refresh'):
         for exp_ctx in ('buy', 'sell'):
             zalt4h, zalt4h_fresh, zalt4h_ok = _zalt_condition(m, '4h', exp_ctx)
             ctx15, ctx15_fresh, ctx15_ok = _st_context_condition(m, '15m', exp_ctx)
-            if zalt4h_ok and ctx15_ok and should_send(symbol, f"prep_pulsev4_zalt4h_ctx15_{exp_ctx}", cooldown=1800):
+            if zalt4h_ok and ctx15_ok and should_send(symbol, f"prep_pulsev4_zalt4h_ctx15_{exp_ctx}", cooldown=2 * 3600):
                 direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
                 notify = (direction, exp_ctx, zalt4h, ctx15)
                 break
@@ -2826,7 +2826,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 price,
                 exchange_name,
                 detail_lines,
-                cooldown=1800,
+                cooldown=3600,
             ) or opened
     return opened
 

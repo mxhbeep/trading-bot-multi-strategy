@@ -816,14 +816,6 @@ def tv_required_signals():
             'warmup': 120 * 60,
             'scope': 'scalp',
         },
-        {
-            'label': 'ST Context LT 30m (Scalp manuel)',
-            'alert_type': 'st_context_lt',
-            'tf': '30m',
-            'max_age': 90 * 60,
-            'warmup': 120 * 60,
-            'scope': 'scalp',
-        },
     ]
 
 
@@ -1085,9 +1077,11 @@ def init_symbol_states(symbol):
             'st_context_lt_10m': None, 'st_context_lt_10m_ts': None,  # Scalp porte A
             'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance, SWING antichop
             'st_context_12h': None, 'st_context_12h_ts': None,  # SWING (CTX 12H, entree)
+            'bias_30m': None, 'bias_30m_ts': None,  # Scalp entree principale, calcule interne OKX
             'bias_2h': None, 'bias_2h_ts': None,    # Scalp entree secondaire, calcule interne OKX
             'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
             'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
+            'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
             'rci_12h_10': None, 'rci_12h_30': None, 'rci_12h_50': None,  # SWING
@@ -1624,6 +1618,45 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: RCI30M {e}")
 
+        rci2h = m.get('rci_2h_30')
+        rci2h_dir = m.get('rci_2h_dir')
+        try:
+            payload = {
+                'symbol': symbol,
+                'tf':     '2h',
+                'type':   'rci',
+                'value':  rci2h_dir if rci2h_dir in ('buy', 'sell') else 'chop',
+                'chop':   rci2h_dir not in ('buy', 'sell'),
+                'extended': False,
+                'rci10':  m.get('rci_2h_10'),
+                'rci30':  rci2h,
+                'rci50':  m.get('rci_2h_50'),
+                'price':  0,
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('rci2h')
+            else:
+                errors.append(f"{symbol}: RCI2H HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: RCI2H {e}")
+
+        bias30 = m.get('bias_30m')
+        try:
+            payload = {
+                'symbol': symbol,
+                'tf':     '30m',
+                'type':   'bias',
+                'value':  bias30 if bias30 in ('buy', 'sell') else 'neutral',
+            }
+            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+            if resp.status_code == 200:
+                symbol_sent.append('bias30m')
+            else:
+                errors.append(f"{symbol}: BIAS30M HTTP {resp.status_code}")
+        except Exception as e:
+            errors.append(f"{symbol}: BIAS30M {e}")
+
         ctx1 = m.get('st_context_1m')
         try:
             payload = {
@@ -2146,12 +2179,29 @@ def update_okx_rci_30m(symbol):
     with STATE_LOCK:
         init_symbol_states(symbol)
         m = MOMENTUM_STATE[symbol]
+        prev_rci10 = m.get('rci_30m_10')
+        current_rci10 = rci_values.get(10)
+        extreme_entry_dir = None
+        try:
+            if prev_rci10 is not None and current_rci10 is not None:
+                prev_rci10_f = float(prev_rci10)
+                current_rci10_f = float(current_rci10)
+                if prev_rci10_f > -75 and current_rci10_f <= -75:
+                    extreme_entry_dir = 'buy'
+                elif prev_rci10_f < 75 and current_rci10_f >= 75:
+                    extreme_entry_dir = 'sell'
+        except (TypeError, ValueError):
+            extreme_entry_dir = None
+        m['rci_30m_10_prev'] = prev_rci10
         m['rci_30m_10'] = rci_values.get(10)
         m['rci_30m_30'] = rci_values.get(30)
         m['rci_30m_50'] = rci_values.get(50)
         m['rci_30m_dir'] = direction
         m['rci_30m_chop'] = is_chop
         m['rci_30m_ts'] = now_ts
+        if extreme_entry_dir:
+            m['rci_30m_extreme_entry_dir'] = extreme_entry_dir
+            m['rci_30m_extreme_entry_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
     relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
@@ -2178,6 +2228,7 @@ def update_okx_rci_2h(symbol):
         m['rci_2h_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[RCI OKX 2h] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
+    relay_rci_to_scalp(symbol, '2h', rci_values, direction, is_chop, False, price=price)
     check_context2h_rci2h_ctx10m_info(symbol, price=price or 0.0)
 
 
@@ -2277,13 +2328,44 @@ def relay_bias_2h_to_scalp(symbol, value):
         logger.warning(f"[RELAY OKX BIAS 2H] Erreur: {e}")
 
 
+def relay_bias_30m_to_scalp(symbol, value):
+    """Relaie vers le scalpbot le Bias 30m calcule en interne (OKX) — entree scalp
+    principale. Pas de champ 'signal' : ce n'est pas un trigger de flip."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    if symbol not in scalp_symbols:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol': symbol,
+        'tf': '30m',
+        'type': 'bias',
+        'value': value if value in ('buy', 'sell') else 'neutral',
+    }
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX BIAS 30m] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX BIAS 30m] {symbol}={relay_payload['value']} → scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX BIAS 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX BIAS 30m] Erreur: {e}")
+
+
 def check_bias2h_rci30_info(symbol, price=0.0):
     """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
-    aligne + RCI court (longueur 10, calcule sur bougies 30m) en zone extreme de
-    retournement : Bias BUY -> RCI10 <= -75 (survente), Bias SELL -> RCI10 >= +75
-    (surachat). Anti-chop : bloque l'alerte si CTX 10m frais est oppose au sens teste
-    (uniquement CTX 10m, pas CTX 30m). Rappelle de verifier le RCI 2H manuellement pour
-    confirmer le signal. Remplace l'ancienne notification RPZ (retiree)."""
+    aligne + entree fraiche du RCI court (longueur 10, calcule sur bougies 30m) en zone
+    extreme de retournement : Bias BUY -> RCI10 croise sous -75, Bias SELL -> RCI10
+    croise au-dessus de +75. CTX 10m doit etre aligne. Anti-chop : CTX 30m oppose
+    bloque l'alerte. Qualite si CTX 30m est dans le meme sens. Remplace l'ancienne
+    notification RPZ (retiree)."""
     notify = None
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2296,36 +2378,50 @@ def check_bias2h_rci30_info(symbol, price=0.0):
 
         rci30_short = m.get('rci_30m_10')
         rci30_fresh = is_signal_fresh(m.get('rci_30m_ts'), 90 * 60)
+        rci30_entry_dir = m.get('rci_30m_extreme_entry_dir')
+        rci30_entry_fresh = is_signal_fresh(m.get('rci_30m_extreme_entry_ts'), 45 * 60)
         if exp == 'buy':
             rci30_ok = rci30_fresh and rci30_short is not None and float(rci30_short) <= -75
         else:
             rci30_ok = rci30_fresh and rci30_short is not None and float(rci30_short) >= 75
-        if not rci30_ok:
+        if not (rci30_ok and rci30_entry_fresh and rci30_entry_dir == exp):
             return
 
         opp = 'sell' if exp == 'buy' else 'buy'
 
         ctx10 = m.get('st_context_10m')
         ctx10_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 45 * 60)
-        if ctx10_fresh and ctx10 == opp:
+        ctx10_ok = bool(ctx10_fresh and ctx10 == exp)
+        if not ctx10_ok:
             return
 
-        if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=1800):
-            notify = (exp, rci30_short)
+        ctx30 = m.get('st_context_30m')
+        ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+        if ctx30_fresh and ctx30 == opp:
+            return
+        quality = bool(ctx30_fresh and ctx30 == exp)
+
+        if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=3600):
+            notify = (exp, rci30_short, ctx10, ctx30, ctx30_fresh, quality)
 
     if not notify:
         return
-    exp, rci30_short = notify
+    exp, rci30_short, ctx10, ctx30, ctx30_fresh, quality = notify
     direction_label = 'BUY' if exp == 'buy' else 'SELL'
     rci_txt = f"{float(rci30_short):.1f}" if rci30_short is not None else "n/a"
     zone_label = "OS <= -75" if exp == 'buy' else "OB >= +75"
+    ctx30_txt = _ctx_label(ctx30) if ctx30_fresh and ctx30 else "NEUTRE/NON FRAIS"
+    quality_line = "[QUALITE] ST Context 30m aligne" if quality else f"[INFO] ST Context 30m: {ctx30_txt}"
     send_info(
         f"ℹ️ <b>[INFO Bias 2H + RCI court 30m]</b> {symbol}\n"
         f"Direction: {direction_label}\n"
         f"RCI court (10) 30m: {rci_txt} ({zone_label})\n"
         f"Price: ${format_price(price)}\n"
+        f"[OK] ST Context 10m: {_ctx_label(ctx10)}\n"
+        f"{quality_line}\n"
         f"[MANUEL] Verifier le RCI 2H pour confirmer le signal"
     )
+    return True
 
 
 def update_okx_bias_2h(symbol):
@@ -2346,6 +2442,25 @@ def update_okx_bias_2h(symbol):
     relay_bias_2h_to_scalp(symbol, bias_value)
     price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
     check_bias2h_rci30_info(symbol, price=price)
+
+
+def update_okx_bias_30m(symbol):
+    """Bias 30m calcule en interne (OKX), relaye au scalpbot pour l'entree scalp simple."""
+    if not is_trade_symbol(symbol):
+        return
+    if not get_symbol_config(symbol).get('scalp'):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
+    bias_value = calc_bias_okx(df) if df is not None else None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['bias_30m'] = bias_value
+        m['bias_30m_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[BIAS OKX] {symbol} 30m={bias_value}")
+    relay_bias_30m_to_scalp(symbol, bias_value)
 
 
 def update_okx_bias_htf(symbol):
@@ -2702,6 +2817,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_zalt_htf(symbol)
         update_okx_zalt_2h(symbol)
         update_okx_zalt_4h(symbol)
+        update_okx_bias_30m(symbol)
         update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_2h(symbol)

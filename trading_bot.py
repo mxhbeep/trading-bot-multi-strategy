@@ -473,6 +473,14 @@ NOTIFICATIONS.register(
         label='Scalp Bot',
     ),
 )
+NOTIFICATIONS.register(
+    'telegram_priority_scalp',
+    TelegramChannel(
+        lambda: os.environ.get('PRIORITY_SCALP_BOT_TOKEN', ''),
+        lambda: os.environ.get('PRIORITY_SCALP_CHAT_ID', '-1003706862644'),
+        label='Priority Scalp Bot',
+    ),
+)
 NOTIFICATIONS.register('ntfy', NtfyChannel(lambda: CONFIG.get('NTFY_TOPIC', '')))
 
 
@@ -512,7 +520,7 @@ def sanitize_scalp_notification(msg: str) -> str:
 
 
 def send_telegram_scalp(msg):
-    """Envoie une alerte sur le bot Telegram dedie SCALP + ntfy."""
+    """Envoie une alerte sur le bot Telegram dedie SCALP."""
     msg = sanitize_scalp_notification(msg)
     direction = 'SHORT' if 'SHORT' in msg.upper() else 'LONG'
     result = send_notification(
@@ -521,7 +529,7 @@ def send_telegram_scalp(msg):
         priority=5,
         tags=[],
         telegram=True,
-        ntfy=True,
+        ntfy=False,
         telegram_channel='telegram_scalp',
     )
     if not result.get('telegram_scalp'):
@@ -531,7 +539,7 @@ def send_telegram_scalp(msg):
 def send_telegram_with_buttons(msg, token=None, chat_id=None,
                                journal_symbol=None, journal_strategy=None,
                                journal_direction=None, journal_price=None):
-    """Envoie un message Telegram avec bouton Journal (optionnel) + ntfy."""
+    """Envoie un message Telegram avec bouton Journal (optionnel)."""
     rows = []
     if journal_symbol and journal_strategy and journal_direction and journal_price is not None and CONFIG.get('JOURNAL_BOT_URL'):
         sym_safe = str(journal_symbol).replace('|', '')
@@ -547,7 +555,6 @@ def send_telegram_with_buttons(msg, token=None, chat_id=None,
     if token or chat_id:
         temp = TelegramChannel(lambda: token or '', lambda: chat_id or '', label='Telegram custom')
         telegram_ok = temp.send(title, msg, reply_markup=keyboard)
-        send_notification(title, msg, telegram=False, ntfy=True)
         return telegram_ok
 
     result = send_notification(
@@ -555,7 +562,7 @@ def send_telegram_with_buttons(msg, token=None, chat_id=None,
         msg,
         priority=5,
         telegram=True,
-        ntfy=True,
+        ntfy=False,
         telegram_channel='telegram_alerts',
         reply_markup=keyboard,
     )
@@ -617,6 +624,24 @@ def send_info(msg):
             logger.error(f"❌ Info bot erreur {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
         logger.error(f"❌ Erreur info bot: {e}")
+
+
+def send_priority_scalp_info(msg):
+    """Envoie les infos scalp prioritaires vers le canal dedie + ntfy."""
+    title = notification_title_from_message(msg)
+    result = send_notification(
+        title,
+        msg,
+        priority=5,
+        tags=notification_tags_from_text(msg),
+        telegram=True,
+        ntfy=True,
+        telegram_channel='telegram_priority_scalp',
+    )
+    if not result.get('telegram_priority_scalp'):
+        logger.warning("[PRIORITY SCALP] Telegram dedie indisponible, fallback canal info")
+        send_info(msg)
+    return bool(result.get('telegram_priority_scalp') or result.get('ntfy'))
 
 
 def send_start_notification():
@@ -2412,7 +2437,7 @@ def check_bias2h_rci30_info(symbol, price=0.0):
     zone_label = "OS <= -75" if exp == 'buy' else "OB >= +75"
     ctx30_txt = _ctx_label(ctx30) if ctx30_fresh and ctx30 else "NEUTRE/NON FRAIS"
     quality_line = "[QUALITE] ST Context 30m aligne" if quality else f"[INFO] ST Context 30m: {ctx30_txt}"
-    send_info(
+    send_priority_scalp_info(
         f"ℹ️ <b>[INFO Bias 2H + RCI court 30m]</b> {symbol}\n"
         f"Direction: {direction_label}\n"
         f"RCI court (10) 30m: {rci_txt} ({zone_label})\n"

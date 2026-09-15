@@ -2322,7 +2322,8 @@ def update_okx_rci_12h(symbol):
 
 
 def check_context2h_rci2h_ctx10m_info(symbol, price=0.0):
-    """Alerte INFO uniquement : ST Context 2H + RCI 2H + ST Context 10m alignes."""
+    """Alerte INFO uniquement : ST Context 2H + RCI 2H + ST Context 10m alignes
+    + RCI court 30m en zone extreme."""
     notify = None
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2333,21 +2334,30 @@ def check_context2h_rci2h_ctx10m_info(symbol, price=0.0):
             rci2h_dir = m.get('rci_2h_dir')
             rci2h_fresh = is_signal_fresh(m.get('rci_2h_ts'), 6 * 3600)
             rci2h_ok = bool(rci2h_fresh and rci2h_dir == exp)
-            if ctx2h_ok and rci2h_ok and ctx10_ok and should_send(symbol, f"info_ctx2h_rci2h_ctx10m_{exp}", cooldown=2 * 3600):
-                notify = (exp, ctx2h, ctx10, m.get('rci_2h_10'), m.get('rci_2h_30'), m.get('rci_2h_50'))
+            rci30_short = m.get('rci_30m_10')
+            rci30_fresh = is_signal_fresh(m.get('rci_30m_ts'), 90 * 60)
+            if exp == 'buy':
+                rci30_extreme_ok = rci30_fresh and rci30_short is not None and float(rci30_short) <= -75
+            else:
+                rci30_extreme_ok = rci30_fresh and rci30_short is not None and float(rci30_short) >= 75
+            if ctx2h_ok and rci2h_ok and ctx10_ok and rci30_extreme_ok and should_send(symbol, f"info_ctx2h_rci2h_ctx10m_{exp}", cooldown=2 * 3600):
+                notify = (exp, ctx2h, ctx10, m.get('rci_2h_10'), m.get('rci_2h_30'), m.get('rci_2h_50'), rci30_short)
                 break
 
     if not notify:
         return False
 
-    exp, ctx2h, ctx10, rci10, rci30, rci50 = notify
+    exp, ctx2h, ctx10, rci10, rci30, rci50, rci30_short = notify
     direction_label = 'BUY' if exp == 'buy' else 'SELL'
+    rci30_txt = f"{float(rci30_short):.1f}" if rci30_short is not None else "n/a"
+    zone_label = "OS <= -75" if exp == 'buy' else "OB >= +75"
     send_info(
         f"ℹ️ <b>[INFO CTX 2H + RCI 2H + CTX 10m]</b> {symbol}\n"
         f"Direction: {direction_label}\n"
         f"Price: ${format_price(price)}\n"
         f"[OK] ST Context 2H: {_ctx_label(ctx2h)}\n"
         f"[OK] RCI 2H: {direction_label} (10={rci10}, 30={rci30}, 50={rci50})\n"
+        f"[OK] RCI court 30m extreme: {rci30_txt} ({zone_label})\n"
         f"[OK] ST Context 10m: {_ctx_label(ctx10)}\n"
         f"Info seulement : pas une entree automatique."
     )
@@ -2422,8 +2432,8 @@ def check_bias2h_rci30_info(symbol, price=0.0):
     """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
     aligne + entree fraiche du RCI court (longueur 10, calcule sur bougies 30m) en zone
     extreme de retournement : Bias BUY -> RCI10 croise sous -75, Bias SELL -> RCI10
-    croise au-dessus de +75. CTX 10m doit etre aligne. Anti-chop : CTX 30m oppose
-    bloque l'alerte. Qualite si CTX 30m est dans le meme sens. Remplace l'ancienne
+    croise au-dessus de +75. CTX 10m est une information non bloquante. Anti-chop :
+    CTX 30m oppose bloque l'alerte. Qualite si CTX 30m est dans le meme sens. Remplace l'ancienne
     notification RPZ (retiree)."""
     notify = None
     with STATE_LOCK:
@@ -2451,8 +2461,7 @@ def check_bias2h_rci30_info(symbol, price=0.0):
         ctx10 = m.get('st_context_10m')
         ctx10_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 45 * 60)
         ctx10_ok = bool(ctx10_fresh and ctx10 == exp)
-        if not ctx10_ok:
-            return
+        ctx10_opposite = bool(ctx10_fresh and ctx10 == opp)
 
         ctx30 = m.get('st_context_30m')
         ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
@@ -2461,22 +2470,29 @@ def check_bias2h_rci30_info(symbol, price=0.0):
         quality = bool(ctx30_fresh and ctx30 == exp)
 
         if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=2 * 3600):
-            notify = (exp, rci30_short, ctx10, ctx30, ctx30_fresh, quality)
+            notify = (exp, rci30_short, ctx10, ctx10_fresh, ctx10_ok, ctx10_opposite, ctx30, ctx30_fresh, quality)
 
     if not notify:
         return
-    exp, rci30_short, ctx10, ctx30, ctx30_fresh, quality = notify
+    exp, rci30_short, ctx10, ctx10_fresh, ctx10_ok, ctx10_opposite, ctx30, ctx30_fresh, quality = notify
     direction_label = 'BUY' if exp == 'buy' else 'SELL'
     rci_txt = f"{float(rci30_short):.1f}" if rci30_short is not None else "n/a"
     zone_label = "OS <= -75" if exp == 'buy' else "OB >= +75"
     ctx30_txt = _ctx_label(ctx30) if ctx30_fresh and ctx30 else "NEUTRE/NON FRAIS"
+    ctx10_txt = _ctx_label(ctx10) if ctx10_fresh and ctx10 else "NEUTRE/NON FRAIS"
     quality_line = "[QUALITE] ST Context 30m aligne" if quality else f"[INFO] ST Context 30m: {ctx30_txt}"
+    if ctx10_ok:
+        ctx10_line = f"[INFO] ST Context 10m aligne: {ctx10_txt}"
+    elif ctx10_opposite:
+        ctx10_line = f"[ALERTE NON BLOQUANTE] ST Context 10m oppose: {ctx10_txt}"
+    else:
+        ctx10_line = f"[INFO] ST Context 10m: {ctx10_txt}"
     send_priority_scalp_info(
         f"ℹ️ <b>[INFO Bias 2H + RCI court 30m]</b> {symbol}\n"
         f"Direction: {direction_label}\n"
         f"RCI court (10) 30m: {rci_txt} ({zone_label})\n"
         f"Price: ${format_price(price)}\n"
-        f"[OK] ST Context 10m: {_ctx_label(ctx10)}\n"
+        f"{ctx10_line}\n"
         f"{quality_line}\n"
         f"[MANUEL] Verifier le RCI 2H pour confirmer le signal"
     )
@@ -2765,6 +2781,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] RCI 12H: {_ctx_label(rci12h_dir)}",
                 f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
                 "[MANUEL] Ne pas rentrer sur la premiere zone.",
+                "[MANUEL] Verifier le RCI 2D avant entree.",
             ]
             opened = _open_strategy_entry(
                 symbol,

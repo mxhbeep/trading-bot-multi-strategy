@@ -24,52 +24,52 @@ CONFIG = {
     
     'SYMBOLS': {
         'AAVE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'ADA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'ADA/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'APT/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'ARB/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'ARB/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'AVAX/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'BCH/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'BNB/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'BONK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'BNB/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'BONK/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'BTC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'CHZ/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'COMP/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'COMP/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'CVX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'DASH/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'CVX/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'DASH/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'DYDX/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'EIGEN/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'ENA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'ENA/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ETC/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ETHFI/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
+        'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
         'FET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'FIL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'HBAR/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'HYPE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'HYPE-USDT-SWAP'},
-        'INJ/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'HBAR/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'HYPE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'HYPE-USDT-SWAP'},
+        'INJ/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'LDO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LINK/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ONT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'PENGU/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'PENGU/USDT':  {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'PEPE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'LTC/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'LTC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'ONDO/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'RENDER/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'ONDO/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'RENDER/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'SAND/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SKY/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SOL/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'STX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SUI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'TAO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},  # perp-only
+        'TAO/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},  # perp-only
         'TIA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'UNI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'USELESS/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
+        'USELESS/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'XPL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
+        'XPL/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ZEC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ZEN/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -1358,6 +1358,7 @@ def process_webhook(data):
                 (alert_type == 'st_context' and tf in ('1m', '10m', '30m'))
                 or (alert_type == 'st_context_lt' and tf == '30m')
                 or (alert_type == 'zalt' and tf == '10m')
+                or (alert_type == 'rci' and tf == '10m')
             )
         )
         if scalp_url and should_relay_scalp:
@@ -1377,6 +1378,10 @@ def process_webhook(data):
                     sig = str(data.get('signal') or data.get('event') or '').strip().lower()
                     if sig:
                         relay_payload['signal'] = sig
+                    if alert_type == 'rci':
+                        for field in ('rci10', 'rci30', 'rci50', 'chop', 'extended'):
+                            if field in data:
+                                relay_payload[field] = data[field]
                     try:
                         resp = requests.post(
                             f"{scalp_url}/webhook",

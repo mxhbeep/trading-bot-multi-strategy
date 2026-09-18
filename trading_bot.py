@@ -97,6 +97,7 @@ CONFIG = {
 LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
+WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
 
 # ============================================================================ #
 # STATISTIQUES HEBDOMADAIRES
@@ -851,10 +852,12 @@ def tv_required_signals():
 def tv_watchdog_symbols(req):
     scope = req.get('scope', 'all')
     if scope == 'all':
-        return sorted(get_tracked_symbols())
-    if scope == 'pulse':
-        return sorted(s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('pulse'))
-    return sorted(s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp'))
+        symbols = get_tracked_symbols()
+    elif scope == 'pulse':
+        symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('pulse')}
+    else:
+        symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    return sorted(symbols - WATCHDOG_EXCLUDED_SYMBOLS)
 
 
 def tv_signal_watchdog():

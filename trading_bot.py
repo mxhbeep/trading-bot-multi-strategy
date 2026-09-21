@@ -1135,8 +1135,6 @@ def init_symbol_states(symbol):
             'zalt_5m': None, 'zalt_5m_ts': None, 'last_zalt_5m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
-            'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,  # SWING (test)
-            'zalt_4h': None, 'zalt_4h_ts': None, 'last_zalt_4h_signal_ts': None,  # Daily porte A/B (partage)
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
         }
 
@@ -1872,10 +1870,8 @@ def keep_confirmed_candles(df, timeframe_minutes):
 ZALT_HTF_SETTINGS = {
     '30m': {'length': 34, 'mult': 1.0},
     '2h':  {'length': 55, 'mult': 1.15},
-    '4h':  {'length': 55, 'mult': 1.15},
     '6h':  {'length': 50, 'mult': 1.2},
     '1d':  {'length': 50, 'mult': 1.3},
-    '12h': {'length': 50, 'mult': 1.2},
 }
 
 
@@ -2045,37 +2041,6 @@ def update_okx_zalt_htf(symbol):
         relay_zalt_30m_to_scalp(symbol, direction, price, is_flip)
 
 
-def update_okx_zalt_12h(symbol):
-    """ZALT 12H conserve en etat interne seulement. SWING ne l'utilise plus."""
-    if not is_pulse_symbol(symbol):
-        return
-    cfg = ZALT_HTF_SETTINGS['12h']
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
-    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
-
-    flipped_12h = False
-    flip_dir = None
-    price = 0.0
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        if not payload:
-            logger.info(f"[ZALT OKX] {symbol} 12h=None")
-        else:
-            old = m.get('zalt_12h')
-            m['zalt_12h'] = payload['trend']
-            m['zalt_12h_ts'] = now_ts
-            if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
-                m['last_zalt_12h_signal_ts'] = now_ts
-                logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']} FLIP")
-                flipped_12h = True
-                flip_dir = payload['trend']
-                price = payload['close']
-            else:
-                logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']}")
-        persist_runtime_state()
-
 def update_okx_zalt_2h(symbol):
     """ZALT 2H calcule en interne depuis OKX — trigger DAILY A/B avec ST Context 2H."""
     if not is_trade_symbol(symbol):
@@ -2117,39 +2082,6 @@ def update_okx_zalt_2h(symbol):
             source='okx_zalt_2h_flip',
         )
 
-
-def update_okx_zalt_4h(symbol):
-    """ZALT 4H calcule en interne depuis OKX — conserve pour etat/diagnostic."""
-    if not is_trade_symbol(symbol):
-        return
-    cfg = ZALT_HTF_SETTINGS['4h']
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=300), 240)
-    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
-
-    flipped_4h = False
-    flip_dir = None
-    price = 0.0
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        if not payload:
-            logger.info(f"[ZALT OKX] {symbol} 4h=None")
-        else:
-            old = m.get('zalt_4h')
-            m['zalt_4h'] = payload['trend']
-            m['zalt_4h_ts'] = now_ts
-            if payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend']:
-                m['last_zalt_4h_signal_ts'] = now_ts
-                logger.info(f"[ZALT OKX] {symbol} 4h={payload['trend']} FLIP")
-                flipped_4h = True
-                flip_dir = payload['trend']
-                price = payload['close']
-            else:
-                logger.info(f"[ZALT OKX] {symbol} 4h={payload['trend']}")
-            flip_dir = payload['trend']
-            price = payload['close']
-        persist_runtime_state()
 
 def calc_bias_okx(df, ema_len=17, sma_len=40):
     """Bias interne (Daily 1D/4H veto, Pulse 4H tendance, Scalp 30m porte B).
@@ -2914,7 +2846,6 @@ def update_indicators_for_symbol(symbol):
     try:
         update_okx_zalt_htf(symbol)
         update_okx_zalt_2h(symbol)
-        update_okx_zalt_4h(symbol)
         update_okx_bias_30m(symbol)
         update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)

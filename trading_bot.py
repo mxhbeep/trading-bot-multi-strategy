@@ -1116,7 +1116,6 @@ def init_symbol_states(symbol):
             'st_context_4h': None, 'st_context_4h_ts': None,  # SWING
             'st_context_1d': None, 'st_context_1d_ts': None,  # SWING + anti-chop manuel Daily
             'st_context_lt_1d': None, 'st_context_lt_1d_ts': None,  # Daily A
-            'st_context_lt_10m': None, 'st_context_lt_10m_ts': None,  # Scalp porte A
             'st_context_2d': None, 'st_context_2d_ts': None,  # Daily A tendance
             'st_context_12h': None, 'st_context_12h_ts': None,  # Etat historique / contexte marche
             'bias_30m': None, 'bias_30m_ts': None,  # Scalp entree principale, calcule interne OKX
@@ -1132,7 +1131,6 @@ def init_symbol_states(symbol):
             'rci_1d_dir': None, 'rci_1d_chop': None, 'rci_1d_ts': None,
             'bias_4h': None, 'bias_4h_ts': None,    # Pulse V5 tendance bloquante, calcule interne OKX
             'bias_2d': None, 'bias_2d_ts': None,    # Daily A/B tendance (interne OKX, agregation 1D par paires)
-            'zalt_5m': None, 'zalt_5m_ts': None, 'last_zalt_5m_signal_ts': None,
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
@@ -1375,7 +1373,6 @@ def process_webhook(data):
                 (alert_type == 'st_context' and tf in ('1m', '10m', '30m'))
                 or (alert_type == 'st_context_lt' and tf == '30m')
                 or (alert_type == 'zalt' and tf == '10m')
-                or (alert_type == 'rci' and tf == '10m')
             )
         )
         if scalp_url and should_relay_scalp:
@@ -1395,10 +1392,6 @@ def process_webhook(data):
                     sig = str(data.get('signal') or data.get('event') or '').strip().lower()
                     if sig:
                         relay_payload['signal'] = sig
-                    if alert_type == 'rci':
-                        for field in ('rci10', 'rci30', 'rci50', 'chop', 'extended'):
-                            if field in data:
-                                relay_payload[field] = data[field]
                     try:
                         resp = requests.post(
                             f"{scalp_url}/webhook",

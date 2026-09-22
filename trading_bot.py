@@ -2617,7 +2617,8 @@ def _bias_condition(m, tf, exp_ctx):
 
 def _rci_condition(m, tf, exp_ctx):
     max_age = {'30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
-    value, fresh = _state_signal(m, f'rci_{tf}_dir', max_age)
+    value = m.get(f'rci_{tf}_dir')
+    fresh = is_signal_fresh(m.get(f'rci_{tf}_ts'), max_age)
     return value, fresh, bool(fresh and value == exp_ctx)
 
 

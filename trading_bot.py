@@ -171,7 +171,7 @@ def init_redis():
 
     # ========================================================================
     # Redis : etat DAILY + PULSE V6.
-    # Relay scalp (webhook TV) = ST Context 1m/10m/30m/LT30m + ZALT 10m.
+    # Relay scalp (webhook TV) = ST Context 10m/30m.
     # ZALT 30m est relaye separement (calcul interne OKX, voir relay_zalt_30m_to_scalp).
     # ========================================================================
 def persist_runtime_state():
@@ -738,7 +738,13 @@ def tv_alert_watchdog():
     bot_start_time = time.time()
     time.sleep(6 * 3600)
     logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {'1m': 10*60, '10m': 45*60, '30m': 90*60, '12h': 24*3600, '2d': 5*24*3600}
+    MAX_AGE = {
+        '10m': 45 * 60,
+        '30m': 90 * 60,
+        '2h': 6 * 3600,
+        '4h': 12 * 3600,
+        '1d': 3 * 24 * 3600,
+    }
     while True:
         time.sleep(3600)
         now = time.time()
@@ -810,15 +816,7 @@ def tv_required_signals():
             'scope': 'pulse',
         },
         {
-            'label': 'ST Context 1m',
-            'alert_type': 'st_context',
-            'tf': '1m',
-            'max_age': 10 * 60,
-            'warmup': 15 * 60,
-            'scope': 'scalp',
-        },
-        {
-            'label': 'ST Context 10m (Scalp secondaire)',
+            'label': 'ST Context 10m (Scalp)',
             'alert_type': 'st_context',
             'tf': '10m',
             'max_age': 45 * 60,

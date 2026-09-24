@@ -106,6 +106,7 @@ LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
 LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {'long': [], 'short': []}
+LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = {'long': [], 'short': []}
 
 # ============================================================================ #
 # STATISTIQUES HEBDOMADAIRES
@@ -196,6 +197,7 @@ def persist_runtime_state():
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
             'last_ctx_4h_rci_1h_ctx_10m_report': dict(LAST_CTX_4H_RCI_1H_CTX_10M_REPORT),
+            'last_ctx_4h_rci_1h_ctx_10m_jackpot': dict(LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT),
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -241,6 +243,7 @@ def audit_log(data, status="reçu"):
 def load_runtime_state():
     global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
     global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
+    global LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -262,6 +265,11 @@ def load_runtime_state():
         LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {
             'long': sorted(saved_ctx_report.get('long', [])),
             'short': sorted(saved_ctx_report.get('short', [])),
+        }
+        saved_jackpot = payload.get('last_ctx_4h_rci_1h_ctx_10m_jackpot', {})
+        LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = {
+            'long': sorted(saved_jackpot.get('long', [])),
+            'short': sorted(saved_jackpot.get('short', [])),
         }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
@@ -649,43 +657,78 @@ def send_info(msg):
 def update_ctx_4h_rci_1h_ctx_10m_report():
     """Envoie la liste agregee uniquement quand sa composition change."""
     global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
+    global LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
 
     long_symbols = []
     short_symbols = []
+    jackpot_long = []
+    jackpot_short = []
     with STATE_LOCK:
         for symbol in sorted(get_tracked_symbols()):
             state = MOMENTUM_STATE.get(symbol, {})
             ctx4h = state.get('st_context_4h')
             ctx10m = state.get('st_context_10m')
             rci1h_short = state.get('rci_1h_10')
+            rci4h_short = state.get('rci_4h_10')
             try:
                 rci1h_short = float(rci1h_short)
             except (TypeError, ValueError):
                 rci1h_short = None
+            try:
+                rci4h_short = float(rci4h_short)
+            except (TypeError, ValueError):
+                rci4h_short = None
             if ctx4h == ctx10m == 'buy' and rci1h_short is not None and rci1h_short <= -80:
-                long_symbols.append(symbol.replace('/USDT', ''))
+                short_symbol = symbol.replace('/USDT', '')
+                long_symbols.append(short_symbol)
+                if rci4h_short is not None and rci4h_short <= -80:
+                    jackpot_long.append(short_symbol)
             elif ctx4h == ctx10m == 'sell' and rci1h_short is not None and rci1h_short >= 80:
-                short_symbols.append(symbol.replace('/USDT', ''))
+                short_symbol = symbol.replace('/USDT', '')
+                short_symbols.append(short_symbol)
+                if rci4h_short is not None and rci4h_short >= 80:
+                    jackpot_short.append(short_symbol)
 
         report = {'long': long_symbols, 'short': short_symbols}
-        if report == LAST_CTX_4H_RCI_1H_CTX_10M_REPORT:
-            return False
-        LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = report
+        jackpot = {'long': jackpot_long, 'short': jackpot_short}
+        report_changed = report != LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
+        jackpot_changed = jackpot != LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
+        if report_changed:
+            LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = report
+        if jackpot_changed:
+            LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = jackpot
 
-    long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
-    short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
-    send_info(
-        "<b>[INFO] CONFLUENCE CONTEXT 4H + RCI 1H + CONTEXT 10M</b>\n"
-        "--------------------\n"
-        f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
-        f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-        "RCI court 1H: <= -80 LONG / >= +80 SHORT.\n"
-        "Liste mise a jour apres un changement de composition."
-    )
-    logger.info(
-        f"[CTX REPORT] Liste modifiee: LONG={long_symbols} SHORT={short_symbols}"
-    )
-    return True
+    if report_changed:
+        long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
+        short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
+        send_info(
+            "<b>[INFO] CONFLUENCE CONTEXT 4H + RCI 1H + CONTEXT 10M</b>\n"
+            "--------------------\n"
+            f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
+            f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
+            "RCI court 1H: <= -80 LONG / >= +80 SHORT.\n"
+            "Liste mise a jour apres un changement de composition."
+        )
+        logger.info(
+            f"[CTX REPORT] Liste modifiee: LONG={long_symbols} SHORT={short_symbols}"
+        )
+
+    if jackpot_changed:
+        jackpot_long_text = '  '.join(jackpot_long) if jackpot_long else 'Aucun'
+        jackpot_short_text = '  '.join(jackpot_short) if jackpot_short else 'Aucun'
+        send_info(
+            "<b>[JACKPOT] CONFLUENCE RCI 1H + RCI 4H</b>\n"
+            "--------------------\n"
+            f"🟢 <b>LONG ({len(jackpot_long)})</b> : {jackpot_long_text}\n"
+            f"🔴 <b>SHORT ({len(jackpot_short)})</b> : {jackpot_short_text}\n\n"
+            "Base: CTX 4H + RCI court 1H extreme + CTX 10m.\n"
+            "JACKPOT: RCI court 4H egalement extreme dans le meme sens."
+        )
+        logger.info(
+            f"[CTX JACKPOT] Liste modifiee: LONG={jackpot_long} SHORT={jackpot_short}"
+        )
+
+    return report_changed or jackpot_changed
 
 
 def send_priority_scalp_info(msg):

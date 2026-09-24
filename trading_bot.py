@@ -105,6 +105,7 @@ LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
+LAST_CTX_4H_30M_10M_REPORT = {'long': [], 'short': []}
 
 # ============================================================================ #
 # STATISTIQUES HEBDOMADAIRES
@@ -194,6 +195,7 @@ def persist_runtime_state():
             'scalp_positions':    dict(SCALP_POSITIONS),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
+            'last_ctx_4h_30m_10m_report': dict(LAST_CTX_4H_30M_10M_REPORT),
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -238,6 +240,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
+    global LAST_CTX_4H_30M_10M_REPORT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -255,6 +258,11 @@ def load_runtime_state():
         LAST_WEBHOOK_TS.update(payload.get('last_webhook_ts', {}))
         LAST_WEBHOOK_SIGNAL_TS.update(payload.get('last_webhook_signal_ts', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
+        saved_ctx_report = payload.get('last_ctx_4h_30m_10m_report', {})
+        LAST_CTX_4H_30M_10M_REPORT = {
+            'long': sorted(saved_ctx_report.get('long', [])),
+            'short': sorted(saved_ctx_report.get('short', [])),
+        }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
         for s in stale:
@@ -636,6 +644,43 @@ def send_info(msg):
             logger.error(f"❌ Info bot erreur {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
         logger.error(f"❌ Erreur info bot: {e}")
+
+
+def update_ctx_4h_30m_10m_report():
+    """Envoie la liste agregee uniquement quand sa composition change."""
+    global LAST_CTX_4H_30M_10M_REPORT
+
+    long_symbols = []
+    short_symbols = []
+    with STATE_LOCK:
+        for symbol in sorted(get_tracked_symbols()):
+            state = MOMENTUM_STATE.get(symbol, {})
+            ctx4h = state.get('st_context_4h')
+            ctx30m = state.get('st_context_30m')
+            ctx10m = state.get('st_context_10m')
+            if ctx4h == ctx30m == ctx10m == 'buy':
+                long_symbols.append(symbol.replace('/USDT', ''))
+            elif ctx4h == ctx30m == ctx10m == 'sell':
+                short_symbols.append(symbol.replace('/USDT', ''))
+
+        report = {'long': long_symbols, 'short': short_symbols}
+        if report == LAST_CTX_4H_30M_10M_REPORT:
+            return False
+        LAST_CTX_4H_30M_10M_REPORT = report
+
+    long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
+    short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
+    send_info(
+        "<b>[INFO] CONFLUENCE CONTEXT 4H + 30M + 10M</b>\n"
+        "--------------------\n"
+        f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
+        f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
+        "Liste mise a jour apres un changement de composition."
+    )
+    logger.info(
+        f"[CTX REPORT] Liste modifiee: LONG={long_symbols} SHORT={short_symbols}"
+    )
+    return True
 
 
 def send_priority_scalp_info(msg):
@@ -1233,6 +1278,9 @@ def process_webhook(data):
             elif tf == '12h':
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
+
+            if tf in ('4h', '30m', '10m'):
+                update_ctx_4h_30m_10m_report()
 
         if alert_type == 'st_context_lt' and tf in ('10m', '30m', '12h'):
             parsed_ctx_lt = parse_st_context_value(val)

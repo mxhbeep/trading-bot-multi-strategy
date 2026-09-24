@@ -90,6 +90,13 @@ CONFIG = {
     'ENABLE_SCALP_RELAY': True,
 }
 
+SCALP_PRIMARY_SYMBOLS = {
+    'AAVE/USDT', 'ADA/USDT', 'AVAX/USDT', 'BTC/USDT', 'CRV/USDT',
+    'DOGE/USDT', 'ENA/USDT', 'ETH/USDT', 'HYPE/USDT', 'LINK/USDT',
+    'LTC/USDT', 'NEAR/USDT', 'SOL/USDT', 'SUI/USDT', 'TAO/USDT',
+    'UNI/USDT', 'XRP/USDT', 'ZEC/USDT',
+}
+
 # ============================================================================ #
 # ETAT GLOBAL
 # ============================================================================ #
@@ -831,6 +838,14 @@ def tv_required_signals():
             'warmup': 120 * 60,
             'scope': 'scalp',
         },
+        {
+            'label': 'ST Context 1m (Scalp 1H)',
+            'alert_type': 'st_context',
+            'tf': '1m',
+            'max_age': 12 * 60,
+            'warmup': 20 * 60,
+            'scope': 'scalp_primary',
+        },
     ]
 
 
@@ -840,6 +855,8 @@ def tv_watchdog_symbols(req):
         symbols = get_tracked_symbols()
     elif scope == 'pulse':
         symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('pulse')}
+    elif scope == 'scalp_primary':
+        symbols = set(SCALP_PRIMARY_SYMBOLS)
     else:
         symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
     return sorted(symbols - WATCHDOG_EXCLUDED_SYMBOLS)
@@ -1105,6 +1122,7 @@ def init_symbol_states(symbol):
             'rci_1d_10': None, 'rci_1d_30': None, 'rci_1d_50': None,  # SWING
             'rci_1d_dir': None, 'rci_1d_chop': None, 'rci_1d_ts': None,
             'bias_1d': None, 'bias_1d_ts': None,    # Daily A + Pulse V6, calcule interne OKX
+            'bias_1h': None, 'bias_1h_ts': None,    # Scalp 1H, calcule interne OKX
             'bias_4h': None, 'bias_4h_ts': None,    # Etat interne historique
             'bias_2d': None, 'bias_2d_ts': None,    # Daily B tendance (interne OKX, agregation 1D par paires)
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
@@ -1337,6 +1355,7 @@ def process_webhook(data):
             CONFIG.get('ENABLE_SCALP_RELAY', False)
             and (
                 (alert_type == 'st_context' and tf in ('10m', '30m'))
+                or (alert_type == 'st_context' and tf == '1m' and symbol in SCALP_PRIMARY_SYMBOLS)
             )
         )
         if scalp_url and should_relay_scalp:
@@ -1536,6 +1555,23 @@ def sync_scalp():
         m = state_copy.get(symbol, {})
         symbol_sent = []
 
+        if symbol in SCALP_PRIMARY_SYMBOLS:
+            bias1h = m.get('bias_1h')
+            try:
+                payload = {
+                    'symbol': symbol,
+                    'tf': '1h',
+                    'type': 'bias',
+                    'value': bias1h if bias1h in ('buy', 'sell') else 'neutral',
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('bias1h')
+                else:
+                    errors.append(f"{symbol}: BIAS1H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: BIAS1H {e}")
+
         bias4h = m.get('bias_4h')
         try:
             payload = {
@@ -1574,6 +1610,26 @@ def sync_scalp():
                 errors.append(f"{symbol}: RCI30M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: RCI30M {e}")
+
+        if symbol in SCALP_PRIMARY_SYMBOLS:
+            ctx1 = m.get('st_context_1m')
+            try:
+                payload = {
+                    'symbol': symbol,
+                    'strategy': 'scalp1h',
+                    'tf': '1m',
+                    'type': 'st_context',
+                    'value': ctx_to_sync_value(ctx1),
+                    'price': 0,
+                    'event_id': f"sync_scalp_ctx1_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('ctx1m')
+                else:
+                    errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: CTX1M {e}")
 
         ctx10 = m.get('st_context_10m')
         try:
@@ -2163,19 +2219,21 @@ def check_context2h_rci2h_ctx10m_info(symbol, price=0.0):
 
 
 
-def relay_bias_4h_to_scalp(symbol, value):
-    """Relaie le Bias 4H interne vers l'unique strategie scalp."""
+def relay_bias_to_scalp(symbol, value, tf):
+    """Relaie un Bias interne vers le scalpbot."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
         return
     scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
     if symbol not in scalp_symbols:
+        return
+    if tf == '1h' and symbol not in SCALP_PRIMARY_SYMBOLS:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
         return
     relay_payload = {
         'symbol': symbol,
-        'tf': '4h',
+        'tf': tf,
         'type': 'bias',
         'value': value if value in ('buy', 'sell') else 'neutral',
     }
@@ -2183,14 +2241,14 @@ def relay_bias_4h_to_scalp(symbol, value):
         try:
             resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
         except requests.exceptions.Timeout:
-            logger.warning(f"[RELAY OKX BIAS 4H] {symbol} timeout, retry...")
+            logger.warning(f"[RELAY OKX BIAS {tf.upper()}] {symbol} timeout, retry...")
             resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
         if 200 <= resp.status_code < 300:
-            logger.info(f"[RELAY OKX BIAS 4H] {symbol}={relay_payload['value']} → scalpbot OK")
+            logger.info(f"[RELAY OKX BIAS {tf.upper()}] {symbol}={relay_payload['value']} → scalpbot OK")
         else:
-            logger.warning(f"[RELAY OKX BIAS 4H] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+            logger.warning(f"[RELAY OKX BIAS {tf.upper()}] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
-        logger.warning(f"[RELAY OKX BIAS 4H] Erreur: {e}")
+        logger.warning(f"[RELAY OKX BIAS {tf.upper()}] Erreur: {e}")
 
 
 def relay_bias_30m_to_scalp(symbol, value):
@@ -2332,9 +2390,11 @@ def update_okx_bias_30m(symbol):
 
 
 def update_okx_bias_htf(symbol):
-    """Bias 1D (Daily A/Pulse V6), 2D (Daily B) et 4H historique, calcules via OKX."""
+    """Bias 1H/4H pour Scalp, 1D pour Daily A/Pulse V6 et 2D pour Daily B."""
     if not is_trade_symbol(symbol):
         return
+    df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60)
+    bias_1h = calc_bias_okx(df_1h) if df_1h is not None else None
     df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240)
     bias_4h = calc_bias_okx(df_4h) if df_4h is not None else None
 
@@ -2355,6 +2415,8 @@ def update_okx_bias_htf(symbol):
     with STATE_LOCK:
         init_symbol_states(symbol)
         m = MOMENTUM_STATE[symbol]
+        m['bias_1h'] = bias_1h
+        m['bias_1h_ts'] = now_ts
         m['bias_4h'] = bias_4h
         m['bias_4h_ts'] = now_ts
         m['bias_1d'] = bias_1d
@@ -2362,8 +2424,9 @@ def update_okx_bias_htf(symbol):
         m['bias_2d'] = bias_2d
         m['bias_2d_ts'] = now_ts
         persist_runtime_state()
-    logger.info(f"[BIAS OKX] {symbol} 1d={bias_1d} 2d={bias_2d} 4h={bias_4h}")
-    relay_bias_4h_to_scalp(symbol, bias_4h)
+    logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 1d={bias_1d} 2d={bias_2d}")
+    relay_bias_to_scalp(symbol, bias_1h, '1h')
+    relay_bias_to_scalp(symbol, bias_4h, '4h')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
     evaluate_daily(
         symbol,

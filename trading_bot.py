@@ -1010,6 +1010,19 @@ def parse_st_context_value(val, trend_level=1.96):
         logger.warning(f"[WARN] ST Context valeur invalide: '{val}'")
         return None
 
+
+def parse_bias_value(val):
+    """Normalise les Bias TradingView vers buy/sell/None."""
+    normalized = str(val or '').strip().lower()
+    if normalized in ('bull', 'bullish', 'buy', 'long'):
+        return 'buy'
+    if normalized in ('bear', 'bearish', 'sell', 'short'):
+        return 'sell'
+    if normalized in ('neutral', 'none', 'null', 'na', 'n/a', ''):
+        return None
+    logger.warning(f"[WARN] Bias valeur invalide: '{val}'")
+    return None
+
 def is_signal_fresh(last_ts, max_age_seconds):
     """Retourne True si un signal horodaté est encore frais."""
     try:
@@ -1293,6 +1306,13 @@ def process_webhook(data):
             parsed_ctx_lt = parse_st_context_value(val)
             m[f'st_context_lt_{tf}'] = parsed_ctx_lt
             m[f'st_context_lt_{tf}_ts'] = now_ts
+
+        if alert_type == 'bias' and tf in ('30m', '1h', '4h'):
+            parsed_bias = parse_bias_value(val)
+            m[f'bias_{tf}'] = parsed_bias
+            m[f'bias_{tf}_ts'] = now_ts
+            relay_bias_to_scalp(symbol, parsed_bias, tf)
+            logger.info(f"[BIAS TV] {symbol} {tf}={parsed_bias or 'neutral'} relaye au scalpbot")
 
 
 

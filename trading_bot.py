@@ -1572,6 +1572,22 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: BIAS1H {e}")
 
+            bias30m = m.get('bias_30m')
+            try:
+                payload = {
+                    'symbol': symbol,
+                    'tf': '30m',
+                    'type': 'bias',
+                    'value': bias30m if bias30m in ('buy', 'sell') else 'neutral',
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('bias30m')
+                else:
+                    errors.append(f"{symbol}: BIAS30M HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: BIAS30M {e}")
+
         bias4h = m.get('bias_4h')
         try:
             payload = {
@@ -2226,7 +2242,7 @@ def relay_bias_to_scalp(symbol, value, tf):
     scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
     if symbol not in scalp_symbols:
         return
-    if tf == '1h' and symbol not in SCALP_PRIMARY_SYMBOLS:
+    if tf in ('1h', '30m') and symbol not in SCALP_PRIMARY_SYMBOLS:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
@@ -2372,10 +2388,12 @@ def update_okx_bias_2h(symbol):
 
 
 def update_okx_bias_30m(symbol):
-    """Bias 30m calcule en interne (OKX), relaye au scalpbot pour l'entree scalp simple."""
+    """Bias 30m calcule en interne pour confirmer la strategie Scalp 1H."""
     if not is_trade_symbol(symbol):
         return
     if not get_symbol_config(symbol).get('scalp'):
+        return
+    if symbol not in SCALP_PRIMARY_SYMBOLS:
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
     bias_value = calc_bias_okx(df) if df is not None else None
@@ -2387,6 +2405,7 @@ def update_okx_bias_30m(symbol):
         m['bias_30m_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 30m={bias_value}")
+    relay_bias_to_scalp(symbol, bias_value, '30m')
 
 
 def update_okx_bias_htf(symbol):
@@ -2763,6 +2782,7 @@ def update_indicators_for_symbol(symbol):
     try:
         update_okx_zalt_htf(symbol)
         update_okx_zalt_2h(symbol)
+        update_okx_bias_30m(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_4h(symbol)
         update_okx_rci_1d(symbol)

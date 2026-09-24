@@ -105,7 +105,7 @@ LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
-LAST_CTX_4H_30M_10M_REPORT = {'long': [], 'short': []}
+LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {'long': [], 'short': []}
 
 # ============================================================================ #
 # STATISTIQUES HEBDOMADAIRES
@@ -195,7 +195,7 @@ def persist_runtime_state():
             'scalp_positions':    dict(SCALP_POSITIONS),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
-            'last_ctx_4h_30m_10m_report': dict(LAST_CTX_4H_30M_10M_REPORT),
+            'last_ctx_4h_rci_1h_ctx_10m_report': dict(LAST_CTX_4H_RCI_1H_CTX_10M_REPORT),
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -240,7 +240,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_CTX_4H_30M_10M_REPORT
+    global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -258,8 +258,8 @@ def load_runtime_state():
         LAST_WEBHOOK_TS.update(payload.get('last_webhook_ts', {}))
         LAST_WEBHOOK_SIGNAL_TS.update(payload.get('last_webhook_signal_ts', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
-        saved_ctx_report = payload.get('last_ctx_4h_30m_10m_report', {})
-        LAST_CTX_4H_30M_10M_REPORT = {
+        saved_ctx_report = payload.get('last_ctx_4h_rci_1h_ctx_10m_report', {})
+        LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {
             'long': sorted(saved_ctx_report.get('long', [])),
             'short': sorted(saved_ctx_report.get('short', [])),
         }
@@ -646,9 +646,9 @@ def send_info(msg):
         logger.error(f"❌ Erreur info bot: {e}")
 
 
-def update_ctx_4h_30m_10m_report():
+def update_ctx_4h_rci_1h_ctx_10m_report():
     """Envoie la liste agregee uniquement quand sa composition change."""
-    global LAST_CTX_4H_30M_10M_REPORT
+    global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
 
     long_symbols = []
     short_symbols = []
@@ -656,25 +656,30 @@ def update_ctx_4h_30m_10m_report():
         for symbol in sorted(get_tracked_symbols()):
             state = MOMENTUM_STATE.get(symbol, {})
             ctx4h = state.get('st_context_4h')
-            ctx30m = state.get('st_context_30m')
             ctx10m = state.get('st_context_10m')
-            if ctx4h == ctx30m == ctx10m == 'buy':
+            rci1h_short = state.get('rci_1h_10')
+            try:
+                rci1h_short = float(rci1h_short)
+            except (TypeError, ValueError):
+                rci1h_short = None
+            if ctx4h == ctx10m == 'buy' and rci1h_short is not None and rci1h_short <= -80:
                 long_symbols.append(symbol.replace('/USDT', ''))
-            elif ctx4h == ctx30m == ctx10m == 'sell':
+            elif ctx4h == ctx10m == 'sell' and rci1h_short is not None and rci1h_short >= 80:
                 short_symbols.append(symbol.replace('/USDT', ''))
 
         report = {'long': long_symbols, 'short': short_symbols}
-        if report == LAST_CTX_4H_30M_10M_REPORT:
+        if report == LAST_CTX_4H_RCI_1H_CTX_10M_REPORT:
             return False
-        LAST_CTX_4H_30M_10M_REPORT = report
+        LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = report
 
     long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
     short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
     send_info(
-        "<b>[INFO] CONFLUENCE CONTEXT 4H + 30M + 10M</b>\n"
+        "<b>[INFO] CONFLUENCE CONTEXT 4H + RCI 1H + CONTEXT 10M</b>\n"
         "--------------------\n"
         f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
         f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
+        "RCI court 1H: <= -80 LONG / >= +80 SHORT.\n"
         "Liste mise a jour apres un changement de composition."
     )
     logger.info(
@@ -1160,6 +1165,8 @@ def init_symbol_states(symbol):
             'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
             'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
+            'rci_1h_10': None, 'rci_1h_30': None, 'rci_1h_50': None,  # Rapport info CTX4H + RCI1H + CTX10m
+            'rci_1h_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
             'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Etat interne historique
@@ -1279,8 +1286,8 @@ def process_webhook(data):
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
 
-            if tf in ('4h', '30m', '10m'):
-                update_ctx_4h_30m_10m_report()
+            if tf in ('4h', '10m'):
+                update_ctx_4h_rci_1h_ctx_10m_report()
 
         if alert_type == 'st_context_lt' and tf in ('10m', '30m', '12h'):
             parsed_ctx_lt = parse_st_context_value(val)
@@ -1568,6 +1575,7 @@ def refresh_indicators():
                 update_indicators_for_symbol(sym)
             except Exception as e:
                 logger.error(f"[REFRESH] {sym}: {e}")
+        update_ctx_4h_rci_1h_ctx_10m_report()
         persist_runtime_state()
         logger.info("[REFRESH] Terminé")
 
@@ -2155,6 +2163,27 @@ def update_okx_rci_30m(symbol):
         persist_runtime_state()
     logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
     relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
+
+
+def update_okx_rci_1h(symbol):
+    """RCI 10/30/50 sur bougies 1H confirmees pour le rapport de confluence info."""
+    if not is_trade_symbol(symbol):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=100), 60)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['rci_1h_10'] = rci_values.get(10)
+        m['rci_1h_30'] = rci_values.get(30)
+        m['rci_1h_50'] = rci_values.get(50)
+        m['rci_1h_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(
+        f"[RCI OKX 1h] {symbol} 10={rci_values.get(10)} "
+        f"30={rci_values.get(30)} 50={rci_values.get(50)}"
+    )
 
 
 def update_okx_rci_2h(symbol):
@@ -2832,6 +2861,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_zalt_2h(symbol)
         update_okx_bias_30m(symbol)
         update_okx_rci_30m(symbol)
+        update_okx_rci_1h(symbol)
         update_okx_rci_4h(symbol)
         update_okx_rci_1d(symbol)
         update_okx_bias_htf(symbol)
@@ -2854,6 +2884,7 @@ def indicators_scheduler():
         for symbol in CONFIG['SYMBOLS']:
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
+        update_ctx_4h_rci_1h_ctx_10m_report()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m

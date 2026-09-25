@@ -91,7 +91,7 @@ CONFIG = {
 }
 
 SCALP_PRIMARY_SYMBOLS = {
-    'BTC/USDT',
+    'BTC/USDT', 'LTC/USDT', 'LINK/USDT', 'CRV/USDT', 'HBAR/USDT',
 }
 
 # ============================================================================ #
@@ -675,15 +675,15 @@ def update_ctx_4h_rci_1h_ctx_10m_report():
                 rci4h_short = float(rci4h_short)
             except (TypeError, ValueError):
                 rci4h_short = None
-            if ctx4h == ctx10m == 'buy' and rci1h_short is not None and rci1h_short <= -80:
+            if ctx4h == ctx10m == 'buy' and rci1h_short is not None and rci1h_short <= -75:
                 short_symbol = symbol.replace('/USDT', '')
                 long_symbols.append(short_symbol)
-                if rci4h_short is not None and rci4h_short <= -80:
+                if rci4h_short is not None and rci4h_short <= -75:
                     jackpot_long.append(short_symbol)
-            elif ctx4h == ctx10m == 'sell' and rci1h_short is not None and rci1h_short >= 80:
+            elif ctx4h == ctx10m == 'sell' and rci1h_short is not None and rci1h_short >= 75:
                 short_symbol = symbol.replace('/USDT', '')
                 short_symbols.append(short_symbol)
-                if rci4h_short is not None and rci4h_short >= 80:
+                if rci4h_short is not None and rci4h_short >= 75:
                     jackpot_short.append(short_symbol)
 
         report = {'long': long_symbols, 'short': short_symbols}
@@ -703,7 +703,7 @@ def update_ctx_4h_rci_1h_ctx_10m_report():
             "--------------------\n"
             f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
             f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-            "RCI court 1H: <= -80 LONG / >= +80 SHORT.\n"
+            "RCI court 1H: <= -75 LONG / >= +75 SHORT.\n"
             "Liste mise a jour apres un changement de composition."
         )
         logger.info(
@@ -929,7 +929,7 @@ def tv_required_signals():
             'scope': 'scalp',
         },
         {
-            'label': 'ST Context 1m (Scalp 1H)',
+            'label': 'ST Context 1m (Scalp 2H - entree B)',
             'alert_type': 'st_context',
             'tf': '1m',
             'max_age': 12 * 60,
@@ -1347,7 +1347,7 @@ def process_webhook(data):
             m[f'st_context_lt_{tf}'] = parsed_ctx_lt
             m[f'st_context_lt_{tf}_ts'] = now_ts
 
-        if alert_type == 'bias' and tf in ('30m', '1h', '4h'):
+        if alert_type == 'bias' and tf in ('2h', '4h'):
             parsed_bias = parse_bias_value(val)
             m[f'bias_{tf}'] = parsed_bias
             m[f'bias_{tf}_ts'] = now_ts
@@ -1471,6 +1471,8 @@ def process_webhook(data):
             and (
                 (alert_type == 'st_context' and tf in ('10m', '30m'))
                 or (alert_type == 'st_context' and tf == '1m' and symbol in SCALP_PRIMARY_SYMBOLS)
+                or (alert_type == 'st_context' and tf == '2h' and symbol in SCALP_PRIMARY_SYMBOLS)
+                or (alert_type == 'st_context_lt' and tf == '10m' and symbol in SCALP_PRIMARY_SYMBOLS)
             )
         )
         if scalp_url and should_relay_scalp:
@@ -1645,7 +1647,7 @@ def refresh_indicators():
 
 @app.route('/sync_scalp', methods=['POST'])
 def sync_scalp():
-    """Rechauffe le scalpbot : Bias 4H + RCI 30m + ST Context 10m/30m."""
+    """Rechauffe le scalpbot avec les etats des strategies SCALP et SCALP 2H."""
     if not require_admin_secret():
         return jsonify({'error': 'unauthorized'}), 401
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -1672,37 +1674,41 @@ def sync_scalp():
         symbol_sent = []
 
         if symbol in SCALP_PRIMARY_SYMBOLS:
-            bias1h = m.get('bias_1h')
+            bias2h = m.get('bias_2h')
             try:
                 payload = {
                     'symbol': symbol,
-                    'tf': '1h',
+                    'tf': '2h',
                     'type': 'bias',
-                    'value': bias1h if bias1h in ('buy', 'sell') else 'neutral',
+                    'value': bias2h if bias2h in ('buy', 'sell') else 'neutral',
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('bias1h')
+                    symbol_sent.append('bias2h')
                 else:
-                    errors.append(f"{symbol}: BIAS1H HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: BIAS2H HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: BIAS1H {e}")
+                errors.append(f"{symbol}: BIAS2H {e}")
 
-            bias30m = m.get('bias_30m')
+            rci2h_dir = m.get('rci_2h_dir')
             try:
                 payload = {
                     'symbol': symbol,
-                    'tf': '30m',
-                    'type': 'bias',
-                    'value': bias30m if bias30m in ('buy', 'sell') else 'neutral',
+                    'tf': '2h',
+                    'type': 'rci',
+                    'value': rci2h_dir if rci2h_dir in ('buy', 'sell') else 'chop',
+                    'chop': rci2h_dir not in ('buy', 'sell'),
+                    'rci10': m.get('rci_2h_10'),
+                    'rci30': m.get('rci_2h_30'),
+                    'rci50': m.get('rci_2h_50'),
                 }
                 resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
                 if resp.status_code == 200:
-                    symbol_sent.append('bias30m')
+                    symbol_sent.append('rci2h')
                 else:
-                    errors.append(f"{symbol}: BIAS30M HTTP {resp.status_code}")
+                    errors.append(f"{symbol}: RCI2H HTTP {resp.status_code}")
             except Exception as e:
-                errors.append(f"{symbol}: BIAS30M {e}")
+                errors.append(f"{symbol}: RCI2H {e}")
 
         bias4h = m.get('bias_4h')
         try:
@@ -1762,6 +1768,28 @@ def sync_scalp():
                     errors.append(f"{symbol}: CTX1M HTTP {resp.status_code}")
             except Exception as e:
                 errors.append(f"{symbol}: CTX1M {e}")
+
+            for sync_tf, sync_type, sync_field, sync_label in (
+                ('2h', 'st_context', 'st_context_2h', 'ctx2h'),
+                ('10m', 'st_context_lt', 'st_context_lt_10m', 'ctxlt10m'),
+            ):
+                try:
+                    payload = {
+                        'symbol': symbol,
+                        'strategy': 'scalp2h',
+                        'tf': sync_tf,
+                        'type': sync_type,
+                        'value': ctx_to_sync_value(m.get(sync_field)),
+                        'price': 0,
+                        'event_id': f"sync_scalp_{sync_label}_{symbol}_{int(time.time())}",
+                    }
+                    resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                    if resp.status_code == 200:
+                        symbol_sent.append(sync_label)
+                    else:
+                        errors.append(f"{symbol}: {sync_label.upper()} HTTP {resp.status_code}")
+                except Exception as e:
+                    errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
         ctx10 = m.get('st_context_10m')
         try:
@@ -2247,8 +2275,8 @@ def update_okx_rci_1h(symbol):
 
 
 def update_okx_rci_2h(symbol):
-    """RCI 10/30/50 sur bougies 2H confirmees (OKX), pour l'alerte info CTX2H+RCI2H+CTX10m."""
-    if not is_trade_symbol(symbol):
+    """RCI 10/30/50 sur bougies 2H confirmees pour SCALP 2H."""
+    if not is_trade_symbol(symbol) or symbol not in SCALP_PRIMARY_SYMBOLS:
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=100), 120)
     rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
@@ -2266,6 +2294,7 @@ def update_okx_rci_2h(symbol):
         m['rci_2h_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[RCI OKX 2h] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
+    relay_rci_to_scalp(symbol, '2h', rci_values, direction, is_chop, False, price=price)
 
 
 def update_okx_rci_4h(symbol):
@@ -2379,7 +2408,7 @@ def relay_bias_to_scalp(symbol, value, tf):
     scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
     if symbol not in scalp_symbols:
         return
-    if tf in ('1h', '30m') and symbol not in SCALP_PRIMARY_SYMBOLS:
+    if tf in ('1h', '30m', '2h') and symbol not in SCALP_PRIMARY_SYMBOLS:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
@@ -2507,9 +2536,8 @@ def check_bias2h_rci30_info(symbol, price=0.0):
 
 
 def update_okx_bias_2h(symbol):
-    """Bias 2H calcule en interne (OKX), pour tous les assets tradés — entree scalp
-    secondaire (scalp=True) et alerte info Bias2H+RCI (tous assets)."""
-    if not is_trade_symbol(symbol):
+    """Bias 2H calcule en interne pour la porte B de SCALP 2H."""
+    if not is_trade_symbol(symbol) or symbol not in SCALP_PRIMARY_SYMBOLS:
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=100), 120)
     bias_value = calc_bias_okx(df) if df is not None else None
@@ -2521,6 +2549,7 @@ def update_okx_bias_2h(symbol):
         m['bias_2h_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 2h={bias_value}")
+    relay_bias_to_scalp(symbol, bias_value, '2h')
     price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
 
 
@@ -2581,7 +2610,6 @@ def update_okx_bias_htf(symbol):
         m['bias_2d_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 1d={bias_1d} 2d={bias_2d}")
-    relay_bias_to_scalp(symbol, bias_1h, '1h')
     relay_bias_to_scalp(symbol, bias_4h, '4h')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
     evaluate_daily(
@@ -2919,9 +2947,10 @@ def update_indicators_for_symbol(symbol):
     try:
         update_okx_zalt_htf(symbol)
         update_okx_zalt_2h(symbol)
-        update_okx_bias_30m(symbol)
+        update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_1h(symbol)
+        update_okx_rci_2h(symbol)
         update_okx_rci_4h(symbol)
         update_okx_rci_1d(symbol)
         update_okx_bias_htf(symbol)

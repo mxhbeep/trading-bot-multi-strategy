@@ -86,7 +86,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V7': os.environ.get('ENABLE_PULSE_V7', os.environ.get('ENABLE_PULSE_V6', '1')) == '1',
     'ENABLE_DAILY': True,
-    'ENABLE_SWING': True,  # Bias 12H + ST Context 30m
+    'ENABLE_SWING': False,  # En pause — code conserve pour Bias 12H + ST Context 30m
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -757,7 +757,7 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H\n"
-        "SWING: Bias 12H + CTX 30m\n"
+        "SWING: EN PAUSE (Bias 12H + CTX 30m)\n"
         "PULSE: Bias 1D + CTX 2H + CTX 30m\n"
         "PULSE JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
@@ -2485,8 +2485,10 @@ def update_okx_bias_htf(symbol):
     bias_1h = calc_bias_okx(df_1h) if df_1h is not None else None
     df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240)
     bias_4h = calc_bias_okx(df_4h) if df_4h is not None else None
-    df_12h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
-    bias_12h = calc_bias_okx(df_12h) if df_12h is not None else None
+    bias_12h = None
+    if CONFIG.get('ENABLE_SWING', False):
+        df_12h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
+        bias_12h = calc_bias_okx(df_12h) if df_12h is not None else None
     df_1d = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1d', limit=200), 1440)
     bias_1d = calc_bias_okx(df_1d) if df_1d is not None else None
     bias_2d = None
@@ -2528,14 +2530,15 @@ def update_okx_bias_htf(symbol):
     )
     if is_pulse_symbol(symbol):
         pulse_price = daily_price
-        evaluate_swing(
-            symbol,
-            trigger_dir=None,
-            price=pulse_price,
-            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_bias_12h_{symbol}_{int(now_ts)}",
-            source='okx_bias_12h',
-        )
+        if CONFIG.get('ENABLE_SWING', False):
+            evaluate_swing(
+                symbol,
+                trigger_dir=None,
+                price=pulse_price,
+                exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                event_id=f"okx_bias_12h_{symbol}_{int(now_ts)}",
+                source='okx_bias_12h',
+            )
         evaluate_pulse_v3(
             symbol,
             trigger_dir=None,

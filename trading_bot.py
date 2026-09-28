@@ -758,11 +758,11 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY A: Bias 1D + CTX 2H\n"
-        "DAILY JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
+        "DAILY JACKPOT: Bias 2D + CTX 2H + CTX 4H\n"
         "DAILY B: Bias 2D + CTX 4H\n"
         "SWING (test): CTX 1D + RCI 1D + CTX 4H + CTX 2H\n"
         "PULSE V7 A: Bias 12H + CTX 30m\n"
-        "PULSE V7 JACKPOT: Bias 12H + CTX 30m + CTX 2H\n"
+        "PULSE V7 JACKPOT: Bias 1D + CTX 30m + CTX 2H\n"
         "PULSE V7 B: Bias 1D + CTX 2H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE V7\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
@@ -2692,7 +2692,7 @@ def _st_context_veto(m, tf, exp_ctx):
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY A: Bias 1D + CTX 2H. Jackpot avec CTX 4H. DAILY B: Bias 2D + CTX 4H."""
+    """DAILY A: Bias 1D+CTX 2H. B: Bias 2D+CTX 4H. Jackpot: Bias 2D+CTX 2H+CTX 4H."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2711,13 +2711,13 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         bias2d, bias2d_fresh, bias2d_ok = _bias_condition(m, '2d', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         entry_b_ok = bias2d_ok and ctx4h_ok
-        jackpot_ok = entry_a_ok and ctx4h_ok
+        jackpot_ok = bias2d_ok and ctx2h_ok and ctx4h_ok
 
         entry_ok = entry_a_ok or entry_b_ok
         with STATE_LOCK:
             jackpot_pos = SCALP_POSITIONS.get(f"{symbol}_DAILY_JACKPOT")
             jackpot_open = bool(jackpot_pos and jackpot_pos.get('direction') == direction)
-        if jackpot_open and entry_a_ok and not entry_b_ok and not jackpot_ok:
+        if jackpot_open and entry_b_ok and not entry_a_ok and not jackpot_ok:
             entry_ok = False
 
         logger.info(
@@ -2730,7 +2730,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         if jackpot_ok or entry_ok:
             if jackpot_ok:
                 strategy = 'DAILY_JACKPOT'
-                signal_type = 'daily_jackpot_bias1d_ctx2h_ctx4h'
+                signal_type = 'daily_jackpot_bias2d_ctx2h_ctx4h'
             else:
                 strategy = 'DAILY'
                 signal_type = 'daily_a_bias1d_ctx2h' if entry_a_ok else 'daily_b_bias2d'
@@ -2738,8 +2738,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             detail_lines = ["[JACKPOT] DAILY - confluence maximale"] if jackpot_ok else ["[OK] Entree DAILY"]
             if jackpot_ok:
                 detail_lines += [
-                    "[VOIE] A renforcee: Bias 1D + ST Context 2H + ST Context 4H alignes",
-                    f"[OK] Bias 1D: {_ctx_label(bias1d)}",
+                    "[JACKPOT] Bias 2D + ST Context 2H + ST Context 4H alignes",
+                    f"[OK] Bias 2D: {_ctx_label(bias2d)}",
                     f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
                     f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
                 ]
@@ -2832,7 +2832,7 @@ def check_pulse_v4_prep(symbol, price=0.0, source='state_refresh'):
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE V7 : A=Bias 12H+CTX 30m, jackpot avec CTX 2H, B=Bias 1D+CTX 2H."""
+    """PULSE V7 : A=Bias 12H+CTX 30m, B=Bias 1D+CTX 2H, jackpot=Bias 1D+CTX 30m+CTX 2H."""
     if not is_pulse_enabled() or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2848,12 +2848,12 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         bias1d, bias1d_fresh, bias1d_ok = _bias_condition(m, '1d', exp_ctx)
         ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
         entry_b_ok = bias1d_ok and ctx2h_ok
-        jackpot_ok = entry_a_ok and ctx2h_ok
+        jackpot_ok = bias1d_ok and ctx30_ok and ctx2h_ok
         entry_ok = entry_a_ok or entry_b_ok
         with STATE_LOCK:
             jackpot_pos = SCALP_POSITIONS.get(f"{symbol}_PULSEV7_JACKPOT")
             jackpot_open = bool(jackpot_pos and jackpot_pos.get('direction') == direction)
-        if jackpot_open and entry_a_ok and not entry_b_ok and not jackpot_ok:
+        if jackpot_open and entry_b_ok and not entry_a_ok and not jackpot_ok:
             entry_ok = False
         rci2h_short = m.get('rci_2h_10')
         rci2h_fresh = is_signal_fresh(m.get('rci_2h_ts'), 6 * 3600)
@@ -2880,7 +2880,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             detail_lines = ["[JACKPOT] PULSE V7 - confluence maximale"] if jackpot_ok else [f"[OK] Entree PULSE V7 - voie {gate}"]
             if jackpot_ok:
                 detail_lines += [
-                    f"[OK] Bias 12H: {_ctx_label(bias12h)}",
+                    f"[OK] Bias 1D: {_ctx_label(bias1d)}",
                     f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
                     f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
                 ]

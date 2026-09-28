@@ -731,7 +731,7 @@ def update_ctx_4h_rci_1h_ctx_10m_report():
 
 
 def send_priority_scalp_info(msg):
-    """Envoie les infos scalp prioritaires vers le canal dedie + ntfy."""
+    """Envoie les infos scalp prioritaires vers le canal Telegram dedie."""
     title = notification_title_from_message(msg)
     result = send_notification(
         title,
@@ -739,13 +739,13 @@ def send_priority_scalp_info(msg):
         priority=5,
         tags=notification_tags_from_text(msg),
         telegram=True,
-        ntfy=True,
+        ntfy=False,
         telegram_channel='telegram_priority_scalp',
     )
     if not result.get('telegram_priority_scalp'):
         logger.warning("[PRIORITY SCALP] Telegram dedie indisponible, fallback canal info")
         send_info(msg)
-    return bool(result.get('telegram_priority_scalp') or result.get('ntfy'))
+    return bool(result.get('telegram_priority_scalp'))
 
 
 def send_start_notification():

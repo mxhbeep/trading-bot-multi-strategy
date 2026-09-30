@@ -27,7 +27,10 @@ CONFIG = {
         'ADA/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'APT/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ARB/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'ASTER/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'AVAX/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'AXS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'BB/USDT':     {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'BCH/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'BNB/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'BONK/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
@@ -36,9 +39,12 @@ CONFIG = {
         'COMP/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'CVX/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'CYS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'DASH/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'DUSK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'DYDX/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'EGLD/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'EIGEN/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ENA/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ETC/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -47,28 +53,48 @@ CONFIG = {
         'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
         'FET/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'FIL/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'GRASS/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'HBAR/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'HYPE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'HYPE-USDT-SWAP'},
+        'ICP/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'IMX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'JASMY/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'JTO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LDO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'LINEA/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LINK/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'LQTY/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'MON/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'NEIRO/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'NEO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ONT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'PENGU/USDT':  {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'PEPE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'PIXEL/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'QNT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'RAY/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ONDO/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'ROSE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SAND/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'SEI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SKY/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SOL/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'SONIC/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'STX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SUI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'TAO/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},  # perp-only
         'TIA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'UNI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'USELESS/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
+        'VET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'XAI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'XLM/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'XMR/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'XPL/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ZEC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
@@ -100,6 +126,8 @@ MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
 LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {'long': [], 'short': []}
 LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = {'long': [], 'short': []}
+LAST_BIAS1D_CTX2H_REPORT = {'long': [], 'short': []}
+LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = {'long': [], 'short': []}
 
 # ============================================================================ #
 # STATISTIQUES HEBDOMADAIRES
@@ -132,7 +160,8 @@ def get_tracked_symbols():
     return set(CONFIG['SYMBOLS'])
 
 def is_trade_symbol(symbol):
-    return symbol in CONFIG['SYMBOLS']
+    cfg = CONFIG['SYMBOLS'].get(symbol, {})
+    return bool(cfg.get('scalp') or cfg.get('pulse'))
 
 def is_pulse_symbol(symbol):
     return symbol in CONFIG['SYMBOLS'] and CONFIG['SYMBOLS'][symbol].get('pulse', False)
@@ -196,6 +225,8 @@ def persist_runtime_state():
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
             'last_ctx_4h_rci_1h_ctx_10m_report': dict(LAST_CTX_4H_RCI_1H_CTX_10M_REPORT),
             'last_ctx_4h_rci_1h_ctx_10m_jackpot': dict(LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT),
+            'last_bias1d_ctx2h_report': dict(LAST_BIAS1D_CTX2H_REPORT),
+            'last_bias1d_ctx2h_ctx4h_jackpot': dict(LAST_BIAS1D_CTX2H_CTX4H_JACKPOT),
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -242,6 +273,8 @@ def load_runtime_state():
     global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
     global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
     global LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
+    global LAST_BIAS1D_CTX2H_REPORT
+    global LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -268,6 +301,16 @@ def load_runtime_state():
         LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = {
             'long': sorted(saved_jackpot.get('long', [])),
             'short': sorted(saved_jackpot.get('short', [])),
+        }
+        saved_bias_ctx_report = payload.get('last_bias1d_ctx2h_report', {})
+        LAST_BIAS1D_CTX2H_REPORT = {
+            'long': sorted(saved_bias_ctx_report.get('long', [])),
+            'short': sorted(saved_bias_ctx_report.get('short', [])),
+        }
+        saved_bias_ctx_jackpot = payload.get('last_bias1d_ctx2h_ctx4h_jackpot', {})
+        LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = {
+            'long': sorted(saved_bias_ctx_jackpot.get('long', [])),
+            'short': sorted(saved_bias_ctx_jackpot.get('short', [])),
         }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
@@ -729,6 +772,73 @@ def update_ctx_4h_rci_1h_ctx_10m_report():
     return report_changed or jackpot_changed
 
 
+def update_bias1d_ctx2h_report():
+    """Rapport global Bias 1D + CTX 2H, avec jackpot si CTX 4H est aussi aligne."""
+    global LAST_BIAS1D_CTX2H_REPORT
+    global LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
+
+    long_symbols = []
+    short_symbols = []
+    jackpot_long = []
+    jackpot_short = []
+    with STATE_LOCK:
+        for symbol in sorted(get_tracked_symbols()):
+            state = MOMENTUM_STATE.get(symbol, {})
+            bias1d = state.get('bias_1d')
+            ctx2h = state.get('st_context_2h')
+            ctx4h = state.get('st_context_4h')
+            bias1d_fresh = is_signal_fresh(state.get('bias_1d_ts'), 3 * 24 * 3600)
+            ctx2h_fresh = is_signal_fresh(state.get('st_context_2h_ts'), 6 * 3600)
+            ctx4h_fresh = is_signal_fresh(state.get('st_context_4h_ts'), 12 * 3600)
+            short_symbol = symbol.replace('/USDT', '')
+
+            if bias1d_fresh and ctx2h_fresh and bias1d == ctx2h == 'buy':
+                long_symbols.append(short_symbol)
+                if ctx4h_fresh and ctx4h == 'buy':
+                    jackpot_long.append(short_symbol)
+            elif bias1d_fresh and ctx2h_fresh and bias1d == ctx2h == 'sell':
+                short_symbols.append(short_symbol)
+                if ctx4h_fresh and ctx4h == 'sell':
+                    jackpot_short.append(short_symbol)
+
+        report = {'long': long_symbols, 'short': short_symbols}
+        jackpot = {'long': jackpot_long, 'short': jackpot_short}
+        report_changed = report != LAST_BIAS1D_CTX2H_REPORT
+        jackpot_changed = jackpot != LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
+        if report_changed:
+            LAST_BIAS1D_CTX2H_REPORT = report
+        if jackpot_changed:
+            LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = jackpot
+
+    if report_changed:
+        long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
+        short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
+        send_info(
+            "<b>[INFO] BIAS 1D + CONTEXT 2H</b>\n"
+            "--------------------\n"
+            f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
+            f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
+            "Liste mise a jour uniquement apres un changement de composition."
+        )
+        logger.info(f"[BIAS1D CTX2H REPORT] LONG={long_symbols} SHORT={short_symbols}")
+
+    if jackpot_changed:
+        jackpot_long_text = '  '.join(jackpot_long) if jackpot_long else 'Aucun'
+        jackpot_short_text = '  '.join(jackpot_short) if jackpot_short else 'Aucun'
+        send_info(
+            "<b>[JACKPOT INFO] BIAS 1D + CONTEXT 2H + CONTEXT 4H</b>\n"
+            "--------------------\n"
+            f"🟢 <b>LONG ({len(jackpot_long)})</b> : {jackpot_long_text}\n"
+            f"🔴 <b>SHORT ({len(jackpot_short)})</b> : {jackpot_short_text}\n\n"
+            "Les trois directions sont alignees."
+        )
+        logger.info(f"[BIAS1D CTX2H CTX4H JACKPOT] LONG={jackpot_long} SHORT={jackpot_short}")
+
+    if report_changed or jackpot_changed:
+        persist_runtime_state()
+    return report_changed or jackpot_changed
+
+
 def send_priority_scalp_info(msg):
     """Envoie les infos scalp prioritaires vers le canal Telegram dedie."""
     title = notification_title_from_message(msg)
@@ -761,6 +871,8 @@ def send_start_notification():
         "PULSE: Bias 1D + CTX 2H + CTX 30m\n"
         "PULSE JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
+        "WATCHLIST INFO: Bias 1D + CTX 2H (76 assets, groupe Autre inclus)\n"
+        "WATCHLIST JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
         f"{now}"
@@ -1004,7 +1116,7 @@ def require_admin_secret():
 def format_tv_symbol(s):
     if ':' in s:
         s = s.split(':')[-1]
-    if s.endswith('.P'):
+    if s.endswith(('.P', '.F')):
         s = s[:-2]
     for q in ['USDT', 'USDC', 'BUSD']:
         if s.endswith(q) and '/' not in s:
@@ -1327,6 +1439,8 @@ def process_webhook(data):
 
             if tf in ('4h', '10m'):
                 update_ctx_4h_rci_1h_ctx_10m_report()
+            if tf in ('2h', '4h'):
+                update_bias1d_ctx2h_report()
 
         if alert_type == 'st_context_lt' and tf in ('10m', '30m', '12h'):
             parsed_ctx_lt = parse_st_context_value(val)
@@ -1340,6 +1454,8 @@ def process_webhook(data):
             if tf in ('30m', '2h', '4h', '1d'):
                 relay_bias_to_scalp(symbol, parsed_bias, tf)
             logger.info(f"[BIAS TV] {symbol} {tf}={parsed_bias or 'neutral'}")
+            if tf == '1d':
+                update_bias1d_ctx2h_report()
 
             if tf == '2d':
                 evaluate_daily(
@@ -2480,20 +2596,19 @@ def update_okx_bias_30m(symbol):
 
 def update_okx_bias_htf(symbol):
     """Bias 4H pour Scalp, 12H pour Swing, 1D pour Pulse et 2D pour Daily."""
-    if not is_trade_symbol(symbol):
-        return
-    df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60)
+    trade_symbol = is_trade_symbol(symbol)
+    df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60) if trade_symbol else None
     bias_1h = calc_bias_okx(df_1h) if df_1h is not None else None
-    df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240)
+    df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240) if trade_symbol else None
     bias_4h = calc_bias_okx(df_4h) if df_4h is not None else None
     bias_12h = None
-    if CONFIG.get('ENABLE_SWING', False):
+    if trade_symbol and CONFIG.get('ENABLE_SWING', False):
         df_12h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
         bias_12h = calc_bias_okx(df_12h) if df_12h is not None else None
     df_1d = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1d', limit=200), 1440)
     bias_1d = calc_bias_okx(df_1d) if df_1d is not None else None
     bias_2d = None
-    if df_1d is not None and len(df_1d) >= 80:
+    if trade_symbol and df_1d is not None and len(df_1d) >= 80:
         try:
             df_2d = df_1d.groupby(df_1d.index // 2).agg({
                 'open': 'first', 'high': 'max', 'low': 'min',
@@ -2513,12 +2628,16 @@ def update_okx_bias_htf(symbol):
         m['bias_4h_ts'] = now_ts
         m['bias_12h'] = bias_12h
         m['bias_12h_ts'] = now_ts
-        m['bias_1d'] = bias_1d
-        m['bias_1d_ts'] = now_ts
+        if bias_1d is not None:
+            m['bias_1d'] = bias_1d
+            m['bias_1d_ts'] = now_ts
         m['bias_2d'] = bias_2d
         m['bias_2d_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 12h={bias_12h} 1d={bias_1d} 2d={bias_2d}")
+    update_bias1d_ctx2h_report()
+    if not trade_symbol:
+        return
     relay_bias_to_scalp(symbol, bias_4h, '4h')
     relay_bias_to_scalp(symbol, bias_1d, '1d')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
@@ -2838,6 +2957,9 @@ def update_indicators_for_symbol(symbol):
     if symbol in OKX_SKIP:
         return
     try:
+        if not is_trade_symbol(symbol):
+            update_okx_bias_htf(symbol)
+            return
         update_okx_bias_2h(symbol)
         update_okx_bias_30m(symbol)
         update_okx_rci_30m(symbol)
@@ -2864,6 +2986,7 @@ def indicators_scheduler():
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
         update_ctx_4h_rci_1h_ctx_10m_report()
+        update_bias1d_ctx2h_report()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m

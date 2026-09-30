@@ -787,18 +787,15 @@ def update_bias1d_ctx2h_report():
             bias1d = state.get('bias_1d')
             ctx2h = state.get('st_context_2h')
             ctx4h = state.get('st_context_4h')
-            bias1d_fresh = is_signal_fresh(state.get('bias_1d_ts'), 3 * 24 * 3600)
-            ctx2h_fresh = is_signal_fresh(state.get('st_context_2h_ts'), 6 * 3600)
-            ctx4h_fresh = is_signal_fresh(state.get('st_context_4h_ts'), 12 * 3600)
             short_symbol = symbol.replace('/USDT', '')
 
-            if bias1d_fresh and ctx2h_fresh and bias1d == ctx2h == 'buy':
+            if bias1d == ctx2h == 'buy':
                 long_symbols.append(short_symbol)
-                if ctx4h_fresh and ctx4h == 'buy':
+                if ctx4h == 'buy':
                     jackpot_long.append(short_symbol)
-            elif bias1d_fresh and ctx2h_fresh and bias1d == ctx2h == 'sell':
+            elif bias1d == ctx2h == 'sell':
                 short_symbols.append(short_symbol)
-                if ctx4h_fresh and ctx4h == 'sell':
+                if ctx4h == 'sell':
                     jackpot_short.append(short_symbol)
 
         report = {'long': long_symbols, 'short': short_symbols}

@@ -1337,7 +1337,7 @@ def process_webhook(data):
             parsed_bias = parse_bias_value(val)
             m[f'bias_{tf}'] = parsed_bias
             m[f'bias_{tf}_ts'] = now_ts
-            if tf in ('30m', '2h', '4h'):
+            if tf in ('30m', '2h', '4h', '1d'):
                 relay_bias_to_scalp(symbol, parsed_bias, tf)
             logger.info(f"[BIAS TV] {symbol} {tf}={parsed_bias or 'neutral'}")
 
@@ -1691,6 +1691,7 @@ def sync_scalp():
             ('30m', 'bias_30m', 'bias30m'),
             ('2h', 'bias_2h', 'bias2h'),
             ('4h', 'bias_4h', 'bias4h'),
+            ('1d', 'bias_1d', 'bias1d'),
         ):
             value = m.get(sync_field)
             try:
@@ -2519,6 +2520,7 @@ def update_okx_bias_htf(symbol):
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 12h={bias_12h} 1d={bias_1d} 2d={bias_2d}")
     relay_bias_to_scalp(symbol, bias_4h, '4h')
+    relay_bias_to_scalp(symbol, bias_1d, '1d')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
     evaluate_daily(
         symbol,

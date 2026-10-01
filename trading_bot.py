@@ -865,7 +865,7 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H\n"
         "SWING: EN PAUSE (Bias 12H + CTX 30m)\n"
-        "PULSE: Bias 1D + CTX 2H + CTX 30m\n"
+        "PULSE: Bias 1D + CTX 2H (CTX 30m optionnel)\n"
         "PULSE JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
         "WATCHLIST INFO: Bias 1D + CTX 2H (76 assets, groupe Autre inclus)\n"
@@ -1579,7 +1579,7 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE : Bias 1D+CTX 2H+CTX 30m; jackpot avec CTX 4H. RCI 2H manuel.
+        # PULSE : Bias 1D + CTX 2H; CTX 30m optionnel, jackpot avec CTX 4H. RCI 2H manuel.
         if is_pulse_enabled() and is_pulse_symbol(symbol) and (
             alert_type == 'st_context' and tf in ('30m', '2h', '4h')
         ):
@@ -2871,7 +2871,7 @@ def check_pulse_v4_prep(symbol, price=0.0, source='state_refresh'):
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE : Bias 1D+CTX 2H+CTX 30m; jackpot avec CTX 4H a la place du 30m."""
+    """PULSE : Bias 1D + CTX 2H. CTX 30m optionnel, jackpot avec CTX 4H."""
     if not is_pulse_enabled() or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2891,7 +2891,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         ctx4h = m.get('st_context_4h')
         ctx4h_fresh = is_signal_fresh(m.get('st_context_4h_ts'), 12 * 3600)
         ctx4h_ok = ctx4h == exp_ctx
-        entry_ok = bias1d_ok and ctx2h_ok and ctx30_ok
+        entry_ok = bias1d_ok and ctx2h_ok
         jackpot_ok = bias1d_ok and ctx2h_ok and ctx4h_ok
         with STATE_LOCK:
             jackpot_pos = SCALP_POSITIONS.get(f"{symbol}_PULSE_JACKPOT")
@@ -2919,7 +2919,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
         if jackpot_ok or entry_ok:
             strategy = 'PULSE_JACKPOT' if jackpot_ok else 'PULSE'
-            signal_type = 'pulse_jackpot_bias1d_ctx2h_ctx4h' if jackpot_ok else 'pulse_bias1d_ctx2h_ctx30'
+            signal_type = 'pulse_jackpot_bias1d_ctx2h_ctx4h' if jackpot_ok else 'pulse_bias1d_ctx2h'
             event_key = event_id or f"pulse_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = ["[JACKPOT] PULSE - confluence maximale"] if jackpot_ok else ["[OK] Entree PULSE"]
             if jackpot_ok:
@@ -2932,8 +2932,11 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 detail_lines += [
                     f"[OK] Bias 1D: {_ctx_label(bias1d)}",
                     f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
-                    f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
                 ]
+                if ctx30_ok:
+                    detail_lines.append(f"[QUALITE OPTIONNELLE] ST Context 30m aligne: {_ctx_label(ctx30)}")
+                else:
+                    detail_lines.append(f"[OPTIONNEL] ST Context 30m non aligne/neutre: {_ctx_label(ctx30)}")
             if rci2h_fresh and rci2h_short is not None:
                 status = 'ALIGNE' if rci2h_aligned else 'NON ALIGNE'
                 detail_lines.append(f"[MANUEL NON BLOQUANT] RCI court 2H: {rci2h_short:.1f} ({status}, seuil +/-75)")

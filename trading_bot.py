@@ -86,7 +86,7 @@ CONFIG = {
         'SONIC/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'STX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SUI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'TAO/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},  # perp-only
+        'TAO/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'TAO-USDT-SWAP'},
         'TIA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'UNI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'USELESS/USDT': {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
@@ -2959,10 +2959,6 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 def update_indicators_for_symbol(symbol):
     """Calcule les indicateurs internes OKX utilises par Daily/Pulse/Swing/Scalp.
     RCI 10m n'est plus calcule (OKX n'a pas de granularite 10 minutes)."""
-    # Assets sans données OKX directes — indicateurs via webhooks TV uniquement
-    OKX_SKIP = {'TAO/USDT'}
-    if symbol in OKX_SKIP:
-        return
     try:
         if not is_trade_symbol(symbol):
             update_okx_bias_htf(symbol)

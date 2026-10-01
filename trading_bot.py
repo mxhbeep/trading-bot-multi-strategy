@@ -2881,10 +2881,16 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
+        ctx30 = m.get('st_context_30m')
+        ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
+        ctx30_ok = ctx30 == exp_ctx
         bias1d, bias1d_fresh, bias1d_ok = _bias_condition(m, '1d', exp_ctx)
-        ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
-        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+        ctx2h = m.get('st_context_2h')
+        ctx2h_fresh = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
+        ctx2h_ok = ctx2h == exp_ctx
+        ctx4h = m.get('st_context_4h')
+        ctx4h_fresh = is_signal_fresh(m.get('st_context_4h_ts'), 12 * 3600)
+        ctx4h_ok = ctx4h == exp_ctx
         entry_ok = bias1d_ok and ctx2h_ok and ctx30_ok
         jackpot_ok = bias1d_ok and ctx2h_ok and ctx4h_ok
         with STATE_LOCK:
@@ -2906,7 +2912,8 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         logger.info(
             f"[PULSE CHECK] {symbol} source={source} dir={direction} "
             f"bias1d={bias1d}/{exp_ctx} fresh={bias1d_fresh} ctx2h={ctx2h}/{ctx2h_ok} "
-            f"ctx30={ctx30}/{ctx30_ok} ctx4h={ctx4h}/{ctx4h_ok} "
+            f"ctx2h_fresh={ctx2h_fresh} ctx30={ctx30}/{ctx30_ok} ctx30_fresh={ctx30_fresh} "
+            f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
             f"rci2h_manual={rci2h_short} aligned={rci2h_aligned} jackpot={jackpot_ok} entry={entry_ok}"
         )
 

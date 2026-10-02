@@ -726,6 +726,7 @@ def send_start_notification():
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
         "WATCHLIST INFO: Bias 1D + CTX 2H (76 assets, groupe Autre inclus)\n"
         "WATCHLIST JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
+        "ENTREE 12H: ST Context 1D + flip ZALT 12H interne (50/1.15)\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
         f"{now}"
@@ -1079,7 +1080,42 @@ def init_symbol_states(symbol):
             'zalt_2h': None, 'zalt_2h_ts': None, 'last_zalt_2h_signal_ts': None,
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
+            'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
         }
+
+
+def check_ctx1d_zalt12h_alert(symbol, price=0.0):
+    """Alerte quand un flip ZALT 12H rejoint le ST Context 1D."""
+    if not is_trade_symbol(symbol):
+        return False
+
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        zalt12h = m.get('zalt_12h')
+        ctx1d = m.get('st_context_1d')
+        flip_ts = m.get('last_zalt_12h_signal_ts')
+        if zalt12h not in ('buy', 'sell') or ctx1d != zalt12h:
+            return False
+        if not is_signal_fresh(flip_ts, 60 * 60):
+            return False
+
+        direction = 'LONG' if zalt12h == 'buy' else 'SHORT'
+        event_id = f"ctx1d_zalt12h_{symbol}_{int(float(flip_ts))}"
+        if not should_send(symbol, f"ctx1d_zalt12h_{zalt12h}", event_id=event_id, cooldown=60):
+            return False
+
+    send_telegram(
+        f"<b>[ENTREE] ST CONTEXT 1D + FLIP ZALT 12H</b> {symbol}\n"
+        "--------------------\n"
+        f"Direction: {direction}\n"
+        f"Price: ${format_price(price)}\n"
+        f"[OK] ST Context 1D: {_ctx_label(ctx1d)}\n"
+        f"[OK] Flip ZALT 12H: {_ctx_label(zalt12h)}"
+    )
+    logger.info(f"[CTX1D ZALT12H] {symbol} {direction}")
+    persist_runtime_state()
+    return True
 
 
 # ============================================================================ #
@@ -1187,6 +1223,8 @@ def process_webhook(data):
 
             if tf in ('2h', '4h'):
                 update_bias1d_ctx2h_report()
+            if tf == '1d':
+                check_ctx1d_zalt12h_alert(symbol, price=price)
 
         if alert_type == 'st_context_lt' and tf in ('10m', '30m', '12h'):
             parsed_ctx_lt = parse_st_context_value(val)
@@ -1256,6 +1294,8 @@ def process_webhook(data):
                     if zalt_signal in ('trend_flip', 'flip'):
                         m[f'last_zalt_{tf}_signal_ts'] = now_ts
                     logger.info(f"[ZALT {tf.upper()}] {symbol} = {parsed_zalt} signal={zalt_signal or 'state'}")
+                    if tf == '12h' and zalt_signal in ('trend_flip', 'flip'):
+                        check_ctx1d_zalt12h_alert(symbol, price=price)
                 else:
                     logger.info(f"[ZALT] {symbol} tf={tf} ignore: timeframe non utilise")
             else:
@@ -1737,6 +1777,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 ZALT_HTF_SETTINGS = {
     '30m': {'length': 34, 'mult': 1.0},
     '2h':  {'length': 55, 'mult': 1.15},
+    '12h': {'length': 50, 'mult': 1.15},
     '6h':  {'length': 50, 'mult': 1.2},
     '1d':  {'length': 50, 'mult': 1.3},
 }
@@ -1948,6 +1989,39 @@ def update_okx_zalt_2h(symbol):
             event_id=f"okx_zalt_2h_flip_{symbol}_{int(now_ts)}",
             source='okx_zalt_2h_flip',
         )
+
+
+def update_okx_zalt_12h(symbol):
+    """ZALT 12H interne OKX en 50/1.15 pour l'entree CTX 1D + flip ZALT 12H."""
+    if not is_trade_symbol(symbol):
+        return
+    cfg = ZALT_HTF_SETTINGS['12h']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=300), 720)
+    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+
+    is_flip = False
+    price = 0.0
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        if not payload:
+            logger.info(f"[ZALT OKX] {symbol} 12h=None")
+        else:
+            old = m.get('zalt_12h')
+            m['zalt_12h'] = payload['trend']
+            m['zalt_12h_ts'] = now_ts
+            is_flip = bool(payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend'])
+            price = payload['close']
+            if is_flip:
+                m['last_zalt_12h_signal_ts'] = now_ts
+                logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']} FLIP")
+            else:
+                logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']}")
+        persist_runtime_state()
+
+    if is_flip:
+        check_ctx1d_zalt12h_alert(symbol, price=price)
 
 
 def calc_bias_okx(df, ema_len=17, sma_len=40):
@@ -2599,6 +2673,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_rci_30m(symbol)
         update_okx_rci_2h(symbol)
         update_okx_rci_4h(symbol)
+        update_okx_zalt_12h(symbol)
         update_okx_bias_htf(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")

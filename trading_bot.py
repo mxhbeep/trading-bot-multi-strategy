@@ -124,30 +124,10 @@ LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
-LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {'long': [], 'short': []}
-LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = {'long': [], 'short': []}
 LAST_BIAS1D_CTX2H_REPORT = {'long': [], 'short': []}
 LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = {'long': [], 'short': []}
 
-# ============================================================================ #
-# STATISTIQUES HEBDOMADAIRES
-# ============================================================================ #
-
-WEEKLY_STATS = {}
-WEEKLY_START = datetime.now(timezone.utc)
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
-
-def track_alert(symbol, strategy):
-    if symbol not in WEEKLY_STATS:
-        WEEKLY_STATS[symbol] = {
-            'DAILY': 0,
-            'SWING': 0,
-            'PULSE': 0,
-            'PULSE_JACKPOT': 0,
-        }
-    if strategy not in WEEKLY_STATS[symbol]:
-        WEEKLY_STATS[symbol][strategy] = 0
-    WEEKLY_STATS[symbol][strategy] += 1
 
 exchanges = {}
 
@@ -216,15 +196,11 @@ def persist_runtime_state():
     with STATE_LOCK:
         payload = {
             'momentum_state':     MOMENTUM_STATE,
-            'weekly_stats':       WEEKLY_STATS,
-            'weekly_start':       WEEKLY_START.isoformat(),
             'last_signals':       LAST_SIGNALS,
             'last_signal_events': LAST_SIGNAL_EVENTS,
             'scalp_positions':    dict(SCALP_POSITIONS),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
-            'last_ctx_4h_rci_1h_ctx_10m_report': dict(LAST_CTX_4H_RCI_1H_CTX_10M_REPORT),
-            'last_ctx_4h_rci_1h_ctx_10m_jackpot': dict(LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT),
             'last_bias1d_ctx2h_report': dict(LAST_BIAS1D_CTX2H_REPORT),
             'last_bias1d_ctx2h_ctx4h_jackpot': dict(LAST_BIAS1D_CTX2H_CTX4H_JACKPOT),
         }
@@ -270,9 +246,7 @@ def audit_log(data, status="reçu"):
 
 
 def load_runtime_state():
-    global MOMENTUM_STATE, WEEKLY_STATS, WEEKLY_START, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
-    global LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
+    global MOMENTUM_STATE, LAST_SIGNALS, LAST_SIGNAL_EVENTS
     global LAST_BIAS1D_CTX2H_REPORT
     global LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
     if not REDIS_CLIENT:
@@ -286,22 +260,11 @@ def load_runtime_state():
 
         payload = json.loads(raw)
         MOMENTUM_STATE      = payload.get('momentum_state', {})
-        WEEKLY_STATS        = payload.get('weekly_stats', {})
         LAST_SIGNALS        = payload.get('last_signals', {})
         LAST_SIGNAL_EVENTS  = payload.get('last_signal_events', {})
         LAST_WEBHOOK_TS.update(payload.get('last_webhook_ts', {}))
         LAST_WEBHOOK_SIGNAL_TS.update(payload.get('last_webhook_signal_ts', {}))
         SCALP_POSITIONS.update(payload.get('scalp_positions', {}))
-        saved_ctx_report = payload.get('last_ctx_4h_rci_1h_ctx_10m_report', {})
-        LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = {
-            'long': sorted(saved_ctx_report.get('long', [])),
-            'short': sorted(saved_ctx_report.get('short', [])),
-        }
-        saved_jackpot = payload.get('last_ctx_4h_rci_1h_ctx_10m_jackpot', {})
-        LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = {
-            'long': sorted(saved_jackpot.get('long', [])),
-            'short': sorted(saved_jackpot.get('short', [])),
-        }
         saved_bias_ctx_report = payload.get('last_bias1d_ctx2h_report', {})
         LAST_BIAS1D_CTX2H_REPORT = {
             'long': sorted(saved_bias_ctx_report.get('long', [])),
@@ -318,10 +281,6 @@ def load_runtime_state():
             del MOMENTUM_STATE[s]
         if stale:
             logger.info(f'[REDIS] Supprimé {len(stale)} assets obsolètes: {stale}')
-
-        weekly_start_raw = payload.get('weekly_start')
-        if weekly_start_raw:
-            WEEKLY_START = datetime.fromisoformat(weekly_start_raw)
 
         logger.info(
             f"✅ État restauré depuis Redis | "
@@ -542,14 +501,6 @@ NOTIFICATIONS.register(
         label='Scalp Bot',
     ),
 )
-NOTIFICATIONS.register(
-    'telegram_priority_scalp',
-    TelegramChannel(
-        lambda: os.environ.get('PRIORITY_SCALP_BOT_TOKEN', ''),
-        lambda: os.environ.get('PRIORITY_SCALP_CHAT_ID', '-1003706862644'),
-        label='Priority Scalp Bot',
-    ),
-)
 NOTIFICATIONS.register('ntfy', NtfyChannel(lambda: CONFIG.get('NTFY_TOPIC', '')))
 
 
@@ -695,83 +646,6 @@ def send_info(msg):
         logger.error(f"❌ Erreur info bot: {e}")
 
 
-def update_ctx_4h_rci_1h_ctx_10m_report():
-    """Envoie la liste agregee uniquement quand sa composition change."""
-    global LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
-    global LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
-
-    long_symbols = []
-    short_symbols = []
-    jackpot_long = []
-    jackpot_short = []
-    with STATE_LOCK:
-        for symbol in sorted(get_tracked_symbols()):
-            state = MOMENTUM_STATE.get(symbol, {})
-            ctx4h = state.get('st_context_4h')
-            ctx10m = state.get('st_context_10m')
-            rci2h_short = state.get('rci_2h_10')
-            rci4h_short = state.get('rci_4h_10')
-            try:
-                rci2h_short = float(rci2h_short)
-            except (TypeError, ValueError):
-                rci2h_short = None
-            try:
-                rci4h_short = float(rci4h_short)
-            except (TypeError, ValueError):
-                rci4h_short = None
-            if ctx4h == ctx10m == 'buy' and rci2h_short is not None and rci2h_short <= -75:
-                short_symbol = symbol.replace('/USDT', '')
-                long_symbols.append(short_symbol)
-                if rci4h_short is not None and rci4h_short <= -75:
-                    jackpot_long.append(short_symbol)
-            elif ctx4h == ctx10m == 'sell' and rci2h_short is not None and rci2h_short >= 75:
-                short_symbol = symbol.replace('/USDT', '')
-                short_symbols.append(short_symbol)
-                if rci4h_short is not None and rci4h_short >= 75:
-                    jackpot_short.append(short_symbol)
-
-        report = {'long': long_symbols, 'short': short_symbols}
-        jackpot = {'long': jackpot_long, 'short': jackpot_short}
-        report_changed = report != LAST_CTX_4H_RCI_1H_CTX_10M_REPORT
-        jackpot_changed = jackpot != LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT
-        if report_changed:
-            LAST_CTX_4H_RCI_1H_CTX_10M_REPORT = report
-        if jackpot_changed:
-            LAST_CTX_4H_RCI_1H_CTX_10M_JACKPOT = jackpot
-
-    if report_changed:
-        long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
-        short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
-        send_info(
-            "<b>[INFO] CONFLUENCE CONTEXT 4H + RCI 2H + CONTEXT 10M</b>\n"
-            "--------------------\n"
-            f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
-            f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-            "RCI court 2H: <= -75 LONG / >= +75 SHORT.\n"
-            "Liste mise a jour apres un changement de composition."
-        )
-        logger.info(
-            f"[CTX REPORT] Liste modifiee: LONG={long_symbols} SHORT={short_symbols}"
-        )
-
-    if jackpot_changed:
-        jackpot_long_text = '  '.join(jackpot_long) if jackpot_long else 'Aucun'
-        jackpot_short_text = '  '.join(jackpot_short) if jackpot_short else 'Aucun'
-        send_info(
-            "<b>[JACKPOT] CONFLUENCE RCI 2H + RCI 4H</b>\n"
-            "--------------------\n"
-            f"🟢 <b>LONG ({len(jackpot_long)})</b> : {jackpot_long_text}\n"
-            f"🔴 <b>SHORT ({len(jackpot_short)})</b> : {jackpot_short_text}\n\n"
-            "Base: CTX 4H + RCI court 2H extreme + CTX 10m.\n"
-            "JACKPOT: RCI court 4H egalement extreme dans le meme sens."
-        )
-        logger.info(
-            f"[CTX JACKPOT] Liste modifiee: LONG={jackpot_long} SHORT={jackpot_short}"
-        )
-
-    return report_changed or jackpot_changed
-
-
 def update_bias1d_ctx2h_report():
     """Rapport global Bias 1D + CTX 2H, avec jackpot si CTX 4H est aussi aligne."""
     global LAST_BIAS1D_CTX2H_REPORT
@@ -836,24 +710,6 @@ def update_bias1d_ctx2h_report():
     return report_changed or jackpot_changed
 
 
-def send_priority_scalp_info(msg):
-    """Envoie les infos scalp prioritaires vers le canal Telegram dedie."""
-    title = notification_title_from_message(msg)
-    result = send_notification(
-        title,
-        msg,
-        priority=5,
-        tags=notification_tags_from_text(msg),
-        telegram=True,
-        ntfy=False,
-        telegram_channel='telegram_priority_scalp',
-    )
-    if not result.get('telegram_priority_scalp'):
-        logger.warning("[PRIORITY SCALP] Telegram dedie indisponible, fallback canal info")
-        send_info(msg)
-    return bool(result.get('telegram_priority_scalp'))
-
-
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     redis_status = "Redis connecte" if REDIS_CLIENT else "Redis non disponible"
@@ -876,111 +732,6 @@ def send_start_notification():
     )
     send_info(msg)
 
-
-def send_weekly_report():
-    global WEEKLY_STATS, WEEKLY_START
-
-    now = datetime.now(timezone(timedelta(hours=8)))
-    week_start = WEEKLY_START.astimezone(timezone(timedelta(hours=8)))
-    total_alerts = sum(sum(strats.values()) for strats in WEEKLY_STATS.values())
-
-    msg = (
-        "📊 <b>[RAPPORT HEBDOMADAIRE]</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📅 Semaine du {week_start.strftime('%d/%m')} au {now.strftime('%d/%m/%Y')}\n"
-        f"🔔 Total alertes: <b>{total_alerts}</b>\n\n"
-    )
-    total_daily      = sum(s.get('DAILY', 0)       for s in WEEKLY_STATS.values())
-    total_swing = sum(s.get('SWING', 0) for s in WEEKLY_STATS.values())
-    total_pulse = sum(s.get('PULSE', 0) for s in WEEKLY_STATS.values())
-    total_pulse_jackpot = sum(s.get('PULSE_JACKPOT', 0) for s in WEEKLY_STATS.values())
-
-    msg += (
-        "📋 <b>Par stratégie:</b>\n"
-        f"  — DAILY: {total_daily}\n"
-        f"  — SWING: {total_swing}\n"
-        f"  — PULSE: {total_pulse}\n"
-        f"  — PULSE JACKPOT: {total_pulse_jackpot}\n\n"
-    )
-
-
-    assets_with_alerts = {
-        symbol: stats for symbol, stats in WEEKLY_STATS.items()
-        if sum(stats.values()) > 0
-    }
-
-    if assets_with_alerts:
-        msg += "📈 <b>Par asset:</b>\n"
-        for symbol, stats in sorted(assets_with_alerts.items(), key=lambda x: sum(x[1].values()), reverse=True):
-            base = symbol.replace('/USDT', '')
-            details = []
-            if stats.get('DAILY', 0):       details.append(f"D:{stats['DAILY']}")
-            if stats.get('SWING', 0): details.append(f"S:{stats['SWING']}")
-            if stats.get('PULSE', 0): details.append(f"P:{stats['PULSE']}")
-            if stats.get('PULSE_JACKPOT', 0): details.append(f"P-JP:{stats['PULSE_JACKPOT']}")
-            msg += f"  —{base}: {sum(stats.values())} ({', '.join(details)})\n"
-    else:
-        msg += "📈 <b>Par asset:</b> Aucune alerte cette semaine\n"
-
-    msg += f"\n⏰{now.strftime('%d/%m/%Y %H:%M')} (Taiwan)"
-    send_info(msg)
-    logger.info("📊 Rapport hebdomadaire envoyé")
-
-    WEEKLY_STATS.clear()
-    WEEKLY_START = datetime.now(timezone.utc)
-
-    persist_runtime_state()
-
-
-
-def weekly_report_scheduler():
-    logger.info("⏰ Scheduler rapport hebdomadaire démarré (dimanche minuit Taiwan)")
-    while True:
-        now = datetime.now(timezone(timedelta(hours=8)))
-        if now.weekday() == 6 and now.hour == 0 and now.minute == 0:
-            send_weekly_report()
-            time.sleep(61)
-        else:
-            time.sleep(30)
-
-
-def tv_alert_watchdog():
-    """Vérifie toutes les heures que les webhooks TradingView arrivent bien."""
-    bot_start_time = time.time()
-    time.sleep(6 * 3600)
-    logger.info("🔍 TV Alert Watchdog démarré")
-    MAX_AGE = {
-        '10m': 45 * 60,
-        '30m': 90 * 60,
-        '2h': 6 * 3600,
-        '4h': 12 * 3600,
-        '1d': 3 * 24 * 3600,
-    }
-    while True:
-        time.sleep(3600)
-        now = time.time()
-        uptime = now - bot_start_time
-        missing = []
-        for tf, max_age in MAX_AGE.items():
-            # Ne pas alerter si le bot n'a pas encore tourné assez longtemps
-            # pour avoir eu une chance de recevoir ce TF
-            if uptime < max_age + 3600:
-                continue
-            last_ts = LAST_WEBHOOK_TS.get(tf)
-            if last_ts is None:
-                missing.append(f"  — TF {tf.upper()}: jamais reçu")
-            elif (now - last_ts) > max_age:
-                age_h = (now - last_ts) / 3600
-                missing.append(f"  — TF {tf.upper()}: dernier reçu il y a {age_h:.1f}H")
-        if missing:
-            details = "\n".join(missing)
-            send_info(
-                "🚨 <b>[ALERTE] Webhooks TradingView manquants</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"{details}\n\n"
-                "➡️ Vérifier et redémarrer les alertes sur TradingView"
-            )
-            logger.warning(f"[TV WATCHDOG] Alertes manquantes: {missing}")
 
 def tv_signal_key(symbol, alert_type, tf):
     return f"{symbol}|{alert_type}|{tf}"
@@ -1434,8 +1185,6 @@ def process_webhook(data):
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
 
-            if tf in ('4h', '10m'):
-                update_ctx_4h_rci_1h_ctx_10m_report()
             if tf in ('2h', '4h'):
                 update_bias1d_ctx2h_report()
 
@@ -1489,7 +1238,6 @@ def process_webhook(data):
                     symbol, '2h', {10: rci10, 30: rci30, 50: rci50},
                     rci_dir, rci_dir is None, False, price=price,
                 )
-                update_ctx_4h_rci_1h_ctx_10m_report()
                 if is_pulse_enabled() and is_pulse_symbol(symbol):
                     evaluate_pulse_v3(
                         symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
@@ -1764,7 +1512,6 @@ def refresh_indicators():
                 update_indicators_for_symbol(sym)
             except Exception as e:
                 logger.error(f"[REFRESH] {sym}: {e}")
-        update_ctx_4h_rci_1h_ctx_10m_report()
         persist_runtime_state()
         logger.info("[REFRESH] Terminé")
 
@@ -2378,50 +2125,6 @@ def update_okx_rci_4h(symbol):
     )
 
 
-def check_context2h_rci2h_ctx10m_info(symbol, price=0.0):
-    """Alerte INFO uniquement : ST Context 2H + RCI 2H + ST Context 10m alignes
-    + RCI court 30m en zone extreme."""
-    notify = None
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        for exp in ('buy', 'sell'):
-            ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp)
-            ctx10, ctx10_fresh, ctx10_ok = _st_context_condition(m, '10m', exp)
-            rci2h_dir = m.get('rci_2h_dir')
-            rci2h_fresh = is_signal_fresh(m.get('rci_2h_ts'), 6 * 3600)
-            rci2h_ok = bool(rci2h_fresh and rci2h_dir == exp)
-            rci30_short = m.get('rci_30m_10')
-            rci30_fresh = is_signal_fresh(m.get('rci_30m_ts'), 90 * 60)
-            if exp == 'buy':
-                rci30_extreme_ok = rci30_fresh and rci30_short is not None and float(rci30_short) <= -75
-            else:
-                rci30_extreme_ok = rci30_fresh and rci30_short is not None and float(rci30_short) >= 75
-            if ctx2h_ok and rci2h_ok and ctx10_ok and rci30_extreme_ok and should_send(symbol, f"info_ctx2h_rci2h_ctx10m_{exp}", cooldown=2 * 3600):
-                notify = (exp, ctx2h, ctx10, m.get('rci_2h_10'), m.get('rci_2h_30'), m.get('rci_2h_50'), rci30_short)
-                break
-
-    if not notify:
-        return False
-
-    exp, ctx2h, ctx10, rci10, rci30, rci50, rci30_short = notify
-    direction_label = 'BUY' if exp == 'buy' else 'SELL'
-    rci30_txt = f"{float(rci30_short):.1f}" if rci30_short is not None else "n/a"
-    zone_label = "OS <= -75" if exp == 'buy' else "OB >= +75"
-    send_info(
-        f"ℹ️ <b>[INFO CTX 2H + RCI 2H + CTX 10m]</b> {symbol}\n"
-        f"Direction: {direction_label}\n"
-        f"Price: ${format_price(price)}\n"
-        f"[OK] ST Context 2H: {_ctx_label(ctx2h)}\n"
-        f"[OK] RCI 2H: {direction_label} (10={rci10}, 30={rci30}, 50={rci50})\n"
-        f"[OK] RCI court 30m extreme: {rci30_txt} ({zone_label})\n"
-        f"[OK] ST Context 10m: {_ctx_label(ctx10)}\n"
-        f"Info seulement : pas une entree automatique."
-    )
-    return True
-
-
-
 def relay_bias_to_scalp(symbol, value, tf):
     """Relaie un Bias interne vers le scalpbot."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -2481,77 +2184,6 @@ def relay_bias_30m_to_scalp(symbol, value):
             logger.warning(f"[RELAY OKX BIAS 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         logger.warning(f"[RELAY OKX BIAS 30m] Erreur: {e}")
-
-
-def check_bias2h_rci30_info(symbol, price=0.0):
-    """Alerte INFO uniquement (pas un trigger de strategie, pas une entree) : Bias 2H
-    aligne + entree fraiche du RCI court (longueur 10, calcule sur bougies 30m) en zone
-    extreme de retournement : Bias BUY -> RCI10 croise sous -75, Bias SELL -> RCI10
-    croise au-dessus de +75. CTX 10m est une information non bloquante. Anti-chop :
-    CTX 30m oppose bloque l'alerte. Qualite si CTX 30m est dans le meme sens. Remplace l'ancienne
-    notification RPZ (retiree)."""
-    notify = None
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        bias2h = m.get('bias_2h')
-        bias2h_fresh = is_signal_fresh(m.get('bias_2h_ts'), 5 * 3600)
-        if not (bias2h_fresh and bias2h in ('buy', 'sell')):
-            return
-        exp = bias2h
-
-        rci30_short = m.get('rci_30m_10')
-        rci30_fresh = is_signal_fresh(m.get('rci_30m_ts'), 90 * 60)
-        rci30_entry_dir = m.get('rci_30m_extreme_entry_dir')
-        rci30_entry_fresh = is_signal_fresh(m.get('rci_30m_extreme_entry_ts'), 45 * 60)
-        if exp == 'buy':
-            rci30_ok = rci30_fresh and rci30_short is not None and float(rci30_short) <= -75
-        else:
-            rci30_ok = rci30_fresh and rci30_short is not None and float(rci30_short) >= 75
-        if not (rci30_ok and rci30_entry_fresh and rci30_entry_dir == exp):
-            return
-
-        opp = 'sell' if exp == 'buy' else 'buy'
-
-        ctx10 = m.get('st_context_10m')
-        ctx10_fresh = is_signal_fresh(m.get('st_context_10m_ts'), 45 * 60)
-        ctx10_ok = bool(ctx10_fresh and ctx10 == exp)
-        ctx10_opposite = bool(ctx10_fresh and ctx10 == opp)
-
-        ctx30 = m.get('st_context_30m')
-        ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-        if ctx30_fresh and ctx30 == opp:
-            return
-        quality = bool(ctx30_fresh and ctx30 == exp)
-
-        if should_send(symbol, f"info_bias2h_rci30_{exp}", cooldown=2 * 3600):
-            notify = (exp, rci30_short, ctx10, ctx10_fresh, ctx10_ok, ctx10_opposite, ctx30, ctx30_fresh, quality)
-
-    if not notify:
-        return
-    exp, rci30_short, ctx10, ctx10_fresh, ctx10_ok, ctx10_opposite, ctx30, ctx30_fresh, quality = notify
-    direction_label = 'BUY' if exp == 'buy' else 'SELL'
-    rci_txt = f"{float(rci30_short):.1f}" if rci30_short is not None else "n/a"
-    zone_label = "OS <= -75" if exp == 'buy' else "OB >= +75"
-    ctx30_txt = _ctx_label(ctx30) if ctx30_fresh and ctx30 else "NEUTRE/NON FRAIS"
-    ctx10_txt = _ctx_label(ctx10) if ctx10_fresh and ctx10 else "NEUTRE/NON FRAIS"
-    quality_line = "[QUALITE] ST Context 30m aligne" if quality else f"[INFO] ST Context 30m: {ctx30_txt}"
-    if ctx10_ok:
-        ctx10_line = f"[INFO] ST Context 10m aligne: {ctx10_txt}"
-    elif ctx10_opposite:
-        ctx10_line = f"[ALERTE NON BLOQUANTE] ST Context 10m oppose: {ctx10_txt}"
-    else:
-        ctx10_line = f"[INFO] ST Context 10m: {ctx10_txt}"
-    send_priority_scalp_info(
-        f"ℹ️ <b>[INFO Bias 2H + RCI court 30m]</b> {symbol}\n"
-        f"Direction: {direction_label}\n"
-        f"RCI court (10) 30m: {rci_txt} ({zone_label})\n"
-        f"Price: ${format_price(price)}\n"
-        f"{ctx10_line}\n"
-        f"{quality_line}\n"
-        f"[MANUEL] Verifier le RCI 2H pour confirmer le signal"
-    )
-    return True
 
 
 def update_okx_bias_2h(symbol):
@@ -2700,7 +2332,6 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
         journal_symbol=symbol, journal_strategy=strategy,
         journal_direction=direction, journal_price=price,
     )
-    track_alert(symbol, strategy)
     persist_runtime_state()
     logger.info(f"[{strategy}] Entree {signal_type}: {symbol} {direction}")
     return True
@@ -2988,7 +2619,6 @@ def indicators_scheduler():
         for symbol in CONFIG['SYMBOLS']:
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
-        update_ctx_4h_rci_1h_ctx_10m_report()
         update_bias1d_ctx2h_report()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")
@@ -3015,9 +2645,6 @@ def startup():
         load_runtime_state()
         init_exchanges()
         send_start_notification()
-
-        scheduler_thread = threading.Thread(target=weekly_report_scheduler, daemon=True)
-        scheduler_thread.start()
 
         logger.info("Heartbeat Telegram desactive")
         # Configurer le webhook Telegram pour les boutons inline
@@ -3048,8 +2675,6 @@ def startup():
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
 
-        watchdog_thread = threading.Thread(target=tv_alert_watchdog, daemon=True)
-        watchdog_thread.start()
         signal_watchdog_thread = threading.Thread(target=tv_signal_watchdog, daemon=True)
         signal_watchdog_thread.start()
 
@@ -3060,7 +2685,7 @@ def startup():
             logger.warning('⚠️ SCALP_BOT_URL non défini — relay scalpbot désactivé')
         else:
             logger.info(f'✅ Relay scalpbot activé →{scalp_url_check}')
-        logger.info("⏰ Schedulers démarrés (rapport hebdo + heartbeat + prep report + indicateurs OKX + TV watchdog)")
+        logger.info("⏰ Schedulers démarrés (indicateurs OKX + watchdog TradingView détaillé)")
     except Exception as e:
         logger.error(f"❌ Erreur au démarrage: {e}")
 

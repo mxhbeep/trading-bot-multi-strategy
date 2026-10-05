@@ -143,6 +143,11 @@ def is_trade_symbol(symbol):
     cfg = CONFIG['SYMBOLS'].get(symbol, {})
     return bool(cfg.get('scalp') or cfg.get('pulse'))
 
+
+def get_scalpbot_symbols():
+    """Actifs traites par le scalpbot, canal principal ou ScalpSecondaire."""
+    return {symbol for symbol in CONFIG['SYMBOLS'] if is_trade_symbol(symbol)}
+
 def is_pulse_symbol(symbol):
     return symbol in CONFIG['SYMBOLS'] and CONFIG['SYMBOLS'][symbol].get('pulse', False)
 
@@ -1399,7 +1404,7 @@ def process_webhook(data):
             and alert_type == 'st_context' and tf in ('10m', '30m')
         )
         if scalp_url and should_relay_scalp:
-            scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+            scalp_symbols = get_scalpbot_symbols()
             if symbol in scalp_symbols:
                 try:
                     # Payload normalisé — symbole et tf déjà normalisés par le bot principal
@@ -1578,7 +1583,7 @@ def sync_scalp():
     if not scalp_url:
         return jsonify({'error': 'SCALP_BOT_URL non defini'}), 400
 
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    scalp_symbols = get_scalpbot_symbols()
     sent, errors = [], []
 
     with STATE_LOCK:
@@ -1892,7 +1897,7 @@ def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
     refresh d'etat. Sans ce relais l'armement est mort (deja arrive)."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
         return
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    scalp_symbols = get_scalpbot_symbols()
     if symbol not in scalp_symbols:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
@@ -2056,7 +2061,7 @@ def relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, is_extended, 
     ce n'est jamais un trigger."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
         return
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    scalp_symbols = get_scalpbot_symbols()
     if symbol not in scalp_symbols:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
@@ -2159,7 +2164,7 @@ def relay_bias_to_scalp(symbol, value, tf):
     """Relaie un Bias interne vers le scalpbot."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
         return
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
+    scalp_symbols = get_scalpbot_symbols()
     if symbol not in scalp_symbols:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))

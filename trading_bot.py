@@ -112,7 +112,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V7': os.environ.get('ENABLE_PULSE_V7', os.environ.get('ENABLE_PULSE_V6', '1')) == '1',
     'ENABLE_DAILY': True,
-    'ENABLE_SWING': False,  # En pause — code conserve pour Bias 12H + ST Context 30m
+    'ENABLE_SWING': True,  # Bias 12H + ST Context 30m, watchlist scalp uniquement
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -720,7 +720,7 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H\n"
-        "SWING: EN PAUSE (Bias 12H + CTX 30m)\n"
+        "SWING: Bias 12H + CTX 30m (watchlist scalp uniquement)\n"
         "PULSE: Bias 1D + CTX 2H (CTX 30m optionnel)\n"
         "PULSE JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
@@ -1061,18 +1061,13 @@ def init_symbol_states(symbol):
             'st_context_4h': None, 'st_context_4h_ts': None,  # Daily / Pulse Jackpot
             'st_context_1d': None, 'st_context_1d_ts': None,  # Etat historique
             'st_context_12h': None, 'st_context_12h_ts': None,  # Etat historique / contexte marche
-            'bias_30m': None, 'bias_30m_ts': None,  # Scalp entree principale, calcule interne OKX
             'bias_2h': None, 'bias_2h_ts': None,    # Scalp entree secondaire, calcule interne OKX
             'bias_12h': None, 'bias_12h_ts': None,  # Swing
             'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
             'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
-            'rci_1h_10': None, 'rci_1h_30': None, 'rci_1h_50': None,  # Rapport info CTX4H + RCI1H + CTX10m
-            'rci_1h_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
-            'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Etat interne historique
-            'rci_4h_dir': None, 'rci_4h_chop': None, 'rci_4h_ts': None,
             'bias_1d': None, 'bias_1d_ts': None,    # Pulse, calcule interne OKX
             'bias_1h': None, 'bias_1h_ts': None,    # Etat historique
             'bias_4h': None, 'bias_4h_ts': None,    # Etat interne historique
@@ -1251,7 +1246,7 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
-            if tf == '12h' and CONFIG.get('ENABLE_SWING', True) and is_pulse_symbol(symbol):
+            if tf == '12h' and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
                 evaluate_swing(
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source='bias_12h',
@@ -1355,7 +1350,7 @@ def process_webhook(data):
             )
 
         # SWING : Bias 12H + CTX 30m.
-        if CONFIG.get('ENABLE_SWING', True) and is_pulse_symbol(symbol) and (
+        if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp') and (
             alert_type == 'st_context' and tf == '30m'
         ):
             evaluate_swing(
@@ -1588,7 +1583,6 @@ def sync_scalp():
         symbol_sent = []
 
         for sync_tf, sync_field, sync_label in (
-            ('30m', 'bias_30m', 'bias30m'),
             ('2h', 'bias_2h', 'bias2h'),
             ('4h', 'bias_4h', 'bias4h'),
             ('1d', 'bias_1d', 'bias1d'),
@@ -2125,27 +2119,6 @@ def update_okx_rci_30m(symbol):
     relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
 
 
-def update_okx_rci_1h(symbol):
-    """RCI 10/30/50 sur bougies 1H confirmees pour le rapport de confluence info."""
-    if not is_trade_symbol(symbol):
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=100), 60)
-    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['rci_1h_10'] = rci_values.get(10)
-        m['rci_1h_30'] = rci_values.get(30)
-        m['rci_1h_50'] = rci_values.get(50)
-        m['rci_1h_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(
-        f"[RCI OKX 1h] {symbol} 10={rci_values.get(10)} "
-        f"30={rci_values.get(30)} 50={rci_values.get(50)}"
-    )
-
-
 def update_okx_rci_2h(symbol):
     """RCI 10/30/50 sur bougies 2H confirmees pour le rapport info et SCALP."""
     if not is_trade_symbol(symbol):
@@ -2167,36 +2140,6 @@ def update_okx_rci_2h(symbol):
         persist_runtime_state()
     logger.info(f"[RCI OKX 2h] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
     relay_rci_to_scalp(symbol, '2h', rci_values, direction, is_chop, False, price=price)
-
-
-def update_okx_rci_4h(symbol):
-    """RCI 10/30/50 sur bougies 4H confirmees (OKX), tendance Pulse V6."""
-    if not is_pulse_symbol(symbol):
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=100), 240)
-    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
-    direction, is_chop = classify_rci_zone(rci_values.get(30), rci_values.get(50))
-    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['rci_4h_10'] = rci_values.get(10)
-        m['rci_4h_30'] = rci_values.get(30)
-        m['rci_4h_50'] = rci_values.get(50)
-        m['rci_4h_dir'] = direction
-        m['rci_4h_chop'] = is_chop
-        m['rci_4h_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(f"[RCI OKX 4h] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
-    evaluate_pulse_v3(
-        symbol,
-        trigger_dir=direction if direction in ('buy', 'sell') else None,
-        price=price or 0.0,
-        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-        event_id=f"okx_rci_4h_{symbol}_{int(now_ts)}",
-        source='okx_rci_4h',
-    )
 
 
 def relay_bias_to_scalp(symbol, value, tf):
@@ -2229,37 +2172,6 @@ def relay_bias_to_scalp(symbol, value, tf):
         logger.warning(f"[RELAY OKX BIAS {tf.upper()}] Erreur: {e}")
 
 
-def relay_bias_30m_to_scalp(symbol, value):
-    """Relaie vers le scalpbot le Bias 30m calcule en interne (OKX) — entree scalp
-    principale. Pas de champ 'signal' : ce n'est pas un trigger de flip."""
-    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
-        return
-    scalp_symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
-    if symbol not in scalp_symbols:
-        return
-    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
-    if not scalp_url:
-        return
-    relay_payload = {
-        'symbol': symbol,
-        'tf': '30m',
-        'type': 'bias',
-        'value': value if value in ('buy', 'sell') else 'neutral',
-    }
-    try:
-        try:
-            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
-        except requests.exceptions.Timeout:
-            logger.warning(f"[RELAY OKX BIAS 30m] {symbol} timeout, retry...")
-            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
-        if 200 <= resp.status_code < 300:
-            logger.info(f"[RELAY OKX BIAS 30m] {symbol}={relay_payload['value']} → scalpbot OK")
-        else:
-            logger.warning(f"[RELAY OKX BIAS 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        logger.warning(f"[RELAY OKX BIAS 30m] Erreur: {e}")
-
-
 def update_okx_bias_2h(symbol):
     """Bias 2H calcule en interne pour l'entree principale SCALP."""
     if not is_trade_symbol(symbol) or not get_symbol_config(symbol).get('scalp'):
@@ -2276,25 +2188,6 @@ def update_okx_bias_2h(symbol):
     logger.info(f"[BIAS OKX] {symbol} 2h={bias_value}")
     relay_bias_to_scalp(symbol, bias_value, '2h')
     price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
-
-
-def update_okx_bias_30m(symbol):
-    """Bias 30m calcule en interne pour l'entree secondaire SCALP."""
-    if not is_trade_symbol(symbol):
-        return
-    if not get_symbol_config(symbol).get('scalp'):
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '30m', limit=100), 30)
-    bias_value = calc_bias_okx(df) if df is not None else None
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['bias_30m'] = bias_value
-        m['bias_30m_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(f"[BIAS OKX] {symbol} 30m={bias_value}")
-    relay_bias_to_scalp(symbol, bias_value, '30m')
 
 
 def update_okx_bias_htf(symbol):
@@ -2352,17 +2245,17 @@ def update_okx_bias_htf(symbol):
         event_id=f"okx_bias_1d_{symbol}_{int(now_ts)}",
         source='okx_bias_1d',
     )
+    if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+        evaluate_swing(
+            symbol,
+            trigger_dir=None,
+            price=daily_price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_bias_12h_{symbol}_{int(now_ts)}",
+            source='okx_bias_12h',
+        )
     if is_pulse_symbol(symbol):
         pulse_price = daily_price
-        if CONFIG.get('ENABLE_SWING', False):
-            evaluate_swing(
-                symbol,
-                trigger_dir=None,
-                price=pulse_price,
-                exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-                event_id=f"okx_bias_12h_{symbol}_{int(now_ts)}",
-                source='okx_bias_12h',
-            )
         evaluate_pulse_v3(
             symbol,
             trigger_dir=None,
@@ -2525,7 +2418,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """SWING : Bias 12H + ST Context 30m alignes."""
-    if not CONFIG.get('ENABLE_SWING', True) or not is_pulse_symbol(symbol):
+    if not CONFIG.get('ENABLE_SWING', False) or not get_symbol_config(symbol).get('scalp'):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
@@ -2669,10 +2562,8 @@ def update_indicators_for_symbol(symbol):
             update_okx_bias_htf(symbol)
             return
         update_okx_bias_2h(symbol)
-        update_okx_bias_30m(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_2h(symbol)
-        update_okx_rci_4h(symbol)
         update_okx_zalt_12h(symbol)
         update_okx_bias_htf(symbol)
     except Exception as e:

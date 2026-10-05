@@ -112,7 +112,7 @@ CONFIG = {
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V7': os.environ.get('ENABLE_PULSE_V7', os.environ.get('ENABLE_PULSE_V6', '1')) == '1',
     'ENABLE_DAILY': True,
-    'ENABLE_SWING': True,  # Bias 12H + ST Context 30m, watchlist scalp uniquement
+    'ENABLE_SWING': True,  # ST Context 12H + 1H, watchlist scalp uniquement
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -720,7 +720,7 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H\n"
-        "SWING: Bias 12H + CTX 30m, veto CTX 2H oppose (watchlist scalp uniquement)\n"
+        "SWING: CTX 12H + CTX 1H, veto CTX 2H oppose (watchlist scalp uniquement)\n"
         "PULSE: Bias 1D + CTX 2H (CTX 30m optionnel)\n"
         "PULSE JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
@@ -784,6 +784,22 @@ def tv_required_signals():
             'tf': '30m',
             'max_age': 90 * 60,
             'warmup': 120 * 60,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ST Context 1H (Swing)',
+            'alert_type': 'st_context',
+            'tf': '1h',
+            'max_age': 3 * 3600,
+            'warmup': 4 * 3600,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ST Context 12H (Swing)',
+            'alert_type': 'st_context',
+            'tf': '12h',
+            'max_age': 24 * 3600,
+            'warmup': 25 * 3600,
             'scope': 'scalp',
         },
     ]
@@ -1057,12 +1073,12 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'st_context_1m': None, 'st_context_1m_ts': None,
             'st_context_10m': None, 'st_context_10m_ts': None,
+            'st_context_1h': None, 'st_context_1h_ts': None,
             'st_context_2h': None, 'st_context_2h_ts': None,
             'st_context_4h': None, 'st_context_4h_ts': None,  # Daily / Pulse Jackpot
             'st_context_1d': None, 'st_context_1d_ts': None,  # Etat historique
             'st_context_12h': None, 'st_context_12h_ts': None,  # Etat historique / contexte marche
             'bias_2h': None, 'bias_2h_ts': None,    # Scalp entree secondaire, calcule interne OKX
-            'bias_12h': None, 'bias_12h_ts': None,  # Swing
             'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
             'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
@@ -1200,6 +1216,9 @@ def process_webhook(data):
             elif tf == '30m':
                 m['st_context_30m'] = parsed_ctx
                 m['st_context_30m_ts'] = now_ts
+            elif tf == '1h':
+                m['st_context_1h'] = parsed_ctx
+                m['st_context_1h_ts'] = now_ts
             elif tf == '2h':
                 m['st_context_2h'] = parsed_ctx
                 m['st_context_2h_ts'] = now_ts
@@ -1226,7 +1245,7 @@ def process_webhook(data):
             m[f'st_context_lt_{tf}'] = parsed_ctx_lt
             m[f'st_context_lt_{tf}_ts'] = now_ts
 
-        if alert_type == 'bias' and tf in ('30m', '2h', '4h', '12h', '1d', '2d'):
+        if alert_type == 'bias' and tf in ('30m', '2h', '4h', '1d', '2d'):
             parsed_bias = parse_bias_value(val)
             m[f'bias_{tf}'] = parsed_bias
             m[f'bias_{tf}_ts'] = now_ts
@@ -1246,12 +1265,6 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
-            if tf == '12h' and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
-                evaluate_swing(
-                    symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
-                    event_id=event_id, source='bias_12h',
-                )
-
         if alert_type == 'rci' and tf == '2h':
             try:
                 rci10 = float(data.get('rci10'))
@@ -1335,7 +1348,7 @@ def process_webhook(data):
         # STRATEGIES ACTIVES
         # DAILY : Bias 2D + ST Context 4H
         # PULSE : Bias 1D + CTX 2H + CTX 30m; jackpot avec CTX 4H a la place du 30m
-        # SWING   : Bias 12H + CTX 30m, veto CTX 2H oppose
+        # SWING   : CTX 12H + CTX 1H, veto CTX 2H oppose
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf == '4h'
@@ -1349,9 +1362,9 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # SWING : Bias 12H + CTX 30m, veto si CTX 2H oppose.
+        # SWING : CTX 12H + CTX 1H, veto si CTX 2H oppose.
         if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp') and (
-            alert_type == 'st_context' and tf in ('30m', '2h')
+            alert_type == 'st_context' and tf in ('1h', '2h', '12h')
         ):
             evaluate_swing(
                 symbol,
@@ -2191,16 +2204,12 @@ def update_okx_bias_2h(symbol):
 
 
 def update_okx_bias_htf(symbol):
-    """Bias 4H pour Scalp, 12H pour Swing, 1D pour Pulse et 2D pour Daily."""
+    """Bias 4H pour Scalp, 1D pour Pulse et 2D pour Daily."""
     trade_symbol = is_trade_symbol(symbol)
     df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60) if trade_symbol else None
     bias_1h = calc_bias_okx(df_1h) if df_1h is not None else None
     df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240) if trade_symbol else None
     bias_4h = calc_bias_okx(df_4h) if df_4h is not None else None
-    bias_12h = None
-    if trade_symbol and CONFIG.get('ENABLE_SWING', False):
-        df_12h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
-        bias_12h = calc_bias_okx(df_12h) if df_12h is not None else None
     df_1d = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1d', limit=200), 1440)
     bias_1d = calc_bias_okx(df_1d) if df_1d is not None else None
     bias_2d = None
@@ -2222,15 +2231,13 @@ def update_okx_bias_htf(symbol):
         m['bias_1h_ts'] = now_ts
         m['bias_4h'] = bias_4h
         m['bias_4h_ts'] = now_ts
-        m['bias_12h'] = bias_12h
-        m['bias_12h_ts'] = now_ts
         if bias_1d is not None:
             m['bias_1d'] = bias_1d
             m['bias_1d_ts'] = now_ts
         m['bias_2d'] = bias_2d
         m['bias_2d_ts'] = now_ts
         persist_runtime_state()
-    logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 12h={bias_12h} 1d={bias_1d} 2d={bias_2d}")
+    logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 1d={bias_1d} 2d={bias_2d}")
     update_bias1d_ctx2h_report()
     if not trade_symbol:
         return
@@ -2245,15 +2252,6 @@ def update_okx_bias_htf(symbol):
         event_id=f"okx_bias_1d_{symbol}_{int(now_ts)}",
         source='okx_bias_1d',
     )
-    if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
-        evaluate_swing(
-            symbol,
-            trigger_dir=None,
-            price=daily_price,
-            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-            event_id=f"okx_bias_12h_{symbol}_{int(now_ts)}",
-            source='okx_bias_12h',
-        )
     if is_pulse_symbol(symbol):
         pulse_price = daily_price
         evaluate_pulse_v3(
@@ -2354,7 +2352,7 @@ def _rci_condition(m, tf, exp_ctx):
 
 
 def _st_context_condition(m, tf, exp_ctx):
-    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600, '2d': 5 * 24 * 3600}.get(tf, 0)
+    max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '1h': 3 * 3600, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600, '2d': 5 * 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
     return value, fresh, bool(fresh and value == exp_ctx)
 
@@ -2417,7 +2415,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING : Bias 12H + CTX 30m, bloquee par un CTX 2H oppose et frais."""
+    """SWING : CTX 12H + CTX 1H, bloquee par un CTX 2H oppose et frais."""
     if not CONFIG.get('ENABLE_SWING', False) or not get_symbol_config(symbol).get('scalp'):
         return False
     init_symbol_states(symbol)
@@ -2428,26 +2426,26 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        bias12h, bias12h_fresh, bias12h_ok = _bias_condition(m, '12h', exp_ctx)
-        ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
+        ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
+        ctx1h, ctx1h_fresh, ctx1h_ok = _st_context_condition(m, '1h', exp_ctx)
         ctx2h, ctx2h_fresh, ctx2h_veto = _st_context_veto(m, '2h', exp_ctx)
-        entry_ok = bias12h_ok and ctx30_ok and not ctx2h_veto
+        entry_ok = ctx12h_ok and ctx1h_ok and not ctx2h_veto
 
         logger.info(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
-            f"bias12h={bias12h}/{exp_ctx} fresh={bias12h_fresh} ok={bias12h_ok} "
-            f"[CTX 30m]={ctx30}/{exp_ctx} fresh={ctx30_fresh} ok={ctx30_ok} "
+            f"[CTX 12H]={ctx12h}/{exp_ctx} fresh={ctx12h_fresh} ok={ctx12h_ok} "
+            f"[CTX 1H]={ctx1h}/{exp_ctx} fresh={ctx1h_fresh} ok={ctx1h_ok} "
             f"[CTX 2H veto]={ctx2h} fresh={ctx2h_fresh} veto={ctx2h_veto} "
             f"entry={entry_ok}"
         )
 
         if entry_ok:
-            signal_type = 'swing_bias12h_ctx30m'
+            signal_type = 'swing_ctx12h_ctx1h'
             event_key = event_id or f"swing_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = [
                 "[OK] Entree SWING",
-                f"[OK] Bias 12H: {_ctx_label(bias12h)}",
-                f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
+                f"[OK] ST Context 12H: {_ctx_label(ctx12h)}",
+                f"[OK] ST Context 1H: {_ctx_label(ctx1h)}",
                 f"[ANTI-CHOP OK] ST Context 2H non oppose: {_ctx_label(ctx2h)}",
             ]
             opened = _open_strategy_entry(

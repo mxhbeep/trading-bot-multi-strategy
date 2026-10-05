@@ -720,7 +720,7 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H\n"
-        "SWING: Bias 12H + CTX 30m (watchlist scalp uniquement)\n"
+        "SWING: Bias 12H + CTX 30m, veto CTX 2H oppose (watchlist scalp uniquement)\n"
         "PULSE: Bias 1D + CTX 2H (CTX 30m optionnel)\n"
         "PULSE JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
@@ -1335,7 +1335,7 @@ def process_webhook(data):
         # STRATEGIES ACTIVES
         # DAILY : Bias 2D + ST Context 4H
         # PULSE : Bias 1D + CTX 2H + CTX 30m; jackpot avec CTX 4H a la place du 30m
-        # SWING   : Bias 12H + CTX 30m
+        # SWING   : Bias 12H + CTX 30m, veto CTX 2H oppose
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf == '4h'
@@ -1349,9 +1349,9 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # SWING : Bias 12H + CTX 30m.
+        # SWING : Bias 12H + CTX 30m, veto si CTX 2H oppose.
         if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp') and (
-            alert_type == 'st_context' and tf == '30m'
+            alert_type == 'st_context' and tf in ('30m', '2h')
         ):
             evaluate_swing(
                 symbol,
@@ -2417,7 +2417,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING : Bias 12H + ST Context 30m alignes."""
+    """SWING : Bias 12H + CTX 30m, bloquee par un CTX 2H oppose et frais."""
     if not CONFIG.get('ENABLE_SWING', False) or not get_symbol_config(symbol).get('scalp'):
         return False
     init_symbol_states(symbol)
@@ -2430,12 +2430,14 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
         bias12h, bias12h_fresh, bias12h_ok = _bias_condition(m, '12h', exp_ctx)
         ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
-        entry_ok = bias12h_ok and ctx30_ok
+        ctx2h, ctx2h_fresh, ctx2h_veto = _st_context_veto(m, '2h', exp_ctx)
+        entry_ok = bias12h_ok and ctx30_ok and not ctx2h_veto
 
         logger.info(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
             f"bias12h={bias12h}/{exp_ctx} fresh={bias12h_fresh} ok={bias12h_ok} "
             f"[CTX 30m]={ctx30}/{exp_ctx} fresh={ctx30_fresh} ok={ctx30_ok} "
+            f"[CTX 2H veto]={ctx2h} fresh={ctx2h_fresh} veto={ctx2h_veto} "
             f"entry={entry_ok}"
         )
 
@@ -2446,6 +2448,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 "[OK] Entree SWING",
                 f"[OK] Bias 12H: {_ctx_label(bias12h)}",
                 f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
+                f"[ANTI-CHOP OK] ST Context 2H non oppose: {_ctx_label(ctx2h)}",
             ]
             opened = _open_strategy_entry(
                 symbol,

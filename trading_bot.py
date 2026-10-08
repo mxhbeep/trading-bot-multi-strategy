@@ -732,6 +732,7 @@ def send_start_notification():
         "WATCHLIST INFO: Bias 1D + CTX 2H (76 assets, groupe Autre inclus)\n"
         "WATCHLIST JACKPOT: Bias 1D + CTX 2H + CTX 4H\n"
         "ENTREE 12H: ST Context 1D + flip ZALT 12H interne (50/1.15)\n"
+        "INFO 12H: CTX 1D + ZALT 12H + CTX 1H, veto CTX LT 1H oppose (watchlist Scalp)\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
         f"{now}"
@@ -789,6 +790,22 @@ def tv_required_signals():
             'tf': '30m',
             'max_age': 90 * 60,
             'warmup': 120 * 60,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ST Context 1H (Info 12H)',
+            'alert_type': 'st_context',
+            'tf': '1h',
+            'max_age': 3 * 3600,
+            'warmup': 4 * 3600,
+            'scope': 'scalp',
+        },
+        {
+            'label': 'ST Context LT 1H (Anti-chop Info 12H)',
+            'alert_type': 'st_context_lt',
+            'tf': '1h',
+            'max_age': 3 * 3600,
+            'warmup': 4 * 3600,
             'scope': 'scalp',
         },
     ]
@@ -1063,6 +1080,7 @@ def init_symbol_states(symbol):
             'st_context_1m': None, 'st_context_1m_ts': None,
             'st_context_10m': None, 'st_context_10m_ts': None,
             'st_context_1h': None, 'st_context_1h_ts': None,  # Qualite Swing optionnelle
+            'st_context_lt_1h': None, 'st_context_lt_1h_ts': None,
             'st_context_2h': None, 'st_context_2h_ts': None,
             'st_context_4h': None, 'st_context_4h_ts': None,  # Daily / Pulse Jackpot
             'st_context_1d': None, 'st_context_1d_ts': None,  # Etat historique
@@ -1082,6 +1100,7 @@ def init_symbol_states(symbol):
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
+            'ctx1d_zalt12h_ctx1h_info_active': None,
         }
 
 
@@ -1116,6 +1135,68 @@ def check_ctx1d_zalt12h_alert(symbol, price=0.0):
     )
     logger.info(f"[CTX1D ZALT12H] {symbol} {direction}")
     persist_runtime_state()
+    return True
+
+
+def check_ctx1d_zalt12h_ctx1h_info(symbol, price=0.0):
+    """Info Scalp: CTX 1D + ZALT 12H + CTX 1H, veto si CTX LT 1H oppose."""
+    if not get_symbol_config(symbol).get('scalp'):
+        return False
+
+    should_persist = False
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        ctx1d = m.get('st_context_1d')
+        zalt12h = m.get('zalt_12h')
+        ctx1h = m.get('st_context_1h')
+        lt1h = m.get('st_context_lt_1h')
+
+        ctx1d_fresh = is_signal_fresh(m.get('st_context_1d_ts'), 3 * 24 * 3600)
+        zalt12h_fresh = is_signal_fresh(m.get('zalt_12h_ts'), 24 * 3600)
+        ctx1h_fresh = is_signal_fresh(m.get('st_context_1h_ts'), 3 * 3600)
+        lt1h_fresh = is_signal_fresh(m.get('st_context_lt_1h_ts'), 3 * 3600)
+
+        direction_value = None
+        if (
+            ctx1d_fresh and zalt12h_fresh and ctx1h_fresh
+            and ctx1d in ('buy', 'sell') and zalt12h == ctx1d and ctx1h == ctx1d
+        ):
+            opposite = 'sell' if ctx1d == 'buy' else 'buy'
+            if not (lt1h_fresh and lt1h == opposite):
+                direction_value = ctx1d
+
+        active = m.get('ctx1d_zalt12h_ctx1h_info_active')
+        if direction_value is None:
+            if active is not None:
+                m['ctx1d_zalt12h_ctx1h_info_active'] = None
+                should_persist = True
+            send_alert = False
+        elif active == direction_value:
+            send_alert = False
+        else:
+            m['ctx1d_zalt12h_ctx1h_info_active'] = direction_value
+            should_persist = True
+            send_alert = True
+
+    if should_persist:
+        persist_runtime_state()
+    if not send_alert:
+        return False
+
+    direction = 'LONG' if direction_value == 'buy' else 'SHORT'
+    lt_status = _ctx_label(lt1h) if lt1h_fresh else 'INDISPONIBLE / PERIME'
+    send_info(
+        f"<b>[INFO] CTX 1D + ZALT 12H + CTX 1H</b> {symbol}\n"
+        "--------------------\n"
+        f"Direction: {direction}\n"
+        f"Price: ${format_price(price)}\n"
+        f"[OK] ST Context 1D: {_ctx_label(ctx1d)}\n"
+        f"[OK] ZALT 12H: {_ctx_label(zalt12h)}\n"
+        f"[OK] ST Context 1H: {_ctx_label(ctx1h)}\n"
+        f"[ANTI-CHOP OK] ST Context LT 1H non oppose: {lt_status}"
+    )
+    logger.info(f"[INFO CTX1D ZALT12H CTX1H] {symbol} {direction}")
     return True
 
 
@@ -1229,11 +1310,15 @@ def process_webhook(data):
                 update_bias1d_ctx2h_report()
             if tf == '1d':
                 check_ctx1d_zalt12h_alert(symbol, price=price)
+            if tf in ('1h', '1d'):
+                check_ctx1d_zalt12h_ctx1h_info(symbol, price=price)
 
-        if alert_type == 'st_context_lt' and tf in ('10m', '30m', '12h'):
+        if alert_type == 'st_context_lt' and tf in ('10m', '30m', '1h', '12h'):
             parsed_ctx_lt = parse_st_context_value(val)
             m[f'st_context_lt_{tf}'] = parsed_ctx_lt
             m[f'st_context_lt_{tf}_ts'] = now_ts
+            if tf == '1h':
+                check_ctx1d_zalt12h_ctx1h_info(symbol, price=price)
 
         if alert_type == 'bias' and tf in ('30m', '2h', '4h', '12h', '1d', '2d'):
             parsed_bias = parse_bias_value(val)
@@ -1297,6 +1382,8 @@ def process_webhook(data):
                     if zalt_signal in ('trend_flip', 'flip'):
                         m[f'last_zalt_{tf}_signal_ts'] = now_ts
                     logger.info(f"[ZALT {tf.upper()}] {symbol} = {parsed_zalt} signal={zalt_signal or 'state'}")
+                    if tf == '12h':
+                        check_ctx1d_zalt12h_ctx1h_info(symbol, price=price)
                     if tf == '12h' and zalt_signal in ('trend_flip', 'flip'):
                         check_ctx1d_zalt12h_alert(symbol, price=price)
                 else:
@@ -2022,6 +2109,7 @@ def update_okx_zalt_12h(symbol):
                 logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']}")
         persist_runtime_state()
 
+    check_ctx1d_zalt12h_ctx1h_info(symbol, price=price)
     if is_flip:
         check_ctx1d_zalt12h_alert(symbol, price=price)
 

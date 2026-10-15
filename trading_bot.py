@@ -1711,7 +1711,7 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: RCI2H {e}")
 
-        if get_symbol_config(symbol).get('scalp'):
+        if symbol in scalp_symbols:
             zalt12h = m.get('zalt_12h')
             try:
                 payload = {
@@ -2019,10 +2019,10 @@ def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
 
 
 def relay_zalt_12h_to_scalp(symbol, direction, price, is_flip):
-    """Relaie l'etat ZALT 12H aux seuls actifs de la watchlist Scalp."""
+    """Relaie l'etat ZALT 12H aux 38 actifs traites par le scalpbot."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
         return
-    if not get_symbol_config(symbol).get('scalp'):
+    if symbol not in get_scalpbot_symbols():
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:

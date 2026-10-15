@@ -1711,6 +1711,26 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: RCI2H {e}")
 
+        if get_symbol_config(symbol).get('scalp'):
+            zalt12h = m.get('zalt_12h')
+            try:
+                payload = {
+                    'symbol': symbol,
+                    'strategy': 'scalp',
+                    'tf': '12h',
+                    'type': 'zalt',
+                    'value': zalt12h if zalt12h in ('buy', 'sell') else 'neutral',
+                    'price': 0,
+                    'event_id': f"sync_scalp_zalt12h_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('zalt12h')
+                else:
+                    errors.append(f"{symbol}: ZALT12H HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ZALT12H {e}")
+
         ctx10 = m.get('st_context_10m')
         try:
             payload = {
@@ -1998,6 +2018,40 @@ def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
         logger.warning(f"[RELAY OKX ZALT 30m] Erreur: {e}")
 
 
+def relay_zalt_12h_to_scalp(symbol, direction, price, is_flip):
+    """Relaie l'etat ZALT 12H aux seuls actifs de la watchlist Scalp."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    if not get_symbol_config(symbol).get('scalp'):
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    relay_payload = {
+        'symbol': symbol,
+        'strategy': 'scalp',
+        'tf': '12h',
+        'type': 'zalt',
+        'value': direction,
+        'price': price,
+        'event_id': f"okx_zalt_12h_{symbol}_{int(time.time())}",
+    }
+    if is_flip:
+        relay_payload['signal'] = 'trend_flip'
+    try:
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[RELAY OKX ZALT 12H] {symbol} timeout, retry...")
+            resp = requests.post(f"{scalp_url}/webhook", json=relay_payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX ZALT 12H] {symbol}={direction} flip={is_flip} -> scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX ZALT 12H] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT 12H] Erreur: {e}")
+
+
 def update_okx_zalt_htf(symbol):
     """ZALT 30m interne 34/1.2, utilise comme trigger Pulse et Swing."""
     if not is_trade_symbol(symbol):
@@ -2115,6 +2169,8 @@ def update_okx_zalt_12h(symbol):
                 logger.info(f"[ZALT OKX] {symbol} 12h={payload['trend']}")
         persist_runtime_state()
 
+    if payload and payload.get('trend') in ('buy', 'sell'):
+        relay_zalt_12h_to_scalp(symbol, payload['trend'], price, is_flip)
     if is_flip:
         check_ctx1d_zalt12h_alert(symbol, price=price)
     check_swing_b(symbol, price=price)
@@ -2122,7 +2178,7 @@ def update_okx_zalt_12h(symbol):
 
 def calc_bias_okx(df, ema_len=17, sma_len=40):
     """Biais interne calcule sur les closes confirmees.
-    EMA17/SMA40 par defaut; les appels 1H et 12H utilisent EMA21/SMA55.
+    EMA17/SMA40 par defaut; les appels 1H, 4H et 12H utilisent EMA21/SMA55.
     buy si close > ema et ema > sma. sell si close < ema et ema < sma. sinon None (neutre)."""
     try:
         close = df['close']
@@ -2327,7 +2383,7 @@ def update_okx_bias_htf(symbol):
     df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60) if trade_symbol else None
     bias_1h = calc_bias_okx(df_1h, ema_len=21, sma_len=55) if df_1h is not None else None
     df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240) if trade_symbol else None
-    bias_4h = calc_bias_okx(df_4h) if df_4h is not None else None
+    bias_4h = calc_bias_okx(df_4h, ema_len=21, sma_len=55) if df_4h is not None else None
     bias_12h = None
     if trade_symbol and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
         df_12h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)

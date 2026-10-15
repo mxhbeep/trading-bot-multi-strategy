@@ -30,7 +30,7 @@ CONFIG = {
         'ASTER/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'AVAX/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'AXS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'BB/USDT':     {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'BB/USDT':     {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'BCH/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'BNB/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'BONK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
@@ -39,10 +39,10 @@ CONFIG = {
         'COMP/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'CRV/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'CVX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'CYS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'CYS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'DASH/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'DUSK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'DUSK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'DYDX/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'EGLD/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'EIGEN/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -59,7 +59,7 @@ CONFIG = {
         'ICP/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'IMX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'INJ/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'JASMY/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'JASMY/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'JTO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LDO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LINEA/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -72,13 +72,13 @@ CONFIG = {
         'PENGU/USDT':  {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'PEPE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'PIXEL/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'QNT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'QNT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'RAY/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'NEAR/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ONDO/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True},
-        'ROSE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'ROSE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'SAND/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SEI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SKY/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -90,11 +90,11 @@ CONFIG = {
         'TIA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'UNI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'USELESS/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
-        'VET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'VET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'XAI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'XAI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'XLM/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'XMR/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'XMR/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'XPL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ZEC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
@@ -2318,6 +2318,11 @@ def update_okx_bias_2h(symbol):
 
 def update_okx_bias_htf(symbol):
     """Bias 4H pour Scalp, 12H pour Swing, 1D pour Pulse et 2D pour Daily."""
+    if not get_symbol_config(symbol).get('okx_market_data', True):
+        # L'actif reste dans les rapports et conserve les valeurs recues de TradingView.
+        # On evite seulement les requetes OKX connues comme invalides.
+        update_bias1d_ctx2h_report()
+        return
     trade_symbol = is_trade_symbol(symbol)
     df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60) if trade_symbol else None
     bias_1h = calc_bias_okx(df_1h, ema_len=21, sma_len=55) if df_1h is not None else None
@@ -2408,10 +2413,20 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
         if pos and pos.get('direction') != direction:
             SCALP_POSITIONS.pop(pos_key, None)
             pos = None
-        if pos is not None or not should_send(
+        if pos is not None:
+            logger.info(
+                f"[{strategy}] Entree ignoree {symbol} {direction}: "
+                f"position logique deja ouverte ({pos.get('direction')})"
+            )
+            return False
+        if not should_send(
             symbol, f"{strategy.lower()}_entry_{signal_type}_{exp_ctx}",
             event_id=event_id, cooldown=cooldown,
         ):
+            logger.info(
+                f"[{strategy}] Entree ignoree {symbol} {direction}: "
+                "cooldown actif ou evenement deja traite"
+            )
             return False
         SCALP_POSITIONS[pos_key] = {
             'direction': direction, 'entry_count': 1, 'signal_type': signal_type,

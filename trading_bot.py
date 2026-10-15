@@ -1109,6 +1109,10 @@ def init_symbol_states(symbol):
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
+            'rci_12h_10': None, 'rci_12h_30': None, 'rci_12h_50': None,  # Qualite Pulse / Swing
+            'rci_12h_dir': None, 'rci_12h_chop': None, 'rci_12h_ts': None,
+            'rci_1d_10': None, 'rci_1d_30': None, 'rci_1d_50': None,  # Qualite Daily
+            'rci_1d_dir': None, 'rci_1d_chop': None, 'rci_1d_ts': None,
             'bias_1d': None, 'bias_1d_ts': None,    # Pulse, calcule interne OKX
             'bias_1h': None, 'bias_1h_ts': None,    # Etat historique
             'bias_4h': None, 'bias_4h_ts': None,    # Etat interne historique
@@ -2240,6 +2244,30 @@ def update_okx_rci_2h(symbol):
     relay_rci_to_scalp(symbol, '2h', rci_values, direction, is_chop, False, price=price)
 
 
+def update_okx_rci_quality(symbol, tf, timeframe_minutes):
+    """RCI 10/30/50 HTF utilise uniquement comme qualite non bloquante."""
+    if not is_trade_symbol(symbol):
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=100), timeframe_minutes)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    direction, is_chop = classify_rci_zone(rci_values.get(30), rci_values.get(50))
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m[f'rci_{tf}_10'] = rci_values.get(10)
+        m[f'rci_{tf}_30'] = rci_values.get(30)
+        m[f'rci_{tf}_50'] = rci_values.get(50)
+        m[f'rci_{tf}_dir'] = direction
+        m[f'rci_{tf}_chop'] = is_chop
+        m[f'rci_{tf}_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(
+        f"[RCI OKX {tf.upper()}] {symbol} 10={rci_values.get(10)} "
+        f"30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}"
+    )
+
+
 def relay_bias_to_scalp(symbol, value, tf):
     """Relaie un Bias interne vers le scalpbot."""
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -2501,6 +2529,32 @@ def _rci_condition(m, tf, exp_ctx):
     return value, fresh, bool(fresh and value == exp_ctx)
 
 
+def _rci_extreme_quality(m, tf, exp_ctx):
+    """Qualite contrarienne: LONG <= -75, SHORT >= +75. Jamais bloquante."""
+    max_age = {'12h': 24 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
+    value = m.get(f'rci_{tf}_10')
+    fresh = is_signal_fresh(m.get(f'rci_{tf}_ts'), max_age)
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = None
+    aligned = bool(
+        fresh and value is not None
+        and ((exp_ctx == 'buy' and value <= -75) or (exp_ctx == 'sell' and value >= 75))
+    )
+    return value, fresh, aligned
+
+
+def _rci_quality_line(m, tf, exp_ctx):
+    value, fresh, aligned = _rci_extreme_quality(m, tf, exp_ctx)
+    label = tf.upper()
+    if aligned:
+        return f"[QUALITE RCI EXTREME] RCI court {label}: {value:.1f} (seuil +/-75)"
+    if fresh and value is not None:
+        return f"[RCI NON CONFIRME - NON BLOQUANT] RCI court {label}: {value:.1f} (hors zone extreme +/-75)"
+    return f"[RCI INDISPONIBLE - NON BLOQUANT] RCI court {label}: donnee absente ou perimee"
+
+
 def _st_context_condition(m, tf, exp_ctx):
     max_age = {'1m': 5 * 60, '3m': 10 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '1h': 3 * 3600, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600, '2d': 5 * 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
@@ -2570,6 +2624,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
                 f"[ANTI-CHOP OK] ST Context 2D non oppose: {_ctx_label(ctx2d)}",
                 f"[TRIGGER] Flip ZALT 2H: {_ctx_label(exp_ctx)} (60 / 1.20)",
+                _rci_quality_line(m, '1d', exp_ctx),
             ]
             opened = _open_strategy_entry(
                 symbol,
@@ -2669,6 +2724,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] ST Context 1H: {_ctx_label(ctx1h)}",
                 f"[ANTI-CHOP OK] ST Context 2H non oppose: {_ctx_label(ctx2h)}",
                 f"[TRIGGER] Flip ZALT 30m: {_ctx_label(exp_ctx)} (34 / 1.20)",
+                _rci_quality_line(m, '12h', exp_ctx),
             ]
             opened = _open_strategy_entry(
                 symbol,
@@ -2689,6 +2745,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] ZALT 12H: {_ctx_label(zalt12h)}",
                 f"[OK] ST Context 1H: {_ctx_label(ctx1h)}",
                 f"[TRIGGER] Flip ZALT 30m: {_ctx_label(exp_ctx)} (34 / 1.20)",
+                _rci_quality_line(m, '12h', exp_ctx),
             ]
             opened = _open_strategy_entry(
                 symbol,
@@ -2807,6 +2864,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             else:
                 detail_lines.append(f"[INFO NON BLOQUANTE] ST Context 2D: {_ctx_label(ctx2d)}")
             detail_lines.append(f"[TRIGGER] Flip ZALT 30m: {_ctx_label(exp_ctx)} (34 / 1.20)")
+            detail_lines.append(_rci_quality_line(m, '12h', exp_ctx))
             if rci2h_fresh and rci2h_short is not None:
                 status = 'ALIGNE' if rci2h_aligned else 'NON ALIGNE'
                 detail_lines.append(f"[MANUEL NON BLOQUANT] RCI court 2H: {rci2h_short:.1f} ({status}, seuil +/-75)")
@@ -2836,6 +2894,8 @@ def update_indicators_for_symbol(symbol):
         update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_2h(symbol)
+        update_okx_rci_quality(symbol, '12h', 12 * 60)
+        update_okx_rci_quality(symbol, '1d', 24 * 60)
         update_okx_zalt_htf(symbol)
         update_okx_zalt_2h(symbol)
         update_okx_zalt_12h(symbol)

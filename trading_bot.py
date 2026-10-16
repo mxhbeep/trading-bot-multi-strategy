@@ -1109,6 +1109,8 @@ def init_symbol_states(symbol):
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
+            'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Qualite/veto Scalp B
+            'rci_4h_dir': None, 'rci_4h_chop': None, 'rci_4h_ts': None,
             'rci_12h_10': None, 'rci_12h_30': None, 'rci_12h_50': None,  # Qualite Pulse / Swing
             'rci_12h_dir': None, 'rci_12h_chop': None, 'rci_12h_ts': None,
             'rci_1d_10': None, 'rci_1d_30': None, 'rci_1d_50': None,  # Qualite Daily
@@ -1351,7 +1353,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('5m', '10m', '30m', '2h', '4h', '12h'):
+                if tf in ('5m', '10m', '30m', '2h', '12h'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1540,8 +1542,6 @@ def telegram_callback():
         callback_data = callback.get('data', '')
         chat_id       = callback.get('message', {}).get('chat', {}).get('id')
         msg_id        = callback.get('message', {}).get('message_id')
-        user          = callback.get('from', {}).get('first_name', 'User')
-
         tok = CONFIG.get('TELEGRAM_BOT_TOKEN', '')
         if tok and callback_id:
             requests.post(f"https://api.telegram.org/bot{tok}/answerCallbackQuery",
@@ -1880,8 +1880,6 @@ ZALT_HTF_SETTINGS = {
     '30m': {'length': 34, 'mult': 1.2},
     '2h':  {'length': 60, 'mult': 1.2},
     '12h': {'length': 50, 'mult': 1.15},
-    '6h':  {'length': 50, 'mult': 1.2},
-    '1d':  {'length': 50, 'mult': 1.3},
 }
 
 
@@ -2301,7 +2299,7 @@ def update_okx_rci_2h(symbol):
 
 
 def update_okx_rci_quality(symbol, tf, timeframe_minutes):
-    """RCI 10/30/50 HTF utilise uniquement comme qualite non bloquante."""
+    """Calcule le RCI 10/30/50 HTF utilise par les filtres de qualite/veto."""
     if not is_trade_symbol(symbol):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, tf, limit=100), timeframe_minutes)
@@ -2322,6 +2320,9 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
         f"[RCI OKX {tf.upper()}] {symbol} 10={rci_values.get(10)} "
         f"30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}"
     )
+    if tf == '4h':
+        price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
+        relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
 
 
 def relay_bias_to_scalp(symbol, value, tf):
@@ -2369,9 +2370,6 @@ def update_okx_bias_2h(symbol):
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 2h={bias_value}")
     relay_bias_to_scalp(symbol, bias_value, '2h')
-    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
-
-
 def update_okx_bias_htf(symbol):
     """Bias 4H pour Scalp, 12H pour Swing, 1D pour Pulse et 2D pour Daily."""
     if not get_symbol_config(symbol).get('okx_market_data', True):
@@ -2460,7 +2458,10 @@ def update_okx_bias_htf(symbol):
 
 
 
-def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, price, exchange_name, detail_lines, cooldown=3600):
+def _open_strategy_entry(
+    symbol, strategy, direction, signal_type, event_id, price, exchange_name,
+    detail_lines, cooldown=3600, quality=False,
+):
     """Cree une entree unique et envoie l'alerte Telegram correspondante."""
     pos_key = f"{symbol}_{strategy}"
     exp_ctx = 'buy' if direction == 'LONG' else 'sell'
@@ -2491,8 +2492,9 @@ def _open_strategy_entry(symbol, strategy, direction, signal_type, event_id, pri
     emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
     telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
+    alert_kind = 'QUALITE' if quality else 'ENTREE'
     message = (
-        f"{emoji} <b>[{strategy_label} - ENTREE]</b> {symbol}\n"
+        f"{emoji} <b>[{strategy_label} - {alert_kind}]</b> {symbol}\n"
         f"--------------------\nDirection: {direction}\n"
         f"Price: ${format_price(price)}\nExchange: {exchange_name.upper()}\n"
         f"Time: {datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
@@ -2616,13 +2618,26 @@ def _rci_extreme_quality(m, tf, exp_ctx):
     return value, fresh, aligned
 
 
+def _rci_extreme_veto(m, tf, exp_ctx):
+    """Veto contrarien seulement si le RCI court est en extreme oppose."""
+    value, fresh, _ = _rci_extreme_quality(m, tf, exp_ctx)
+    veto = bool(
+        fresh and value is not None
+        and ((exp_ctx == 'buy' and value >= 75) or (exp_ctx == 'sell' and value <= -75))
+    )
+    return value, fresh, veto
+
+
 def _rci_quality_line(m, tf, exp_ctx):
     value, fresh, aligned = _rci_extreme_quality(m, tf, exp_ctx)
     label = tf.upper()
     if aligned:
         return f"[QUALITE RCI EXTREME] RCI court {label}: {value:.1f} (seuil +/-75)"
     if fresh and value is not None:
-        return f"[RCI NON CONFIRME - NON BLOQUANT] RCI court {label}: {value:.1f} (hors zone extreme +/-75)"
+        adverse = (exp_ctx == 'buy' and value > 0) or (exp_ctx == 'sell' and value < 0)
+        if adverse:
+            return f"[AVERTISSEMENT NON BLOQUANT] RCI court {label}: {value:.1f} du mauvais cote de zero"
+        return f"[RCI OK - NON EXTREME] RCI court {label}: {value:.1f} (seuil qualite +/-75)"
     return f"[RCI INDISPONIBLE - NON BLOQUANT] RCI court {label}: donnee absente ou perimee"
 
 
@@ -2740,12 +2755,14 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             _bias_condition(m, '12h', exp)[2]
             and _st_context_condition(m, '1h', exp)[2]
             and not _st_context_veto(m, '2h', exp)[2]
+            and not _rci_extreme_veto(m, '12h', exp)[2]
         )),
         ('SWING_B', 3600, lambda exp: (
             armed_fresh and armed_dir == exp
             and _st_context_condition(m, '1d', exp)[2]
             and _zalt_condition(m, '12h', exp)[2]
             and _st_context_condition(m, '1h', exp)[2]
+            and not _rci_extreme_veto(m, '12h', exp)[2]
         )),
     ):
         with STATE_LOCK:
@@ -2765,14 +2782,16 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         bias12h, bias12h_fresh, bias12h_ok = _bias_condition(m, '12h', exp_ctx)
         ctx1h, ctx1h_fresh, ctx1h_ok = _st_context_condition(m, '1h', exp_ctx)
         ctx2h, ctx2h_fresh, ctx2h_veto = _st_context_veto(m, '2h', exp_ctx)
-        armed_a = bias12h_ok and ctx1h_ok and not ctx2h_veto
+        rci12h, rci12h_fresh, rci12h_quality = _rci_extreme_quality(m, '12h', exp_ctx)
+        _, _, rci12h_veto = _rci_extreme_veto(m, '12h', exp_ctx)
+        armed_a = bias12h_ok and ctx1h_ok and not ctx2h_veto and not rci12h_veto
         entry_a_ok = armed_a and is_entry_trigger
 
         ctx1d, ctx1d_fresh, ctx1d_ok = _st_context_condition(m, '1d', exp_ctx)
         zalt12h, zalt12h_fresh, zalt12h_ok = _zalt_condition(m, '12h', exp_ctx)
         armed_b = bool(
             armed_fresh and armed_dir == exp_ctx
-            and ctx1d_ok and zalt12h_ok and ctx1h_ok
+            and ctx1d_ok and zalt12h_ok and ctx1h_ok and not rci12h_veto
         )
         entry_b_ok = armed_b and is_entry_trigger
 
@@ -2783,6 +2802,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             f"ctx2h={ctx2h} fresh={ctx2h_fresh} veto={ctx2h_veto} armed_a={armed_a} "
             f"ctx1d={ctx1d}/{exp_ctx} fresh={ctx1d_fresh} ok={ctx1d_ok} "
             f"zalt12h={zalt12h}/{exp_ctx} fresh={zalt12h_fresh} ok={zalt12h_ok} "
+            f"rci12h={rci12h} fresh={rci12h_fresh} quality={rci12h_quality} veto={rci12h_veto} "
             f"prep_b={armed_dir}/{armed_fresh} armed_b={armed_b} "
             f"trigger_zalt30m={is_entry_trigger} entry_a={entry_a_ok} entry_b={entry_b_ok}"
         )
@@ -2807,6 +2827,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 exchange_name,
                 detail_lines,
                 cooldown=14400,
+                quality=rci12h_quality,
             ) or opened
         if entry_b_ok:
             event_key = event_id or f"swing_b_{symbol}_{int(time.time())}_{exp_ctx}"
@@ -2828,6 +2849,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 exchange_name,
                 detail_lines,
                 cooldown=14400,
+                quality=rci12h_quality,
             ) or opened
     return opened
 
@@ -2866,16 +2888,10 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        ctx30 = m.get('st_context_30m')
-        ctx30_fresh = is_signal_fresh(m.get('st_context_30m_ts'), 90 * 60)
-        ctx30_ok = ctx30 == exp_ctx
+        ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
         bias1d, bias1d_fresh, bias1d_ok = _bias_condition(m, '1d', exp_ctx)
-        ctx2h = m.get('st_context_2h')
-        ctx2h_fresh = is_signal_fresh(m.get('st_context_2h_ts'), 6 * 3600)
-        ctx2h_ok = ctx2h == exp_ctx
-        ctx4h = m.get('st_context_4h')
-        ctx4h_fresh = is_signal_fresh(m.get('st_context_4h_ts'), 12 * 3600)
-        ctx4h_ok = ctx4h == exp_ctx
+        ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
+        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         ctx2d, ctx2d_fresh, ctx2d_veto = _st_context_veto(m, '2d', exp_ctx)
         ctx2d_aligned = bool(ctx2d_fresh and ctx2d == exp_ctx)
         armed = bias1d_ok and ctx2h_ok
@@ -2965,6 +2981,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_2h(symbol)
+        update_okx_rci_quality(symbol, '4h', 4 * 60)
         update_okx_rci_quality(symbol, '12h', 12 * 60)
         update_okx_rci_quality(symbol, '1d', 24 * 60)
         update_okx_zalt_htf(symbol)

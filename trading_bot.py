@@ -579,7 +579,7 @@ def send_telegram_scalp(msg):
 def send_telegram_with_buttons(msg, token=None, chat_id=None,
                                journal_symbol=None, journal_strategy=None,
                                journal_direction=None, journal_price=None,
-                               telegram_channel='telegram_alerts'):
+                               telegram_channel='telegram_alerts', ntfy=False):
     """Envoie un message Telegram avec bouton Journal (optionnel)."""
     rows = []
     if journal_symbol and journal_strategy and journal_direction and journal_price is not None and CONFIG.get('JOURNAL_BOT_URL'):
@@ -603,7 +603,7 @@ def send_telegram_with_buttons(msg, token=None, chat_id=None,
         msg,
         priority=5,
         telegram=True,
-        ntfy=False,
+        ntfy=ntfy,
         telegram_channel=telegram_channel,
         reply_markup=keyboard,
     )
@@ -1162,7 +1162,8 @@ def check_ctx1d_zalt12h_alert(symbol, price=0.0):
         f"Price: ${format_price(price)}\n"
         f"[OK] ST Context 1D: {_ctx_label(ctx1d)}\n"
         f"[OK] Flip ZALT 12H: {_ctx_label(zalt12h)}\n"
-        "[ATTENTE] ST Context 1H aligne, puis prochain flip ZALT 30m"
+        "[ATTENTE] ST Context 1H aligne, puis prochain flip ZALT 30m",
+        ntfy=True,
     )
     logger.info(f"[PREP SWING B] {symbol} {direction}")
     return True
@@ -1190,7 +1191,8 @@ def send_close_alert(symbol, strategy, direction, price, reason):
             f"📈 Direction était: {direction}\n"
             f"💰 Price: ${format_price(price)}\n"
             f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-            f"📋 Raison: {reason}"
+            f"📋 Raison: {reason}",
+            ntfy=True,
         )
         persist_runtime_state()
         logger.info(f"[{strategy}] Position clôturée: {symbol} {direction} —{reason}")
@@ -2503,7 +2505,7 @@ def _open_strategy_entry(
     if telegram_channel == 'telegram_scalp2h':
         result = send_notification(
             notification_title_from_message(message), message, priority=5, tags=[],
-            telegram=True, ntfy=False, telegram_channel=telegram_channel,
+            telegram=True, ntfy=True, telegram_channel=telegram_channel,
         )
         telegram_ok = bool(result.get(telegram_channel))
     else:
@@ -2512,6 +2514,7 @@ def _open_strategy_entry(
             journal_symbol=symbol, journal_strategy=strategy,
             journal_direction=direction, journal_price=price,
             telegram_channel=telegram_channel,
+            ntfy=True,
         )
     if not telegram_ok:
         logger.error(f"[{strategy}] Echec envoi Telegram via {telegram_channel}: {symbol} {direction}")

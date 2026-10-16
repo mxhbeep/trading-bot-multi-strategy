@@ -1682,25 +1682,30 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
-        rci2h_dir = m.get('rci_2h_dir')
-        try:
-            payload = {
-                'symbol': symbol,
-                'tf': '2h',
-                'type': 'rci',
-                'value': rci2h_dir if rci2h_dir in ('buy', 'sell') else 'chop',
-                'chop': rci2h_dir not in ('buy', 'sell'),
-                'rci10': m.get('rci_2h_10'),
-                'rci30': m.get('rci_2h_30'),
-                'rci50': m.get('rci_2h_50'),
-            }
-            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-            if resp.status_code == 200:
-                symbol_sent.append('rci2h')
-            else:
-                errors.append(f"{symbol}: RCI2H HTTP {resp.status_code}")
-        except Exception as e:
-            errors.append(f"{symbol}: RCI2H {e}")
+        for rci_tf in ('30m', '2h', '4h'):
+            rci_dir = m.get(f'rci_{rci_tf}_dir')
+            rci10 = m.get(f'rci_{rci_tf}_10')
+            if rci10 is None:
+                continue
+            try:
+                payload = {
+                    'symbol': symbol,
+                    'tf': rci_tf,
+                    'type': 'rci',
+                    'sync': True,
+                    'value': rci_dir if rci_dir in ('buy', 'sell') else 'chop',
+                    'chop': rci_dir not in ('buy', 'sell'),
+                    'rci10': rci10,
+                    'rci30': m.get(f'rci_{rci_tf}_30'),
+                    'rci50': m.get(f'rci_{rci_tf}_50'),
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append(f'rci{rci_tf}')
+                else:
+                    errors.append(f"{symbol}: RCI{rci_tf.upper()} HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: RCI{rci_tf.upper()} {e}")
 
         if symbol in scalp_symbols:
             zalt12h = m.get('zalt_12h')
@@ -2950,11 +2955,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 quality=rci12h_quality,
             ) or opened
     return opened
-
-
-def check_pulse_v4_prep(symbol, price=0.0, source='state_refresh'):
-    """Pulse n'a pas d'alerte PREP separee."""
-    return False
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):

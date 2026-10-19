@@ -2124,15 +2124,14 @@ def update_okx_zalt_12h(symbol):
 def calc_bias_okx(df, ema_len=17, sma_len=40):
     """Biais interne calcule sur les closes confirmees.
     EMA17/SMA40 par defaut; les appels 1H, 4H et 12H utilisent EMA21/SMA55.
-    buy si close > ema et ema > sma. sell si close < ema et ema < sma. sinon None (neutre)."""
+    Biais binaire: buy si EMA > SMA, sell si EMA < SMA."""
     try:
         close = df['close']
         ema_val = close.ewm(span=ema_len, adjust=False).mean().iloc[-1]
         sma_val = close.rolling(window=sma_len).mean().iloc[-1]
-        close_val = float(close.iloc[-1])
-        if close_val > ema_val and ema_val > sma_val:
+        if ema_val > sma_val:
             return 'buy'
-        if close_val < ema_val and ema_val < sma_val:
+        if ema_val < sma_val:
             return 'sell'
         return None
     except Exception:

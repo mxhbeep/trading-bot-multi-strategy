@@ -194,7 +194,7 @@ def init_redis():
 
     # ========================================================================
     # Redis : etat DAILY + PULSE.
-    # Relay scalp (webhook TV) = ST Context 10m/30m.
+    # Relay scalp (webhook TV) = ST Context 30m.
     # ZALT 30m est relaye separement (calcul interne OKX, voir relay_zalt_30m_to_scalp).
     # ========================================================================
 def persist_runtime_state():
@@ -809,14 +809,6 @@ def tv_required_signals():
             'scope': 'trade',
         },
         {
-            'label': 'ST Context 10m (Scalp)',
-            'alert_type': 'st_context',
-            'tf': '10m',
-            'max_age': 45 * 60,
-            'warmup': 90 * 60,
-            'scope': 'scalp',
-        },
-        {
             'label': 'ST Context 30m (Scalp)',
             'alert_type': 'st_context',
             'tf': '30m',
@@ -1105,7 +1097,6 @@ def init_symbol_states(symbol):
             # Nouveaux états pour CONTEXT v2 et SCALP
             'st_context_1m': None, 'st_context_1m_ts': None,
             'st_context_5m': None, 'st_context_5m_ts': None,
-            'st_context_10m': None, 'st_context_10m_ts': None,
             'st_context_1h': None, 'st_context_1h_ts': None,  # Swing A / B
             'st_context_2h': None, 'st_context_2h_ts': None,
             'st_context_4h': None, 'st_context_4h_ts': None,  # Daily / Pulse confluence forte
@@ -1295,9 +1286,6 @@ def process_webhook(data):
             elif tf == '2d':
                 m['st_context_2d'] = parsed_ctx
                 m['st_context_2d_ts'] = now_ts
-            elif tf == '10m':
-                m['st_context_10m'] = parsed_ctx
-                m['st_context_10m_ts'] = now_ts
             elif tf == '12h':
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
@@ -1482,7 +1470,7 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
-            and alert_type == 'st_context' and tf in ('10m', '30m')
+            and alert_type == 'st_context' and tf == '30m'
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = get_scalpbot_symbols()
@@ -1744,25 +1732,6 @@ def sync_scalp():
                     errors.append(f"{symbol}: ZALT12H HTTP {resp.status_code}")
             except Exception as e:
                 errors.append(f"{symbol}: ZALT12H {e}")
-
-        ctx10 = m.get('st_context_10m')
-        try:
-            payload = {
-                'symbol':   symbol,
-                'strategy': 'scalp',
-                'tf':       '10m',
-                'type':     'st_context',
-                'value':    ctx_to_sync_value(ctx10),
-                'price':    0,
-                'event_id': f"sync_scalp_ctx10_{symbol}_{int(time.time())}",
-            }
-            resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
-            if resp.status_code == 200:
-                symbol_sent.append('ctx10m')
-            else:
-                errors.append(f"{symbol}: CTX10M HTTP {resp.status_code}")
-        except Exception as e:
-            errors.append(f"{symbol}: CTX10M {e}")
 
         ctx30 = m.get('st_context_30m')
         try:

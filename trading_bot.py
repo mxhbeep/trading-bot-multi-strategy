@@ -741,7 +741,7 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY A: PREP Bias 2D + CTX 4H/30m, entree extreme RCI 1H\n"
-        "DAILY B: Bias 2D + CTX 4H + Bias 2H + CTX 5m\n"
+        "DAILY B: Bias 2D + CTX 4H + Bias 2H + CTX 5m, veto CTX 30m oppose\n"
         "SWING A: Bias 12H + CTX 1H, veto CTX 2H oppose, trigger ZALT 30m\n"
         "SWING B: PREP CTX 1D + flip ZALT 12H, puis CTX 1H + trigger ZALT 30m\n"
         "PULSE: PREP Bias 1D + CTX 2H/30m, entree extreme RCI 30m\n"
@@ -1420,7 +1420,7 @@ def process_webhook(data):
         # ========================================================================
         # STRATEGIES ACTIVES
         # DAILY A : PREP Bias 2D + CTX 4H/30m; entree extreme RCI 1H
-        # DAILY B : Bias 2D + CTX 4H + Bias 2H + CTX 5m
+        # DAILY B : Bias 2D + CTX 4H + Bias 2H + CTX 5m; veto CTX 30m oppose
         # SWING A : Bias 12H + ST Context 1H; veto ST Context 2H oppose
         # SWING B : PREP CTX 1D + flip ZALT 12H, puis CTX 1H + flip ZALT 30m
         # PULSE : PREP Bias 1D + CTX 2H/30m; entree extreme RCI 30m
@@ -2771,6 +2771,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             and _st_context_condition(m, '4h', exp)[2]
             and _bias_condition(m, '2h', exp)[2]
             and _st_context_condition(m, '5m', exp)[2]
+            and not _st_context_veto(m, '30m', exp)[2]
         )),
     ):
         with STATE_LOCK:
@@ -2794,13 +2795,14 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         bias2d, bias2d_fresh, bias2d_ok = _bias_condition(m, '2d', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         ctx30m, ctx30m_fresh, ctx30m_ok = _st_context_condition(m, '30m', exp_ctx)
+        _, _, ctx30m_veto = _st_context_veto(m, '30m', exp_ctx)
         ctx2d, ctx2d_fresh, ctx2d_veto = _st_context_veto(m, '2d', exp_ctx)
         bias2h, bias2h_fresh, bias2h_ok = _bias_condition(m, '2h', exp_ctx)
         ctx5m, ctx5m_fresh, ctx5m_ok = _st_context_condition(m, '5m', exp_ctx)
         armed = bias2d_ok and ctx4h_ok and not ctx2d_veto
         prep_ready = armed and ctx30m_ok
         entry_a_ok = prep_ready and is_entry_trigger
-        entry_b_ok = bias2d_ok and ctx4h_ok and bias2h_ok and ctx5m_ok
+        entry_b_ok = bias2d_ok and ctx4h_ok and bias2h_ok and ctx5m_ok and not ctx30m_veto
 
         with STATE_LOCK:
             prep_dir = m.get('daily_prep_dir')
@@ -2842,7 +2844,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             f"ctx2d={ctx2d} fresh={ctx2d_fresh} veto={ctx2d_veto} "
             f"armed={armed} prep={prep_ready} trigger_rci1h={is_entry_trigger} entry_a={entry_a_ok} "
             f"bias2h={bias2h}/{exp_ctx} fresh={bias2h_fresh} ok={bias2h_ok} "
-            f"ctx5m={ctx5m}/{exp_ctx} fresh={ctx5m_fresh} ok={ctx5m_ok} entry_b={entry_b_ok}"
+            f"ctx5m={ctx5m}/{exp_ctx} fresh={ctx5m_fresh} ok={ctx5m_ok} "
+            f"ctx30m_veto_b={ctx30m_veto} entry_b={entry_b_ok}"
         )
 
         if entry_a_ok:
@@ -2877,6 +2880,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
                 f"[OK] Bias 2H: {_ctx_label(bias2h)}",
                 f"[TRIGGER] ST Context 5m: {_ctx_label(ctx5m)}",
+                f"[ANTI-CHOP OK] ST Context 30m non oppose: {_ctx_label(ctx30m)}",
                 _rci_quality_line(m, '1d', exp_ctx),
             ]
             opened = _open_strategy_entry(

@@ -277,6 +277,10 @@ def load_runtime_state():
                 new_key = key[:-len('_PULSE_JACKPOT')] + '_PULSE_CONFLUENCE'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
+            elif key.endswith('_DAILY_B'):
+                new_key = key[:-len('_DAILY_B')] + '_DAILY'
+                SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
+                SCALP_POSITIONS.pop(key, None)
         saved_bias_ctx_report = payload.get('last_bias1d_ctx2h_report', {})
         LAST_BIAS1D_CTX2H_REPORT = {
             'long': sorted(saved_bias_ctx_report.get('long', [])),
@@ -740,12 +744,11 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY A: PREP Bias 2D + CTX 4H/30m, entree extreme RCI 1H\n"
-        "DAILY B: Bias 2D + CTX 4H + Bias 2H + CTX 5m, veto CTX 30m oppose\n"
+        "DAILY: Bias 2D + CTX 4H + Bias 2H + CTX 5m, veto CTX 30m oppose\n"
         "SWING A: Bias 12H + CTX 1H, veto CTX 2H oppose, trigger ZALT 30m\n"
         "SWING B: PREP CTX 1D + flip ZALT 12H, puis CTX 1H + trigger ZALT 30m\n"
-        "PULSE: PREP Bias 1D + CTX 2H/30m, entree extreme RCI 30m\n"
-        "PULSE CONFLUENCE FORTE: PREP Pulse + CTX 4H aligne\n"
+        "PULSE: Bias 1D ou 2D + CTX 4H, entree extreme RCI 1H\n"
+        "PULSE QUALITE: CTX 30m aligne et/ou Bias 1D + 2D alignes\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
         "WATCHLIST INFO: Bias 1D + CTX 2H (76 assets, groupe Autre inclus)\n"
         "WATCHLIST CONFLUENCE FORTE: Bias 1D + CTX 2H + CTX 4H\n"
@@ -1127,8 +1130,6 @@ def init_symbol_states(symbol):
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
             'swing_b_armed_dir': None, 'swing_b_armed_ts': None,
-            'daily_prep_dir': None, 'daily_prep_ts': None,
-            'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
         }
 
@@ -1320,7 +1321,7 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
-            if tf == '1d' and is_pulse_enabled() and is_pulse_symbol(symbol):
+            if tf in ('1d', '2d') and is_pulse_enabled() and is_pulse_symbol(symbol):
                 evaluate_pulse_v3(
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
@@ -1419,11 +1420,10 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY A : PREP Bias 2D + CTX 4H/30m; entree extreme RCI 1H
-        # DAILY B : Bias 2D + CTX 4H + Bias 2H + CTX 5m; veto CTX 30m oppose
+        # DAILY : Bias 2D + CTX 4H + Bias 2H + CTX 5m; veto CTX 30m oppose
         # SWING A : Bias 12H + ST Context 1H; veto ST Context 2H oppose
         # SWING B : PREP CTX 1D + flip ZALT 12H, puis CTX 1H + flip ZALT 30m
-        # PULSE : PREP Bias 1D + CTX 2H/30m; entree extreme RCI 30m
+        # PULSE : Bias 1D ou 2D + CTX 4H; entree extreme RCI 1H. CTX 30m/biais doubles = qualite.
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf in ('5m', '30m', '4h')
@@ -1449,9 +1449,9 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        # PULSE : Bias 1D + CTX 2H/30m; trigger extreme RCI 30m. RCI 2H manuel.
+        # PULSE : un Bias 1D/2D + CTX 4H; trigger extreme RCI 1H.
         if is_pulse_enabled() and is_pulse_symbol(symbol) and (
-            alert_type == 'st_context' and tf in ('30m', '2h', '4h')
+            alert_type == 'st_context' and tf in ('30m', '4h')
         ):
             evaluate_pulse_v3(
                 symbol,
@@ -1785,7 +1785,7 @@ def reset_state_symbol(symbol):
     with STATE_LOCK:
         MOMENTUM_STATE.pop(symbol, None)
 
-        for strat in ['PULSE', 'PULSE_CONFLUENCE', 'DAILY', 'DAILY_B', 'SWING', 'SWING_B', 'TREND2D']:
+        for strat in ['PULSE', 'PULSE_CONFLUENCE', 'DAILY', 'SWING', 'SWING_B', 'TREND2D']:
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 
         keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
@@ -2208,16 +2208,10 @@ def update_okx_rci_30m(symbol):
     relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
     if extreme_entry_dir:
         check_rci30m_strategy_preps(symbol, extreme_entry_dir, price, now_ts)
-        event_id = f"okx_rci30m_extreme_{symbol}_{int(now_ts)}_{extreme_entry_dir}"
-        if is_pulse_enabled() and is_pulse_symbol(symbol):
-            evaluate_pulse_v3(
-                symbol, trigger_dir=extreme_entry_dir, price=price,
-                event_id=event_id, source='okx_rci_30m_extreme',
-            )
 
 
 def update_okx_rci_1h(symbol):
-    """RCI court 1H sur bougies confirmees, declencheur d'entree DAILY A."""
+    """RCI court 1H sur bougies confirmees, declencheur d'entree PULSE."""
     if not is_trade_symbol(symbol):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=100), 60)
@@ -2258,10 +2252,11 @@ def update_okx_rci_1h(symbol):
     )
     if extreme_entry_dir:
         event_id = f"okx_rci1h_extreme_{symbol}_{int(now_ts)}_{extreme_entry_dir}"
-        evaluate_daily(
-            symbol, trigger_dir=extreme_entry_dir, price=price,
-            event_id=event_id, source='okx_rci_1h_extreme',
-        )
+        if is_pulse_enabled() and is_pulse_symbol(symbol):
+            evaluate_pulse_v3(
+                symbol, trigger_dir=extreme_entry_dir, price=price,
+                event_id=event_id, source='okx_rci_1h_extreme',
+            )
 
 
 def update_okx_rci_2h(symbol):
@@ -2345,7 +2340,7 @@ def relay_bias_to_scalp(symbol, value, tf):
 
 
 def update_okx_bias_2h(symbol):
-    """Bias 2H calcule en interne pour SCALP et DAILY B."""
+    """Bias 2H calcule en interne pour SCALP et DAILY."""
     if not is_trade_symbol(symbol):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=100), 120)
@@ -2753,42 +2748,28 @@ def _st_context_veto(m, tf, exp_ctx):
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY A: PREP HTF puis extreme RCI 1H. DAILY B: confluence Bias/CTX."""
+    """DAILY: Bias 2D + CTX 4H + Bias 2H + CTX 5m, veto CTX 30m oppose."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
 
-    for strategy, validator in (
-        ('DAILY', lambda exp: (
-            _bias_condition(m, '2d', exp)[2]
-            and _st_context_condition(m, '4h', exp)[2]
-            and not _st_context_veto(m, '2d', exp)[2]
-        )),
-        ('DAILY_B', lambda exp: (
-            _bias_condition(m, '2d', exp)[2]
-            and _st_context_condition(m, '4h', exp)[2]
-            and _bias_condition(m, '2h', exp)[2]
-            and _st_context_condition(m, '5m', exp)[2]
-            and not _st_context_veto(m, '30m', exp)[2]
-        )),
-    ):
-        with STATE_LOCK:
-            current_pos = SCALP_POSITIONS.get(f"{symbol}_{strategy}")
-        if current_pos:
-            current_ctx = _trade_direction_to_ctx(current_pos.get('direction'))
-            _refresh_logical_position(
-                symbol, strategy, validator(current_ctx),
-                4 * 3600, f'confluence {strategy} absente',
-            )
+    with STATE_LOCK:
+        current_pos = SCALP_POSITIONS.get(f"{symbol}_DAILY")
+    if current_pos:
+        current_ctx = _trade_direction_to_ctx(current_pos.get('direction'))
+        position_valid = (
+            _bias_condition(m, '2d', current_ctx)[2]
+            and _st_context_condition(m, '4h', current_ctx)[2]
+            and _bias_condition(m, '2h', current_ctx)[2]
+            and _st_context_condition(m, '5m', current_ctx)[2]
+            and not _st_context_veto(m, '30m', current_ctx)[2]
+        )
+        _refresh_logical_position(symbol, 'DAILY', position_valid, 4 * 3600, 'confluence DAILY absente')
 
-    is_entry_trigger = bool(
-        trigger_dir in ('buy', 'sell') and source == 'okx_rci_1h_extreme'
-    )
-    directions = [trigger_dir] if is_entry_trigger else ['buy', 'sell']
+    directions = ['buy', 'sell']
     opened = False
-    state_changed = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
 
@@ -2796,86 +2777,22 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         ctx30m, ctx30m_fresh, ctx30m_ok = _st_context_condition(m, '30m', exp_ctx)
         _, _, ctx30m_veto = _st_context_veto(m, '30m', exp_ctx)
-        ctx2d, ctx2d_fresh, ctx2d_veto = _st_context_veto(m, '2d', exp_ctx)
         bias2h, bias2h_fresh, bias2h_ok = _bias_condition(m, '2h', exp_ctx)
         ctx5m, ctx5m_fresh, ctx5m_ok = _st_context_condition(m, '5m', exp_ctx)
-        armed = bias2d_ok and ctx4h_ok and not ctx2d_veto
-        prep_ready = armed and ctx30m_ok
-        entry_a_ok = prep_ready and is_entry_trigger
-        entry_b_ok = bias2d_ok and ctx4h_ok and bias2h_ok and ctx5m_ok and not ctx30m_veto
-
-        with STATE_LOCK:
-            prep_dir = m.get('daily_prep_dir')
-            position_open = bool(SCALP_POSITIONS.get(f"{symbol}_DAILY"))
-            if prep_ready and prep_dir != exp_ctx:
-                m['daily_prep_dir'] = exp_ctx
-                m['daily_prep_ts'] = time.time()
-                state_changed = True
-                send_prep = not position_open
-            else:
-                send_prep = False
-            if not prep_ready and prep_dir == exp_ctx:
-                m['daily_prep_dir'] = None
-                m['daily_prep_ts'] = None
-                state_changed = True
-
-        if send_prep:
-            prep_message = (
-                f"<b>[PREP DAILY]</b> {symbol}\n"
-                "--------------------\n"
-                f"Direction: {direction}\n"
-                f"Price: ${format_price(price)}\n"
-                f"[OK] Bias 2D: {_ctx_label(bias2d)}\n"
-                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
-                f"[OK] ST Context 30m: {_ctx_label(ctx30m)}\n"
-                "[ATTENTE] RCI court 1H franchit la zone extreme favorable"
-            )
-            send_notification(
-                notification_title_from_message(prep_message), prep_message,
-                priority=5, tags=[], telegram=True, ntfy=True,
-                telegram_channel='telegram_alerts',
-            )
-            logger.info(f"[PREP DAILY] {symbol} {direction}")
+        entry_ok = bias2d_ok and ctx4h_ok and bias2h_ok and ctx5m_ok and not ctx30m_veto
 
         logger.info(
             f"[DAILY CHECK] {symbol} source={source} dir={direction} "
             f"bias2d={bias2d}/{exp_ctx} ok={bias2d_ok} [CTX 4H]={ctx4h} ok={ctx4h_ok} "
             f"ctx30m={ctx30m}/{exp_ctx} fresh={ctx30m_fresh} ok={ctx30m_ok} "
-            f"ctx2d={ctx2d} fresh={ctx2d_fresh} veto={ctx2d_veto} "
-            f"armed={armed} prep={prep_ready} trigger_rci1h={is_entry_trigger} entry_a={entry_a_ok} "
             f"bias2h={bias2h}/{exp_ctx} fresh={bias2h_fresh} ok={bias2h_ok} "
             f"ctx5m={ctx5m}/{exp_ctx} fresh={ctx5m_fresh} ok={ctx5m_ok} "
-            f"ctx30m_veto_b={ctx30m_veto} entry_b={entry_b_ok}"
+            f"ctx30m_veto={ctx30m_veto} entry={entry_ok}"
         )
-
-        if entry_a_ok:
-            strategy = 'DAILY'
-            signal_type = 'daily_bias2d_ctx4h_ctx30m_rci1h'
+        if entry_ok:
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = [
-                "[OK] Entree DAILY A",
-                f"[OK] Bias 2D: {_ctx_label(bias2d)}",
-                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
-                f"[OK] ST Context 30m: {_ctx_label(ctx30m)}",
-                f"[ANTI-CHOP OK] ST Context 2D non oppose: {_ctx_label(ctx2d)}",
-                f"[TRIGGER] RCI court 1H extreme: {float(m.get('rci_1h_10')):.1f}",
-                _rci_quality_line(m, '1d', exp_ctx),
-            ]
-            opened = _open_strategy_entry(
-                symbol,
-                strategy,
-                direction,
-                signal_type,
-                event_key,
-                price,
-                exchange_name,
-                detail_lines,
-                cooldown=14400,
-            ) or opened
-        if entry_b_ok:
-            event_key = event_id or f"daily_b_{symbol}_{int(time.time())}_{exp_ctx}"
-            detail_lines = [
-                "[OK] Entree DAILY B",
+                "[OK] Entree DAILY",
                 f"[OK] Bias 2D: {_ctx_label(bias2d)}",
                 f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
                 f"[OK] Bias 2H: {_ctx_label(bias2h)}",
@@ -2885,17 +2802,15 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             ]
             opened = _open_strategy_entry(
                 symbol,
-                'DAILY_B',
+                'DAILY',
                 direction,
-                'daily_b_bias2d_ctx4h_bias2h_ctx5m',
+                'daily_bias2d_ctx4h_bias2h_ctx5m',
                 event_key,
                 price,
                 exchange_name,
                 detail_lines,
                 cooldown=14400,
             ) or opened
-    if state_changed:
-        persist_runtime_state()
     return opened
 
 
@@ -3032,28 +2947,25 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE: PREP Bias 1D + CTX 2H/30m, entree sur extreme RCI 30m."""
+    """PULSE: Bias 1D ou 2D + CTX 4H, entree sur extreme RCI 1H."""
     if not is_pulse_enabled() or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-    for strategy, require_ctx4h in (('PULSE', False), ('PULSE_CONFLUENCE', True)):
+    for strategy in ('PULSE', 'PULSE_CONFLUENCE'):
         with STATE_LOCK:
             pos = SCALP_POSITIONS.get(f"{symbol}_{strategy}")
         if pos:
             exp = _trade_direction_to_ctx(pos.get('direction'))
-            _, _, position_bias_ok = _bias_condition(m, '1d', exp)
-            _, _, position_ctx2h_ok = _st_context_condition(m, '2h', exp)
-            position_valid = position_bias_ok and position_ctx2h_ok
-            if require_ctx4h:
-                position_valid = position_valid and _st_context_condition(m, '4h', exp)[2]
+            position_bias_ok = _bias_condition(m, '1d', exp)[2] or _bias_condition(m, '2d', exp)[2]
+            position_valid = position_bias_ok and _st_context_condition(m, '4h', exp)[2]
             _refresh_logical_position(
                 symbol, strategy, position_valid, 2 * 3600, 'confluence Pulse absente',
             )
 
     is_entry_trigger = bool(
-        trigger_dir in ('buy', 'sell') and source == 'okx_rci_30m_extreme'
+        trigger_dir in ('buy', 'sell') and source == 'okx_rci_1h_extreme'
     )
     directions = [trigger_dir] if is_entry_trigger else ['buy', 'sell']
     opened = False
@@ -3062,34 +2974,32 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
         ctx30, ctx30_fresh, ctx30_ok = _st_context_condition(m, '30m', exp_ctx)
         bias1d, bias1d_fresh, bias1d_ok = _bias_condition(m, '1d', exp_ctx)
-        ctx2h, ctx2h_fresh, ctx2h_ok = _st_context_condition(m, '2h', exp_ctx)
+        bias2d, bias2d_fresh, bias2d_ok = _bias_condition(m, '2d', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         ctx2d, ctx2d_fresh, ctx2d_veto = _st_context_veto(m, '2d', exp_ctx)
         ctx2d_aligned = bool(ctx2d_fresh and ctx2d == exp_ctx)
-        rci30m, rci30m_fresh, rci30m_trigger_ok = _rci_trigger_zone(m, '30m', exp_ctx)
-        armed = bias1d_ok and ctx2h_ok
-        prep_ready = armed and ctx30_ok
-        confluence_ok = prep_ready and ctx4h_ok
-        entry_ok = prep_ready and is_entry_trigger
-        confluence_entry_ok = confluence_ok and is_entry_trigger
+        rci1h, rci1h_fresh, rci1h_trigger_ok = _rci_trigger_zone(m, '1h', exp_ctx)
+        armed = (bias1d_ok or bias2d_ok) and ctx4h_ok
+        quality_ok = ctx30_ok or (bias1d_ok and bias2d_ok)
+        entry_ok = armed and is_entry_trigger
         with STATE_LOCK:
             confluence_pos = SCALP_POSITIONS.get(f"{symbol}_PULSE_CONFLUENCE")
-            confluence_open = bool(confluence_pos and confluence_pos.get('direction') == direction)
             pulse_position_open = bool(
                 SCALP_POSITIONS.get(f"{symbol}_PULSE") or confluence_pos
             )
             prep_dir = m.get('pulse_prep_dir')
-            if prep_ready and prep_dir != exp_ctx:
+            if armed and prep_dir != exp_ctx:
                 m['pulse_prep_dir'] = exp_ctx
                 m['pulse_prep_ts'] = time.time()
                 state_changed = True
                 send_prep = not pulse_position_open
             else:
                 send_prep = False
-            if not prep_ready and prep_dir == exp_ctx:
+            if not armed and prep_dir == exp_ctx:
                 m['pulse_prep_dir'] = None
                 m['pulse_prep_ts'] = None
                 state_changed = True
+        entry_ok = entry_ok and not pulse_position_open
 
         if send_prep:
             prep_message = (
@@ -3097,10 +3007,10 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 "--------------------\n"
                 f"Direction: {direction}\n"
                 f"Price: ${format_price(price)}\n"
-                f"[OK] Bias 1D: {_ctx_label(bias1d)}\n"
-                f"[OK] ST Context 2H: {_ctx_label(ctx2h)}\n"
-                f"[OK] ST Context 30m: {_ctx_label(ctx30)}\n"
-                "[ATTENTE] RCI court 30m en zone extreme favorable"
+                f"[OK] Bias 1D ou 2D: 1D={_ctx_label(bias1d)}, 2D={_ctx_label(bias2d)}\n"
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
+                f"[BONUS] ST Context 30m: {_ctx_label(ctx30)}\n"
+                "[ATTENTE] RCI court 1H franchit la zone extreme favorable"
             )
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
@@ -3108,8 +3018,6 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 telegram_channel='telegram_scalp2h',
             )
             logger.info(f"[PREP PULSE] {symbol} {direction}")
-        if confluence_open and entry_ok and not confluence_entry_ok:
-            entry_ok = False
         rci2h_short = m.get('rci_2h_10')
         rci2h_fresh = is_signal_fresh(m.get('rci_2h_ts'), 6 * 3600)
         try:
@@ -3123,40 +3031,36 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
         logger.info(
             f"[PULSE CHECK] {symbol} source={source} dir={direction} "
-            f"bias1d={bias1d}/{exp_ctx} fresh={bias1d_fresh} ctx2h={ctx2h}/{ctx2h_ok} "
-            f"ctx2h_fresh={ctx2h_fresh} ctx30={ctx30}/{ctx30_ok} ctx30_fresh={ctx30_fresh} "
+            f"bias1d={bias1d}/{exp_ctx} fresh={bias1d_fresh} ok={bias1d_ok} "
+            f"bias2d={bias2d}/{exp_ctx} fresh={bias2d_fresh} ok={bias2d_ok} "
+            f"ctx30={ctx30}/{ctx30_ok} ctx30_fresh={ctx30_fresh} "
             f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
             f"ctx2d={ctx2d} fresh={ctx2d_fresh} veto={ctx2d_veto} "
-            f"rci30m={rci30m} fresh={rci30m_fresh} trigger_ok={rci30m_trigger_ok} "
-            f"rci2h_manual={rci2h_short} aligned={rci2h_aligned} armed={armed} prep={prep_ready} "
-            f"confluence={confluence_ok} trigger_rci30m={is_entry_trigger} entry={entry_ok}"
+            f"rci1h={rci1h} fresh={rci1h_fresh} trigger_ok={rci1h_trigger_ok} "
+            f"rci2h_manual={rci2h_short} aligned={rci2h_aligned} armed={armed} "
+            f"quality={quality_ok} trigger_rci1h={is_entry_trigger} entry={entry_ok}"
         )
 
-        if confluence_entry_ok or entry_ok:
-            strategy = 'PULSE_CONFLUENCE' if confluence_entry_ok else 'PULSE'
-            signal_type = 'pulse_confluence_bias1d_ctx2h_ctx30m_ctx4h_rci30m' if confluence_entry_ok else 'pulse_bias1d_ctx2h_ctx30m_rci30m'
+        if entry_ok:
+            strategy = 'PULSE_CONFLUENCE' if quality_ok else 'PULSE'
+            signal_type = 'pulse_quality_bias_ctx4h_rci1h' if quality_ok else 'pulse_bias_ctx4h_rci1h'
             event_key = event_id or f"pulse_{symbol}_{int(time.time())}_{exp_ctx}"
-            detail_lines = ["[CONFLUENCE FORTE] PULSE"] if confluence_entry_ok else ["[OK] Entree PULSE"]
-            if confluence_entry_ok:
-                detail_lines += [
-                    f"[OK] Bias 1D: {_ctx_label(bias1d)}",
-                    f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
-                    f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
-                    f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
-                ]
-            else:
-                detail_lines += [
-                    f"[OK] Bias 1D: {_ctx_label(bias1d)}",
-                    f"[OK] ST Context 2H: {_ctx_label(ctx2h)}",
-                    f"[OK] ST Context 30m: {_ctx_label(ctx30)}",
-                ]
+            detail_lines = ["[QUALITE] PULSE"] if quality_ok else ["[OK] Entree PULSE"]
+            detail_lines += [
+                f"[OK] Bias 1D ou 2D: 1D={_ctx_label(bias1d)}, 2D={_ctx_label(bias2d)}",
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+            ]
+            if ctx30_ok:
+                detail_lines.append(f"[QUALITE] ST Context 30m aligne: {_ctx_label(ctx30)}")
+            if bias1d_ok and bias2d_ok:
+                detail_lines.append("[QUALITE] Bias 1D et Bias 2D alignes")
             if ctx2d_aligned:
                 detail_lines.append(f"[QUALITE] ST Context 2D aligne: {_ctx_label(ctx2d)}")
             elif ctx2d_veto:
                 detail_lines.append(f"[AVERTISSEMENT NON BLOQUANT] ST Context 2D oppose: {_ctx_label(ctx2d)}")
             else:
                 detail_lines.append(f"[INFO NON BLOQUANTE] ST Context 2D: {_ctx_label(ctx2d)}")
-            detail_lines.append(f"[TRIGGER] RCI court 30m extreme: {float(rci30m):.1f}")
+            detail_lines.append(f"[TRIGGER] RCI court 1H extreme: {float(rci1h):.1f}")
             detail_lines.append(_rci_quality_line(m, '12h', exp_ctx))
             if rci2h_fresh and rci2h_short is not None:
                 status = 'ALIGNE' if rci2h_aligned else 'NON ALIGNE'
@@ -3173,6 +3077,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 exchange_name,
                 detail_lines,
                 cooldown=3600,
+                quality=quality_ok,
             ) or opened
     if state_changed:
         persist_runtime_state()

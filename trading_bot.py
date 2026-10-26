@@ -126,8 +126,11 @@ LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
-LAST_BIAS1D_CTX2H_REPORT = {'long': [], 'short': []}
-LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = {'long': [], 'short': []}
+LAST_BIAS_RCI_REPORTS = {
+    '4h': {'long': [], 'short': []},
+    '12h': {'long': [], 'short': []},
+    '1d': {'long': [], 'short': []},
+}
 
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
@@ -208,8 +211,7 @@ def persist_runtime_state():
             'scalp_positions':    dict(SCALP_POSITIONS),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
-            'last_bias1d_ctx2h_report': dict(LAST_BIAS1D_CTX2H_REPORT),
-            'last_bias1d_ctx2h_ctx4h_jackpot': dict(LAST_BIAS1D_CTX2H_CTX4H_JACKPOT),
+            'last_bias_rci_reports': LAST_BIAS_RCI_REPORTS,
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -254,8 +256,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_BIAS1D_CTX2H_REPORT
-    global LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
+    global LAST_BIAS_RCI_REPORTS
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -281,15 +282,13 @@ def load_runtime_state():
                 new_key = key[:-len('_DAILY_B')] + '_DAILY'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
-        saved_bias_ctx_report = payload.get('last_bias1d_ctx2h_report', {})
-        LAST_BIAS1D_CTX2H_REPORT = {
-            'long': sorted(saved_bias_ctx_report.get('long', [])),
-            'short': sorted(saved_bias_ctx_report.get('short', [])),
-        }
-        saved_bias_ctx_jackpot = payload.get('last_bias1d_ctx2h_ctx4h_jackpot', {})
-        LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = {
-            'long': sorted(saved_bias_ctx_jackpot.get('long', [])),
-            'short': sorted(saved_bias_ctx_jackpot.get('short', [])),
+        saved_bias_rci_reports = payload.get('last_bias_rci_reports', {})
+        LAST_BIAS_RCI_REPORTS = {
+            tf: {
+                'long': sorted(saved_bias_rci_reports.get(tf, {}).get('long', [])),
+                'short': sorted(saved_bias_rci_reports.get(tf, {}).get('short', [])),
+            }
+            for tf in ('4h', '12h', '1d')
         }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
@@ -671,68 +670,47 @@ def send_info(msg):
         logger.error(f"❌ Erreur info bot: {e}")
 
 
-def update_bias1d_ctx2h_report():
-    """Rapport global Bias 1D + CTX 2H, renforce si CTX 4H est aussi aligne."""
-    global LAST_BIAS1D_CTX2H_REPORT
-    global LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
+def update_bias_rci_reports(timeframes=('4h', '12h', '1d')):
+    """Listes LONG/SHORT quand le Bias et le RCI extreme de la meme TF sont alignes."""
+    global LAST_BIAS_RCI_REPORTS
+    changed = False
 
-    long_symbols = []
-    short_symbols = []
-    jackpot_long = []
-    jackpot_short = []
-    with STATE_LOCK:
-        for symbol in sorted(get_tracked_symbols()):
-            state = MOMENTUM_STATE.get(symbol, {})
-            bias1d = state.get('bias_1d')
-            ctx2h = state.get('st_context_2h')
-            ctx4h = state.get('st_context_4h')
-            short_symbol = symbol.replace('/USDT', '')
+    for tf in timeframes:
+        if tf not in LAST_BIAS_RCI_REPORTS:
+            continue
+        long_symbols = []
+        short_symbols = []
+        with STATE_LOCK:
+            for symbol in sorted(get_tracked_symbols()):
+                state = MOMENTUM_STATE.get(symbol, {})
+                short_symbol = symbol.replace('/USDT', '')
+                if _bias_condition(state, tf, 'buy')[2] and _rci_extreme_quality(state, tf, 'buy')[2]:
+                    long_symbols.append(short_symbol)
+                elif _bias_condition(state, tf, 'sell')[2] and _rci_extreme_quality(state, tf, 'sell')[2]:
+                    short_symbols.append(short_symbol)
 
-            if bias1d == ctx2h == 'buy':
-                long_symbols.append(short_symbol)
-                if ctx4h == 'buy':
-                    jackpot_long.append(short_symbol)
-            elif bias1d == ctx2h == 'sell':
-                short_symbols.append(short_symbol)
-                if ctx4h == 'sell':
-                    jackpot_short.append(short_symbol)
+            report = {'long': long_symbols, 'short': short_symbols}
+            report_changed = report != LAST_BIAS_RCI_REPORTS[tf]
+            if report_changed:
+                LAST_BIAS_RCI_REPORTS[tf] = report
 
-        report = {'long': long_symbols, 'short': short_symbols}
-        jackpot = {'long': jackpot_long, 'short': jackpot_short}
-        report_changed = report != LAST_BIAS1D_CTX2H_REPORT
-        jackpot_changed = jackpot != LAST_BIAS1D_CTX2H_CTX4H_JACKPOT
-        if report_changed:
-            LAST_BIAS1D_CTX2H_REPORT = report
-        if jackpot_changed:
-            LAST_BIAS1D_CTX2H_CTX4H_JACKPOT = jackpot
-
-    if report_changed:
+        if not report_changed:
+            continue
+        changed = True
         long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
         short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
         send_info(
-            "<b>[INFO] BIAS 1D + CONTEXT 2H</b>\n"
+            f"<b>[CONFLUENCE BIAS + RCI {tf.upper()}]</b>\n"
             "--------------------\n"
             f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
             f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-            "Liste mise a jour uniquement apres un changement de composition."
+            "RCI court extreme favorable (seuil +/-75). Liste mise a jour uniquement apres un changement."
         )
-        logger.info(f"[BIAS1D CTX2H REPORT] LONG={long_symbols} SHORT={short_symbols}")
+        logger.info(f"[BIAS RCI {tf.upper()} REPORT] LONG={long_symbols} SHORT={short_symbols}")
 
-    if jackpot_changed:
-        jackpot_long_text = '  '.join(jackpot_long) if jackpot_long else 'Aucun'
-        jackpot_short_text = '  '.join(jackpot_short) if jackpot_short else 'Aucun'
-        send_info(
-            "<b>[CONFLUENCE FORTE] BIAS 1D + CONTEXT 2H + CONTEXT 4H</b>\n"
-            "--------------------\n"
-            f"🟢 <b>LONG ({len(jackpot_long)})</b> : {jackpot_long_text}\n"
-            f"🔴 <b>SHORT ({len(jackpot_short)})</b> : {jackpot_short_text}\n\n"
-            "Les trois directions sont alignees."
-        )
-        logger.info(f"[BIAS1D CTX2H CTX4H CONFLUENCE] LONG={jackpot_long} SHORT={jackpot_short}")
-
-    if report_changed or jackpot_changed:
+    if changed:
         persist_runtime_state()
-    return report_changed or jackpot_changed
+    return changed
 
 
 def send_start_notification():
@@ -746,12 +724,11 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H + Bias 2H + CTX 5m, veto CTX 30m oppose\n"
         "SWING A: Bias 12H + CTX 1H, veto CTX 2H oppose, trigger ZALT 30m\n"
-        "SWING B: PREP CTX 1D + flip ZALT 12H, puis CTX 1H + trigger ZALT 30m\n"
+        "SWING B: ZALT 12H + RCI 4H extreme + CTX 1H, trigger ZALT 30m\n"
         "PULSE: Bias 1D ou 2D + CTX 4H, entree extreme RCI 1H\n"
-        "PULSE QUALITE: CTX 30m aligne et/ou Bias 1D + 2D alignes\n"
+        "PULSE QUALITE: CTX 30m, Bias 1D + 2D et/ou RCI 1D extreme alignes\n"
         "RCI 2H: rappel manuel non bloquant dans PULSE\n"
-        "WATCHLIST INFO: Bias 1D + CTX 2H (76 assets, groupe Autre inclus)\n"
-        "WATCHLIST CONFLUENCE FORTE: Bias 1D + CTX 2H + CTX 4H\n"
+        "RAPPORTS INFO: Bias + RCI extreme alignes en 4H, 12H et 1D\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
         f"{now}"
@@ -1116,7 +1093,7 @@ def init_symbol_states(symbol):
             'rci_1h_10_prev': None, 'rci_1h_extreme_entry_dir': None, 'rci_1h_extreme_entry_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
-            'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Qualite/veto Scalp B
+            'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Swing B + qualite/veto Scalp B
             'rci_4h_dir': None, 'rci_4h_chop': None, 'rci_4h_ts': None,
             'rci_12h_10': None, 'rci_12h_30': None, 'rci_12h_50': None,  # Qualite Pulse / Swing
             'rci_12h_dir': None, 'rci_12h_chop': None, 'rci_12h_ts': None,
@@ -1129,55 +1106,12 @@ def init_symbol_states(symbol):
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
-            'swing_b_armed_dir': None, 'swing_b_armed_ts': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
         }
 
 
-def check_ctx1d_zalt12h_alert(symbol, price=0.0):
-    """Arme SWING B quand un flip ZALT 12H rejoint le ST Context 1D."""
-    if not CONFIG.get('ENABLE_SWING', False) or not get_symbol_config(symbol).get('scalp'):
-        return False
-
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        zalt12h = m.get('zalt_12h')
-        ctx1d = m.get('st_context_1d')
-        flip_ts = m.get('last_zalt_12h_signal_ts')
-        if zalt12h not in ('buy', 'sell') or ctx1d != zalt12h:
-            return False
-        if not is_signal_fresh(flip_ts, 60 * 60):
-            return False
-
-        direction = 'LONG' if zalt12h == 'buy' else 'SHORT'
-        event_id = f"ctx1d_zalt12h_{symbol}_{int(float(flip_ts))}"
-        m['swing_b_armed_dir'] = zalt12h
-        m['swing_b_armed_ts'] = float(flip_ts)
-        send_alert = should_send(
-            symbol, f"ctx1d_zalt12h_{zalt12h}", event_id=event_id, cooldown=60,
-        )
-
-    persist_runtime_state()
-    if not send_alert:
-        return False
-
-    send_telegram(
-        f"<b>[PREP SWING B] ST CONTEXT 1D + FLIP ZALT 12H</b> {symbol}\n"
-        "--------------------\n"
-        f"Direction: {direction}\n"
-        f"Price: ${format_price(price)}\n"
-        f"[OK] ST Context 1D: {_ctx_label(ctx1d)}\n"
-        f"[OK] Flip ZALT 12H: {_ctx_label(zalt12h)}\n"
-        "[ATTENTE] ST Context 1H aligne, puis prochain flip ZALT 30m",
-        ntfy=True,
-    )
-    logger.info(f"[PREP SWING B] {symbol} {direction}")
-    return True
-
-
 def check_swing_b(symbol, price=0.0):
-    """Reevalue l'armement et la confluence de SWING B."""
+    """Reevalue la confluence de SWING B."""
     return evaluate_swing(symbol, price=price, source='swing_b_state_refresh')
 
 
@@ -1291,10 +1225,6 @@ def process_webhook(data):
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
 
-            if tf in ('2h', '4h'):
-                update_bias1d_ctx2h_report()
-            if tf == '1d':
-                check_ctx1d_zalt12h_alert(symbol, price=price)
             if tf == '2d':
                 evaluate_daily(
                     symbol, price=price, exchange_name=exchange_name,
@@ -1313,8 +1243,8 @@ def process_webhook(data):
             if tf in ('30m', '2h', '4h', '1d'):
                 relay_bias_to_scalp(symbol, parsed_bias, tf)
             logger.info(f"[BIAS TV] {symbol} {tf}={parsed_bias or 'neutral'}")
-            if tf == '1d':
-                update_bias1d_ctx2h_report()
+            if tf in ('4h', '12h', '1d'):
+                update_bias_rci_reports((tf,))
 
             if tf in ('2h', '2d'):
                 evaluate_daily(
@@ -1369,8 +1299,6 @@ def process_webhook(data):
                         m[f'last_zalt_{tf}_signal_ts'] = now_ts
                     logger.info(f"[ZALT {tf.upper()}] {symbol} = {parsed_zalt} signal={zalt_signal or 'state'}")
                     is_zalt_flip = zalt_signal in ('trend_flip', 'flip')
-                    if tf == '12h' and is_zalt_flip:
-                        check_ctx1d_zalt12h_alert(symbol, price=price)
                     if tf == '30m' and is_zalt_flip:
                         if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
                             evaluate_swing(
@@ -1422,7 +1350,7 @@ def process_webhook(data):
         # STRATEGIES ACTIVES
         # DAILY : Bias 2D + CTX 4H + Bias 2H + CTX 5m; veto CTX 30m oppose
         # SWING A : Bias 12H + ST Context 1H; veto ST Context 2H oppose
-        # SWING B : PREP CTX 1D + flip ZALT 12H, puis CTX 1H + flip ZALT 30m
+        # SWING B : ZALT 12H + RCI 4H extreme + CTX 1H, puis flip ZALT 30m
         # PULSE : Bias 1D ou 2D + CTX 4H; entree extreme RCI 1H. CTX 30m/biais doubles = qualite.
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
@@ -2073,7 +2001,7 @@ def update_okx_zalt_htf(symbol):
 
 
 def update_okx_zalt_12h(symbol):
-    """ZALT 12H interne OKX en 50/1.15 pour l'entree CTX 1D + flip ZALT 12H."""
+    """ZALT 12H interne OKX en 50/1.15 pour SWING B et SCALP B."""
     if not is_trade_symbol(symbol):
         return
     cfg = ZALT_HTF_SETTINGS['12h']
@@ -2103,8 +2031,6 @@ def update_okx_zalt_12h(symbol):
 
     if payload and payload.get('trend') in ('buy', 'sell'):
         relay_zalt_12h_to_scalp(symbol, payload['trend'], price, is_flip)
-    if is_flip:
-        check_ctx1d_zalt12h_alert(symbol, price=price)
     check_swing_b(symbol, price=price)
 
 
@@ -2363,7 +2289,6 @@ def update_okx_bias_htf(symbol):
     if not get_symbol_config(symbol).get('okx_market_data', True):
         # L'actif reste dans les rapports et conserve les valeurs recues de TradingView.
         # On evite seulement les requetes OKX connues comme invalides.
-        update_bias1d_ctx2h_report()
         return
     trade_symbol = is_trade_symbol(symbol)
     df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60) if trade_symbol else None
@@ -2405,7 +2330,6 @@ def update_okx_bias_htf(symbol):
         m['bias_2d_ts'] = now_ts
         persist_runtime_state()
     logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 12h={bias_12h} 1d={bias_1d} 2d={bias_2d}")
-    update_bias1d_ctx2h_report()
     if not trade_symbol:
         return
     relay_bias_to_scalp(symbol, bias_4h, '4h')
@@ -2593,7 +2517,7 @@ def _rci_condition(m, tf, exp_ctx):
 
 def _rci_extreme_quality(m, tf, exp_ctx):
     """Qualite contrarienne: LONG <= -75, SHORT >= +75. Jamais bloquante."""
-    max_age = {'12h': 24 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
+    max_age = {'1h': 3 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
     value = m.get(f'rci_{tf}_10')
     fresh = is_signal_fresh(m.get(f'rci_{tf}_ts'), max_age)
     try:
@@ -2619,7 +2543,7 @@ def _rci_extreme_veto(m, tf, exp_ctx):
 
 def _rci_trigger_zone(m, tf, exp_ctx):
     """Filtre directionnel du trigger: LONG sous zero, SHORT au-dessus de zero."""
-    max_age = {'30m': 90 * 60}.get(tf, 0)
+    max_age = {'30m': 90 * 60, '1h': 3 * 3600}.get(tf, 0)
     value = m.get(f'rci_{tf}_10')
     fresh = is_signal_fresh(m.get(f'rci_{tf}_ts'), max_age)
     try:
@@ -2670,21 +2594,17 @@ def check_rci30m_strategy_preps(symbol, exp_ctx, price, event_ts):
                 ],
             ))
 
-        armed_dir = m.get('swing_b_armed_dir')
-        armed_fresh = is_signal_fresh(m.get('swing_b_armed_ts'), 24 * 3600)
         swing_b_ready = bool(
-            armed_fresh and armed_dir == exp_ctx
-            and _st_context_condition(m, '1d', exp_ctx)[2]
-            and _zalt_condition(m, '12h', exp_ctx)[2]
+            _zalt_condition(m, '12h', exp_ctx)[2]
+            and _rci_extreme_quality(m, '4h', exp_ctx)[2]
             and _st_context_condition(m, '1h', exp_ctx)[2]
-            and not _rci_extreme_veto(m, '12h', exp_ctx)[2]
         )
         if swing_b_ready:
             candidates.append((
                 'SWING_B', 'telegram_alerts',
                 [
-                    f"[OK] ST Context 1D: {_ctx_label(exp_ctx)}",
                     f"[OK] ZALT 12H: {_ctx_label(exp_ctx)}",
+                    f"[OK] RCI court 4H extreme favorable",
                     f"[OK] ST Context 1H: {_ctx_label(exp_ctx)}",
                 ],
             ))
@@ -2779,6 +2699,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         _, _, ctx30m_veto = _st_context_veto(m, '30m', exp_ctx)
         bias2h, bias2h_fresh, bias2h_ok = _bias_condition(m, '2h', exp_ctx)
         ctx5m, ctx5m_fresh, ctx5m_ok = _st_context_condition(m, '5m', exp_ctx)
+        rci1d, rci1d_fresh, rci1d_quality = _rci_extreme_quality(m, '1d', exp_ctx)
         entry_ok = bias2d_ok and ctx4h_ok and bias2h_ok and ctx5m_ok and not ctx30m_veto
 
         logger.info(
@@ -2787,7 +2708,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             f"ctx30m={ctx30m}/{exp_ctx} fresh={ctx30m_fresh} ok={ctx30m_ok} "
             f"bias2h={bias2h}/{exp_ctx} fresh={bias2h_fresh} ok={bias2h_ok} "
             f"ctx5m={ctx5m}/{exp_ctx} fresh={ctx5m_fresh} ok={ctx5m_ok} "
-            f"ctx30m_veto={ctx30m_veto} entry={entry_ok}"
+            f"ctx30m_veto={ctx30m_veto} rci1d={rci1d} fresh={rci1d_fresh} "
+            f"quality={rci1d_quality} entry={entry_ok}"
         )
         if entry_ok:
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
@@ -2810,6 +2732,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 exchange_name,
                 detail_lines,
                 cooldown=14400,
+                quality=rci1d_quality,
             ) or opened
     return opened
 
@@ -2822,22 +2745,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     m = MOMENTUM_STATE[symbol]
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
 
-    armed_dir = m.get('swing_b_armed_dir')
-    armed_ts = m.get('swing_b_armed_ts')
-    armed_fresh = is_signal_fresh(armed_ts, 24 * 3600)
-    if armed_dir in ('buy', 'sell'):
-        _, _, arm_ctx1d_ok = _st_context_condition(m, '1d', armed_dir)
-        _, _, arm_zalt12h_ok = _zalt_condition(m, '12h', armed_dir)
-        if not (armed_fresh and arm_ctx1d_ok and arm_zalt12h_ok):
-            with STATE_LOCK:
-                m['swing_b_armed_dir'] = None
-                m['swing_b_armed_ts'] = None
-            persist_runtime_state()
-            armed_dir = None
-            armed_ts = None
-            armed_fresh = False
-            logger.info(f"[SWING B] Armement annule: {symbol}")
-
     for strategy, grace, validator in (
         ('SWING', 3600, lambda exp: (
             _bias_condition(m, '12h', exp)[2]
@@ -2846,11 +2753,9 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             and not _rci_extreme_veto(m, '12h', exp)[2]
         )),
         ('SWING_B', 3600, lambda exp: (
-            armed_fresh and armed_dir == exp
-            and _st_context_condition(m, '1d', exp)[2]
-            and _zalt_condition(m, '12h', exp)[2]
+            _zalt_condition(m, '12h', exp)[2]
+            and _rci_extreme_quality(m, '4h', exp)[2]
             and _st_context_condition(m, '1h', exp)[2]
-            and not _rci_extreme_veto(m, '12h', exp)[2]
         )),
     ):
         with STATE_LOCK:
@@ -2876,12 +2781,9 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         armed_a = bias12h_ok and ctx1h_ok and not ctx2h_veto and not rci12h_veto
         entry_a_ok = armed_a and is_entry_trigger
 
-        ctx1d, ctx1d_fresh, ctx1d_ok = _st_context_condition(m, '1d', exp_ctx)
         zalt12h, zalt12h_fresh, zalt12h_ok = _zalt_condition(m, '12h', exp_ctx)
-        armed_b = bool(
-            armed_fresh and armed_dir == exp_ctx
-            and ctx1d_ok and zalt12h_ok and ctx1h_ok and not rci12h_veto
-        )
+        rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
+        armed_b = bool(zalt12h_ok and rci4h_ok and ctx1h_ok)
         entry_b_ok = armed_b and is_entry_trigger
 
         logger.info(
@@ -2889,11 +2791,11 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             f"bias12h={bias12h}/{exp_ctx} fresh={bias12h_fresh} ok={bias12h_ok} "
             f"ctx1h={ctx1h}/{exp_ctx} fresh={ctx1h_fresh} ok={ctx1h_ok} "
             f"ctx2h={ctx2h} fresh={ctx2h_fresh} veto={ctx2h_veto} armed_a={armed_a} "
-            f"ctx1d={ctx1d}/{exp_ctx} fresh={ctx1d_fresh} ok={ctx1d_ok} "
             f"zalt12h={zalt12h}/{exp_ctx} fresh={zalt12h_fresh} ok={zalt12h_ok} "
+            f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
             f"rci12h={rci12h} fresh={rci12h_fresh} quality={rci12h_quality} veto={rci12h_veto} "
             f"rci30m={rci30m} fresh={rci30m_fresh} trigger_ok={rci30m_trigger_ok} "
-            f"prep_b={armed_dir}/{armed_fresh} armed_b={armed_b} "
+            f"armed_b={armed_b} "
             f"trigger_zalt30m={is_entry_trigger} entry_a={entry_a_ok} entry_b={entry_b_ok}"
         )
 
@@ -2924,8 +2826,8 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             event_key = event_id or f"swing_b_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = [
                 "[OK] Entree SWING B",
-                f"[OK] ST Context 1D: {_ctx_label(ctx1d)}",
                 f"[OK] ZALT 12H: {_ctx_label(zalt12h)}",
+                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}",
                 f"[OK] ST Context 1H: {_ctx_label(ctx1h)}",
                 f"[TRIGGER] Flip ZALT 30m: {_ctx_label(exp_ctx)} (34 / 1.20)",
                 _rci_trigger_info_line(m, '30m', exp_ctx),
@@ -2935,13 +2837,13 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 symbol,
                 'SWING_B',
                 direction,
-                'swing_b_ctx1d_zalt12h_ctx1h',
+                'swing_b_zalt12h_rci4h_ctx1h',
                 event_key,
                 price,
                 exchange_name,
                 detail_lines,
                 cooldown=14400,
-                quality=rci12h_quality,
+                quality=True,
             ) or opened
     return opened
 
@@ -2979,8 +2881,9 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         ctx2d, ctx2d_fresh, ctx2d_veto = _st_context_veto(m, '2d', exp_ctx)
         ctx2d_aligned = bool(ctx2d_fresh and ctx2d == exp_ctx)
         rci1h, rci1h_fresh, rci1h_trigger_ok = _rci_trigger_zone(m, '1h', exp_ctx)
+        rci1d, rci1d_fresh, rci1d_quality = _rci_extreme_quality(m, '1d', exp_ctx)
         armed = (bias1d_ok or bias2d_ok) and ctx4h_ok
-        quality_ok = ctx30_ok or (bias1d_ok and bias2d_ok)
+        quality_ok = ctx30_ok or (bias1d_ok and bias2d_ok) or rci1d_quality
         entry_ok = armed and is_entry_trigger
         with STATE_LOCK:
             confluence_pos = SCALP_POSITIONS.get(f"{symbol}_PULSE_CONFLUENCE")
@@ -3037,6 +2940,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
             f"ctx2d={ctx2d} fresh={ctx2d_fresh} veto={ctx2d_veto} "
             f"rci1h={rci1h} fresh={rci1h_fresh} trigger_ok={rci1h_trigger_ok} "
+            f"rci1d={rci1d} fresh={rci1d_fresh} quality={rci1d_quality} "
             f"rci2h_manual={rci2h_short} aligned={rci2h_aligned} armed={armed} "
             f"quality={quality_ok} trigger_rci1h={is_entry_trigger} entry={entry_ok}"
         )
@@ -3054,6 +2958,8 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 detail_lines.append(f"[QUALITE] ST Context 30m aligne: {_ctx_label(ctx30)}")
             if bias1d_ok and bias2d_ok:
                 detail_lines.append("[QUALITE] Bias 1D et Bias 2D alignes")
+            if rci1d_quality:
+                detail_lines.append(f"[GROSSE CONFLUENCE] RCI court 1D extreme: {rci1d:.1f}")
             if ctx2d_aligned:
                 detail_lines.append(f"[QUALITE] ST Context 2D aligne: {_ctx_label(ctx2d)}")
             elif ctx2d_veto:
@@ -3120,7 +3026,7 @@ def indicators_scheduler():
         for symbol in CONFIG['SYMBOLS']:
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
-        update_bias1d_ctx2h_report()
+        update_bias_rci_reports()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m

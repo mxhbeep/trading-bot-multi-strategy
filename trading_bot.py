@@ -1133,7 +1133,7 @@ def send_close_alert(symbol, strategy, direction, price, reason):
             f"💰 Price: ${format_price(price)}\n"
             f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
             f"📋 Raison: {reason}",
-            ntfy=True,
+            ntfy=(strategy == 'SWING'),
         )
         persist_runtime_state()
         logger.info(f"[{strategy}] Position clôturée: {symbol} {direction} —{reason}")
@@ -2405,6 +2405,7 @@ def _open_strategy_entry(
     telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
+    ntfy_enabled = strategy == 'SWING'
     message = (
         f"{emoji} <b>[{strategy_label} - {alert_kind}]</b> {symbol}\n"
         f"--------------------\nDirection: {direction}\n"
@@ -2415,7 +2416,7 @@ def _open_strategy_entry(
     if telegram_channel == 'telegram_scalp2h':
         result = send_notification(
             notification_title_from_message(message), message, priority=5, tags=[],
-            telegram=True, ntfy=True, telegram_channel=telegram_channel,
+            telegram=True, ntfy=ntfy_enabled, telegram_channel=telegram_channel,
         )
         telegram_ok = bool(result.get(telegram_channel))
     else:
@@ -2424,7 +2425,7 @@ def _open_strategy_entry(
             journal_symbol=symbol, journal_strategy=strategy,
             journal_direction=direction, journal_price=price,
             telegram_channel=telegram_channel,
-            ntfy=True,
+            ntfy=ntfy_enabled,
         )
     if not telegram_ok:
         logger.error(f"[{strategy}] Echec envoi Telegram via {telegram_channel}: {symbol} {direction}")
@@ -2627,7 +2628,7 @@ def check_rci30m_strategy_preps(symbol, exp_ctx, price, event_ts):
         )
         result = send_notification(
             notification_title_from_message(message), message, priority=5, tags=[],
-            telegram=True, ntfy=True, telegram_channel=telegram_channel,
+            telegram=True, ntfy=(strategy == 'SWING'), telegram_channel=telegram_channel,
         )
         if result.get(telegram_channel):
             sent = True
@@ -2917,7 +2918,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             )
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
-                priority=5, tags=[], telegram=True, ntfy=True,
+                priority=5, tags=[], telegram=True, ntfy=False,
                 telegram_channel='telegram_scalp2h',
             )
             logger.info(f"[PREP PULSE] {symbol} {direction}")

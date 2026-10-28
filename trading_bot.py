@@ -126,6 +126,10 @@ LAST_SIGNALS = {}
 LAST_SIGNAL_EVENTS = {}
 MOMENTUM_STATE = {}
 WATCHDOG_EXCLUDED_SYMBOLS = {'CVX/USDT'}
+DAILY_B_SYMBOLS = {
+    'BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'LTC/USDT', 'ADA/USDT',
+    'DOGE/USDT', 'LINK/USDT', 'BNB/USDT', 'SOL/USDT', 'AVAX/USDT',
+}
 LAST_BIAS_RCI_REPORTS = {
     '4h': {'long': [], 'short': []},
     '12h': {'long': [], 'short': []},
@@ -147,6 +151,10 @@ def get_tracked_symbols():
 def is_trade_symbol(symbol):
     cfg = CONFIG['SYMBOLS'].get(symbol, {})
     return bool(cfg.get('scalp') or cfg.get('pulse'))
+
+
+def is_daily_b_symbol(symbol):
+    return symbol in DAILY_B_SYMBOLS
 
 
 def get_scalpbot_symbols():
@@ -278,9 +286,11 @@ def load_runtime_state():
                 new_key = key[:-len('_PULSE_JACKPOT')] + '_PULSE'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
-            elif key.endswith('_DAILY_B'):
-                new_key = key[:-len('_DAILY_B')] + '_DAILY'
-                SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
+            elif key.endswith('_DAILY'):
+                symbol = key[:-len('_DAILY')]
+                if is_daily_b_symbol(symbol):
+                    new_key = f'{symbol}_DAILY_B'
+                    SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
             elif key.endswith('_PULSE_CONFLUENCE'):
                 new_key = key[:-len('_PULSE_CONFLUENCE')] + '_PULSE'
@@ -290,7 +300,15 @@ def load_runtime_state():
                 new_key = key[:-len('_SWING_B')] + '_SWING'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
-        for state in MOMENTUM_STATE.values():
+        for symbol, state in MOMENTUM_STATE.items():
+            if 'daily_a_prep_dir' not in state:
+                state['daily_a_prep_dir'] = None
+                state['daily_a_prep_ts'] = None
+            if 'daily_b_prep_dir' not in state:
+                old_prep_dir = state.pop('daily_prep_dir', None)
+                old_prep_ts = state.pop('daily_prep_ts', None)
+                state['daily_b_prep_dir'] = old_prep_dir if is_daily_b_symbol(symbol) else None
+                state['daily_b_prep_ts'] = old_prep_ts if is_daily_b_symbol(symbol) else None
             if 'swing_prep_dir' not in state:
                 state['swing_prep_dir'] = state.pop('swing_b_prep_dir', None)
                 state['swing_prep_ts'] = state.pop('swing_b_prep_ts', None)
@@ -734,8 +752,9 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY PREP: ZALT 2D (80/1.5) + RCI 1D extreme + CTX 4H\n"
-        "DAILY ENTREE: RCI 1H extreme + CTX 30m alignes\n"
+        "DAILY A PREP: Bias 2D + RCI 1D extreme + CTX 4H (38 actifs)\n"
+        "DAILY B PREP: ZALT 2D (80/1.5) + RCI 1D extreme + CTX 4H (10 actifs)\n"
+        "DAILY A/B ENTREE: RCI 1H extreme + CTX 30m alignes\n"
         "SWING: PREP ZALT 12H + RCI 4H extreme + CTX 30m\n"
         "SWING ENTREE: RCI 30m extreme + CTX 5m alignes\n"
         "PULSE PREP: Bias 1D + RCI 1D extreme + CTX 4H\n"
@@ -1094,7 +1113,8 @@ def init_symbol_states(symbol):
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
             'zalt_2d': None, 'zalt_2d_ts': None,
-            'daily_prep_dir': None, 'daily_prep_ts': None,
+            'daily_a_prep_dir': None, 'daily_a_prep_ts': None,
+            'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
             'swing_prep_dir': None, 'swing_prep_ts': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
         }
@@ -1230,6 +1250,11 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
+            if tf == '2d':
+                evaluate_daily(
+                    symbol, price=price, exchange_name=exchange_name,
+                    event_id=event_id, source='bias_2d',
+                )
         if alert_type == 'rci' and tf == '2h':
             try:
                 rci10 = float(data.get('rci10'))
@@ -1310,8 +1335,9 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY : PREP ZALT 2D + RCI 1D extreme + CTX 4H;
-        #         entree RCI 1H extreme + CTX 30m.
+        # DAILY A : PREP Bias 2D + RCI 1D extreme + CTX 4H.
+        # DAILY B : meme logique avec ZALT 2D, limitee a 10 actifs historiques.
+        # Entree commune : RCI 1H extreme + CTX 30m.
         # SWING : PREP ZALT 12H + RCI 4H extreme + CTX 30m;
         #         entree RCI 30m extreme + CTX 5m.
         # PULSE : PREP Bias 1D + RCI 1D + CTX 4H; entree CTX 30m + CTX 5m.
@@ -1676,7 +1702,7 @@ def reset_state_symbol(symbol):
     with STATE_LOCK:
         MOMENTUM_STATE.pop(symbol, None)
 
-        for strat in ['PULSE', 'DAILY', 'SWING', 'TREND2D']:
+        for strat in ['PULSE', 'DAILY_A', 'DAILY_B', 'SWING', 'TREND2D']:
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 
         keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
@@ -2046,8 +2072,8 @@ def update_okx_zalt_12h(symbol):
 
 
 def update_okx_zalt_2d(symbol):
-    """ZALT 2D interne en 80/1.5, direction de fond de DAILY."""
-    if not is_trade_symbol(symbol):
+    """ZALT 2D interne en 80/1.5, direction de DAILY B sur 10 actifs historiques."""
+    if not is_trade_symbol(symbol) or not is_daily_b_symbol(symbol):
         return
     with STATE_LOCK:
         init_symbol_states(symbol)
@@ -2360,6 +2386,12 @@ def update_okx_bias_htf(symbol):
     relay_bias_to_scalp(symbol, bias_4h, '4h')
     relay_bias_to_scalp(symbol, bias_1d, '1d')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
+    evaluate_daily(
+        symbol, price=daily_price,
+        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+        event_id=f"okx_bias2d_{symbol}_{int(now_ts)}",
+        source='okx_bias_2d',
+    )
     if is_pulse_symbol(symbol):
         pulse_price = daily_price
         evaluate_pulse_v3(
@@ -2607,103 +2639,107 @@ def _st_context_veto(m, tf, exp_ctx):
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY: PREP ZALT 2D + RCI 1D + CTX 4H; entree RCI 1H + CTX 30m."""
+    """DAILY A (Bias 2D) et DAILY B (ZALT 2D), avec un timing d'entree commun."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
-
-    with STATE_LOCK:
-        current_pos = SCALP_POSITIONS.get(f"{symbol}_DAILY")
-    if current_pos:
-        current_ctx = _trade_direction_to_ctx(current_pos.get('direction'))
-        position_valid = (
-            _zalt_condition(m, '2d', current_ctx)[2]
-            and _rci_extreme_quality(m, '1d', current_ctx)[2]
-            and _st_context_condition(m, '4h', current_ctx)[2]
-        )
-        _refresh_logical_position(symbol, 'DAILY', position_valid, 4 * 3600, 'confluence DAILY absente')
-
-    directions = ['buy', 'sell']
     opened = False
     state_changed = False
-    for exp_ctx in directions:
-        direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
 
-        zalt2d, zalt2d_fresh, zalt2d_ok = _zalt_condition(m, '2d', exp_ctx)
-        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
-        ctx30m, ctx30m_fresh, ctx30m_ok = _st_context_condition(m, '30m', exp_ctx)
-        rci1d, rci1d_fresh, rci1d_ok = _rci_extreme_quality(m, '1d', exp_ctx)
-        rci1h, rci1h_fresh, rci1h_ok = _rci_extreme_quality(m, '1h', exp_ctx)
-        armed = zalt2d_ok and rci1d_ok and ctx4h_ok
-
+    paths = [
+        ('A', 'Bias 2D', lambda exp: _bias_condition(m, '2d', exp), True),
+        ('B', 'ZALT 2D (80 / 1.5)', lambda exp: _zalt_condition(m, '2d', exp), is_daily_b_symbol(symbol)),
+    ]
+    for path, foundation_label, foundation_condition, enabled in paths:
+        if not enabled:
+            continue
+        strategy = f'DAILY_{path}'
         with STATE_LOCK:
-            daily_position_open = bool(SCALP_POSITIONS.get(f"{symbol}_DAILY"))
-            prep_dir = m.get('daily_prep_dir')
-            if armed and prep_dir != exp_ctx:
-                m['daily_prep_dir'] = exp_ctx
-                m['daily_prep_ts'] = time.time()
-                state_changed = True
-                send_prep = not daily_position_open
-            else:
-                send_prep = False
-            if not armed and prep_dir == exp_ctx:
-                m['daily_prep_dir'] = None
-                m['daily_prep_ts'] = None
-                state_changed = True
-
-        entry_ok = armed and rci1h_ok and ctx30m_ok and not daily_position_open
-
-        if send_prep:
-            prep_message = (
-                f"<b>[PREP DAILY]</b> {symbol}\n"
-                "--------------------\n"
-                f"Direction: {direction}\n"
-                f"Price: ${format_price(price)}\n"
-                f"[OK] ZALT 2D: {_ctx_label(zalt2d)} (80 / 1.5)\n"
-                f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}\n"
-                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
-                "[ATTENTE] RCI court 1H extreme + ST Context 30m alignes"
+            current_pos = SCALP_POSITIONS.get(f"{symbol}_{strategy}")
+        if current_pos:
+            current_ctx = _trade_direction_to_ctx(current_pos.get('direction'))
+            position_valid = (
+                foundation_condition(current_ctx)[2]
+                and _rci_extreme_quality(m, '1d', current_ctx)[2]
+                and _st_context_condition(m, '4h', current_ctx)[2]
             )
-            send_notification(
-                notification_title_from_message(prep_message), prep_message,
-                priority=5, tags=[], telegram=True, ntfy=False,
-                telegram_channel='telegram_alerts',
+            _refresh_logical_position(
+                symbol, strategy, position_valid, 4 * 3600,
+                f'confluence Daily {path} absente',
             )
-            logger.info(f"[PREP DAILY] {symbol} {direction}")
 
-        logger.info(
-            f"[DAILY CHECK] {symbol} source={source} dir={direction} "
-            f"zalt2d={zalt2d}/{exp_ctx} fresh={zalt2d_fresh} ok={zalt2d_ok} "
-            f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
-            f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
-            f"rci1h={rci1h} fresh={rci1h_fresh} ok={rci1h_ok} "
-            f"ctx30m={ctx30m}/{ctx30m_ok} ctx30m_fresh={ctx30m_fresh} "
-            f"armed={armed} entry={entry_ok}"
-        )
-        if entry_ok:
-            event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
-            detail_lines = [
-                "[OK] Entree DAILY",
-                f"[OK] ZALT 2D: {_ctx_label(zalt2d)} (80 / 1.5)",
-                f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}",
-                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
-                f"[TRIGGER] RCI court 1H extreme favorable: {rci1h:.1f}",
-                f"[TRIGGER] ST Context 30m: {_ctx_label(ctx30m)}",
-            ]
-            opened = _open_strategy_entry(
-                symbol,
-                'DAILY',
-                direction,
-                'daily_zalt2d_rci1d_ctx4h_rci1h_ctx30m',
-                event_key,
-                price,
-                exchange_name,
-                detail_lines,
-                cooldown=14400,
-                quality=True,
-            ) or opened
+        for exp_ctx in ('buy', 'sell'):
+            direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
+            foundation, foundation_fresh, foundation_ok = foundation_condition(exp_ctx)
+            ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+            ctx30m, ctx30m_fresh, ctx30m_ok = _st_context_condition(m, '30m', exp_ctx)
+            rci1d, rci1d_fresh, rci1d_ok = _rci_extreme_quality(m, '1d', exp_ctx)
+            rci1h, rci1h_fresh, rci1h_ok = _rci_extreme_quality(m, '1h', exp_ctx)
+            armed = foundation_ok and rci1d_ok and ctx4h_ok
+            prep_field = f'daily_{path.lower()}_prep_dir'
+            prep_ts_field = f'daily_{path.lower()}_prep_ts'
+
+            with STATE_LOCK:
+                position_open = bool(SCALP_POSITIONS.get(f"{symbol}_{strategy}"))
+                prep_dir = m.get(prep_field)
+                if armed and prep_dir != exp_ctx:
+                    m[prep_field] = exp_ctx
+                    m[prep_ts_field] = time.time()
+                    state_changed = True
+                    send_prep = not position_open
+                else:
+                    send_prep = False
+                if not armed and prep_dir == exp_ctx:
+                    m[prep_field] = None
+                    m[prep_ts_field] = None
+                    state_changed = True
+
+            entry_ok = armed and rci1h_ok and ctx30m_ok and not position_open
+            if send_prep:
+                prep_message = (
+                    f"<b>[PREP DAILY {path}]</b> {symbol}\n"
+                    "--------------------\n"
+                    f"Direction: {direction}\n"
+                    f"Price: ${format_price(price)}\n"
+                    f"[OK] {foundation_label}: {_ctx_label(foundation)}\n"
+                    f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}\n"
+                    f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
+                    "[ATTENTE] RCI court 1H extreme + ST Context 30m alignes"
+                )
+                send_notification(
+                    notification_title_from_message(prep_message), prep_message,
+                    priority=5, tags=[], telegram=True, ntfy=False,
+                    telegram_channel='telegram_alerts',
+                )
+                logger.info(f"[PREP DAILY {path}] {symbol} {direction}")
+
+            logger.info(
+                f"[DAILY {path} CHECK] {symbol} source={source} dir={direction} "
+                f"foundation={foundation}/{exp_ctx} fresh={foundation_fresh} ok={foundation_ok} "
+                f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
+                f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
+                f"rci1h={rci1h} fresh={rci1h_fresh} ok={rci1h_ok} "
+                f"ctx30m={ctx30m}/{ctx30m_ok} ctx30m_fresh={ctx30m_fresh} "
+                f"armed={armed} entry={entry_ok}"
+            )
+            if entry_ok:
+                event_key = event_id or f"daily_{path.lower()}_{symbol}_{int(time.time())}_{exp_ctx}"
+                detail_lines = [
+                    f"[OK] Entree DAILY {path}",
+                    f"[OK] {foundation_label}: {_ctx_label(foundation)}",
+                    f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}",
+                    f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+                    f"[TRIGGER] RCI court 1H extreme favorable: {rci1h:.1f}",
+                    f"[TRIGGER] ST Context 30m: {_ctx_label(ctx30m)}",
+                ]
+                opened = _open_strategy_entry(
+                    symbol, strategy, direction,
+                    f'daily_{path.lower()}_rci1d_ctx4h_rci1h_ctx30m',
+                    event_key, price, exchange_name, detail_lines,
+                    cooldown=14400, quality=True,
+                ) or opened
     if state_changed:
         persist_runtime_state()
     return opened

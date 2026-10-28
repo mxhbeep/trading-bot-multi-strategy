@@ -755,7 +755,8 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY A PREP: Bias 2D + CTX 4H (38 actifs)\n"
         "DAILY B PREP: ZALT 2D (80/1.5) + CTX 4H (10 actifs)\n"
-        "DAILY A/B ENTREE: CTX 30m + CTX 5m; RCI 1D / 1H = bonus qualite\n"
+        "DAILY A: gestion manuelle apres PREP\n"
+        "DAILY B ENTREE: CTX 30m; RCI 1D / 12H = bonus qualite\n"
         "SWING: PREP ZALT 12H + RCI 4H extreme + CTX 30m\n"
         "SWING ENTREE: RCI 30m extreme + CTX 5m alignes\n"
         "PULSE PREP: Bias 1D + RCI 12H extreme\n"
@@ -1352,16 +1353,16 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY A : PREP Bias 2D + CTX 4H.
-        # DAILY B : meme logique avec ZALT 2D, limitee a 10 actifs historiques.
-        # Entree commune : CTX 30m + CTX 5m; RCI 1D / 1H = bonus qualite.
+        # DAILY A : PREP Bias 2D + CTX 4H, puis gestion manuelle.
+        # DAILY B : PREP ZALT 2D + CTX 4H, puis entree CTX 30m.
+        # RCI 1D / 12H : bonus qualite non bloquants.
         # SWING : PREP ZALT 12H + RCI 4H extreme + CTX 30m;
         #         entree RCI 30m extreme + CTX 5m.
         # PULSE : PREP Bias 1D + RCI 12H; entree CTX 1H + CTX 5m.
         # REVERSAL : PREP CTX 1D + CTX 4H + RCI 4H; entree sur nouveau CTX 1H.
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
-            alert_type == 'st_context' and tf in ('5m', '30m', '4h')
+            alert_type == 'st_context' and tf in ('30m', '4h')
         ):
             evaluate_daily(
                 symbol,
@@ -2311,6 +2312,12 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
             )
     elif tf == '12h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+        evaluate_daily(
+            symbol, price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_daily_rci12h_{symbol}_{int(now_ts)}",
+            source='okx_rci_12h',
+        )
         if is_pulse_enabled() and is_pulse_symbol(symbol):
             evaluate_pulse_v3(
                 symbol, price=price,
@@ -2768,7 +2775,7 @@ def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, sour
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY A/B: PREP direction 2D + CTX 4H; RCI 1D/1H en bonus."""
+    """DAILY A: PREP manuelle. DAILY B: PREP puis entree CTX 30m."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2803,12 +2810,13 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             foundation, foundation_fresh, foundation_ok = foundation_condition(exp_ctx)
             ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
             ctx30m, ctx30m_fresh, ctx30m_ok = _st_context_condition(m, '30m', exp_ctx)
-            ctx5m, ctx5m_fresh, ctx5m_ok = _st_context_condition(m, '5m', exp_ctx)
             rci1d, rci1d_fresh, rci1d_ok = _rci_extreme_quality(m, '1d', exp_ctx)
-            rci1h, rci1h_fresh, rci1h_ok = _rci_extreme_quality(m, '1h', exp_ctx)
+            rci12h, rci12h_fresh, rci12h_ok = _rci_extreme_quality(m, '12h', exp_ctx)
             armed = foundation_ok and ctx4h_ok
+            prep_quality = bool(rci1d_ok or rci12h_ok)
             prep_field = f'daily_{path.lower()}_prep_dir'
             prep_ts_field = f'daily_{path.lower()}_prep_ts'
+            quality_field = f'daily_{path.lower()}_quality_dir'
 
             with STATE_LOCK:
                 position_open = bool(SCALP_POSITIONS.get(f"{symbol}_{strategy}"))
@@ -2820,22 +2828,38 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                     send_prep = not position_open
                 else:
                     send_prep = False
+                quality_dir = m.get(quality_field)
+                send_quality = bool(
+                    armed and prep_quality and quality_dir != exp_ctx
+                    and prep_dir == exp_ctx and not position_open
+                )
+                if armed and prep_quality:
+                    if quality_dir != exp_ctx:
+                        m[quality_field] = exp_ctx
+                        state_changed = True
+                elif quality_dir == exp_ctx:
+                    m[quality_field] = None
+                    state_changed = True
                 if not armed and prep_dir == exp_ctx:
                     m[prep_field] = None
                     m[prep_ts_field] = None
+                    m[quality_field] = None
                     state_changed = True
 
-            entry_ok = armed and ctx30m_ok and ctx5m_ok and not position_open
+            entry_ok = path == 'B' and armed and ctx30m_ok and not position_open
             if send_prep:
+                prep_title = f"[PREP DAILY {path}{' - QUALITE' if prep_quality else ''}]"
                 prep_message = (
-                    f"<b>[PREP DAILY {path}]</b> {symbol}\n"
+                    f"<b>{prep_title}</b> {symbol}\n"
                     "--------------------\n"
                     f"Direction: {direction}\n"
                     f"Price: ${format_price(price)}\n"
                     f"[OK] {foundation_label}: {_ctx_label(foundation)}\n"
                     f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
-                    "[ATTENTE] ST Context 30m + ST Context 5m alignes\n"
-                    "[BONUS QUALITE] RCI court 1D et/ou 1H extreme favorable"
+                    + ("[GESTION MANUELLE] Aucun declencheur automatique pour Daily A\n" if path == 'A'
+                       else "[ATTENTE] ST Context 30m aligne pour entrer\n")
+                    + _rci_quality_line(m, '1d', exp_ctx) + "\n"
+                    + _rci_quality_line(m, '12h', exp_ctx)
                 )
                 send_notification(
                     notification_title_from_message(prep_message), prep_message,
@@ -2843,15 +2867,31 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                     telegram_channel='telegram_alerts',
                 )
                 logger.info(f"[PREP DAILY {path}] {symbol} {direction}")
+            elif send_quality:
+                quality_message = (
+                    f"<b>[QUALITE DAILY {path}]</b> {symbol}\n"
+                    "--------------------\n"
+                    f"Direction: {direction}\n"
+                    f"Price: ${format_price(price)}\n"
+                    f"[OK] {foundation_label}: {_ctx_label(foundation)}\n"
+                    f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
+                    + _rci_quality_line(m, '1d', exp_ctx) + "\n"
+                    + _rci_quality_line(m, '12h', exp_ctx)
+                )
+                send_notification(
+                    notification_title_from_message(quality_message), quality_message,
+                    priority=5, tags=[], telegram=True, ntfy=False,
+                    telegram_channel='telegram_alerts',
+                )
+                logger.info(f"[QUALITE DAILY {path}] {symbol} {direction}")
 
             logger.info(
                 f"[DAILY {path} CHECK] {symbol} source={source} dir={direction} "
                 f"foundation={foundation}/{exp_ctx} fresh={foundation_fresh} ok={foundation_ok} "
                 f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
                 f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
-                f"rci1h={rci1h} fresh={rci1h_fresh} ok={rci1h_ok} "
+                f"rci12h={rci12h} fresh={rci12h_fresh} ok={rci12h_ok} "
                 f"ctx30m={ctx30m}/{ctx30m_ok} ctx30m_fresh={ctx30m_fresh} "
-                f"ctx5m={ctx5m}/{ctx5m_ok} ctx5m_fresh={ctx5m_fresh} "
                 f"armed={armed} entry={entry_ok}"
             )
             if entry_ok:
@@ -2861,15 +2901,14 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                     f"[OK] {foundation_label}: {_ctx_label(foundation)}",
                     f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
                     f"[TRIGGER] ST Context 30m: {_ctx_label(ctx30m)}",
-                    f"[TRIGGER] ST Context 5m: {_ctx_label(ctx5m)}",
                     _rci_quality_line(m, '1d', exp_ctx),
-                    _rci_quality_line(m, '1h', exp_ctx),
+                    _rci_quality_line(m, '12h', exp_ctx),
                 ]
                 opened = _open_strategy_entry(
                     symbol, strategy, direction,
-                    f'daily_{path.lower()}_ctx4h_ctx30m_ctx5m',
+                    f'daily_{path.lower()}_ctx4h_ctx30m',
                     event_key, price, exchange_name, detail_lines,
-                    cooldown=14400, quality=bool(rci1d_ok or rci1h_ok),
+                    cooldown=14400, quality=bool(rci1d_ok or rci12h_ok),
                 ) or opened
     if state_changed:
         persist_runtime_state()

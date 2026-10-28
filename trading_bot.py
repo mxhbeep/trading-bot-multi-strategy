@@ -728,7 +728,8 @@ def send_start_notification():
         f"Total Assets: {len(CONFIG['SYMBOLS'])}\n"
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
-        "DAILY: Bias 2D + RCI 1D extreme + CTX 4H\n"
+        "DAILY PREP: ZALT 2D (80/1.5) + RCI 1D extreme + CTX 4H\n"
+        "DAILY ENTREE: RCI 1H extreme + CTX 30m alignes\n"
         "SWING B: PREP ZALT 12H + RCI 4H extreme + CTX 1H, entree flip ZALT 30m\n"
         "PULSE PREP: Bias 1D + RCI 1D extreme + CTX 4H\n"
         "PULSE ENTREE: CTX 30m + CTX 5m alignes\n"
@@ -1076,6 +1077,8 @@ def init_symbol_states(symbol):
             'rci_30m_10': None, 'rci_30m_30': None, 'rci_30m_50': None,  # Scalp entree secondaire
             'rci_30m_dir': None, 'rci_30m_chop': None, 'rci_30m_ts': None,
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
+            'rci_1h_10': None, 'rci_1h_30': None, 'rci_1h_50': None,
+            'rci_1h_dir': None, 'rci_1h_chop': None, 'rci_1h_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
             'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Swing B + qualite/veto Scalp B
@@ -1091,6 +1094,8 @@ def init_symbol_states(symbol):
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
+            'zalt_2d': None, 'zalt_2d_ts': None,
+            'daily_prep_dir': None, 'daily_prep_ts': None,
             'swing_b_prep_dir': None, 'swing_b_prep_ts': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
         }
@@ -1221,11 +1226,6 @@ def process_webhook(data):
             if tf in ('4h', '12h', '1d'):
                 update_bias_rci_reports((tf,))
 
-            if tf == '2d':
-                evaluate_daily(
-                    symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
-                    event_id=event_id, source=f"bias_{tf}",
-                )
             if tf == '1d' and is_pulse_enabled() and is_pulse_symbol(symbol):
                 evaluate_pulse_v3(
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
@@ -1262,7 +1262,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('5m', '10m', '30m', '12h'):
+                if tf in ('5m', '10m', '30m', '12h', '2d'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if zalt_signal in ('trend_flip', 'flip'):
@@ -1276,6 +1276,11 @@ def process_webhook(data):
                                 exchange_name=exchange_name, event_id=event_id,
                                 source='tv_zalt_30m_flip',
                             )
+                    elif tf == '2d':
+                        evaluate_daily(
+                            symbol, price=price, exchange_name=exchange_name,
+                            event_id=event_id, source='tv_zalt_2d',
+                        )
                 else:
                     logger.info(f"[ZALT] {symbol} tf={tf} ignore: timeframe non utilise")
             else:
@@ -1318,12 +1323,13 @@ def process_webhook(data):
 
         # ========================================================================
         # STRATEGIES ACTIVES
-        # DAILY : Bias 2D + RCI 1D extreme + CTX 4H
+        # DAILY : PREP ZALT 2D + RCI 1D extreme + CTX 4H;
+        #         entree RCI 1H extreme + CTX 30m.
         # SWING B : ZALT 12H + RCI 4H extreme + CTX 1H, puis flip ZALT 30m
         # PULSE : PREP Bias 1D + RCI 1D + CTX 4H; entree CTX 30m + CTX 5m.
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
-            alert_type == 'st_context' and tf == '4h'
+            alert_type == 'st_context' and tf in ('30m', '4h')
         ):
             evaluate_daily(
                 symbol,
@@ -1722,6 +1728,61 @@ def fetch_ohlcv_okx(symbol, timeframe, limit=250):
         return None
 
 
+def fetch_ohlcv_okx_history(symbol, timeframe, limit=600):
+    """Recupere plusieurs pages OKX, puis renvoie les bougies dans l'ordre chronologique."""
+    try:
+        cfg = get_symbol_config(symbol)
+        inst_id = cfg.get('okx_inst_id') or symbol.replace('/', '-')
+        tf_map = {'1d': '1D'}
+        bar = tf_map.get(timeframe, timeframe.upper())
+        rows_by_ts = {}
+        after = None
+        while len(rows_by_ts) < limit:
+            page_limit = min(300, limit - len(rows_by_ts))
+            url = f'https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={page_limit}'
+            if after is not None:
+                url += f'&after={after}'
+            resp = requests.get(url, timeout=10)
+            data = resp.json()
+            page = data.get('data') or []
+            if data.get('code') != '0' or not page:
+                logger.error(f"[OKX] API history error {symbol} {timeframe}: {data.get('msg', 'no data')}")
+                break
+            for row in page:
+                ts = int(row[0])
+                rows_by_ts[ts] = [ts, float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])]
+            oldest_ts = min(int(row[0]) for row in page)
+            if after == oldest_ts or len(page) < page_limit:
+                break
+            after = oldest_ts
+        if not rows_by_ts:
+            return None
+        rows = [rows_by_ts[ts] for ts in sorted(rows_by_ts)][-limit:]
+        return pd.DataFrame(rows, columns=['ts', 'open', 'high', 'low', 'close', 'volume'])
+    except Exception as e:
+        logger.error(f"[OKX] fetch_ohlcv_history {symbol} {timeframe}: {e}")
+        return None
+
+
+def aggregate_ohlcv_2d(df):
+    """Agrege des bougies 1D confirmees en bougies 2D ancrees sur l'epoch UTC."""
+    if df is None or df.empty:
+        return None
+    d = df.sort_values('ts').drop_duplicates('ts').copy()
+    d['bucket'] = d['ts'].astype('int64') // (2 * 24 * 60 * 60 * 1000)
+    grouped = d.groupby('bucket', sort=True).agg(
+        ts=('ts', 'first'),
+        open=('open', 'first'),
+        high=('high', 'max'),
+        low=('low', 'min'),
+        close=('close', 'last'),
+        volume=('volume', 'sum'),
+        candle_count=('ts', 'size'),
+    ).reset_index(drop=True)
+    grouped = grouped[grouped['candle_count'] == 2].drop(columns='candle_count')
+    return grouped.reset_index(drop=True) if not grouped.empty else None
+
+
 
 
 
@@ -1759,6 +1820,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 ZALT_HTF_SETTINGS = {
     '30m': {'length': 34, 'mult': 1.2},
     '12h': {'length': 50, 'mult': 1.15},
+    '2d': {'length': 80, 'mult': 1.5},
 }
 
 
@@ -2003,6 +2065,40 @@ def update_okx_zalt_12h(symbol):
     check_swing_b(symbol, price=price)
 
 
+def update_okx_zalt_2d(symbol):
+    """ZALT 2D interne en 80/1.5, direction de fond de DAILY."""
+    if not is_trade_symbol(symbol):
+        return
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        last_update = MOMENTUM_STATE[symbol].get('zalt_2d_ts')
+    if is_signal_fresh(last_update, 6 * 3600):
+        return
+    cfg = ZALT_HTF_SETTINGS['2d']
+    daily = keep_confirmed_candles(fetch_ohlcv_okx_history(symbol, '1d', limit=600), 24 * 60)
+    df = aggregate_ohlcv_2d(daily)
+    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+    now_ts = time.time()
+    price = 0.0
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        if not payload:
+            logger.info(f"[ZALT OKX] {symbol} 2d=None")
+        else:
+            m['zalt_2d'] = payload['trend']
+            m['zalt_2d_ts'] = now_ts
+            price = payload['close']
+            logger.info(f"[ZALT OKX] {symbol} 2d={payload['trend']} (80/1.5)")
+        persist_runtime_state()
+    evaluate_daily(
+        symbol, price=price,
+        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+        event_id=f"okx_zalt2d_{symbol}_{int(now_ts)}",
+        source='okx_zalt_2d',
+    )
+
+
 def calc_bias_okx(df, ema_len=17, sma_len=40):
     """Biais interne calcule sur les closes confirmees.
     EMA17/SMA40 par defaut; les appels 1H, 4H et 12H utilisent EMA21/SMA55.
@@ -2148,7 +2244,15 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
         f"[RCI OKX {tf.upper()}] {symbol} 10={rci_values.get(10)} "
         f"30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}"
     )
-    if tf == '4h':
+    if tf == '1h':
+        price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+        evaluate_daily(
+            symbol, price=price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_rci1h_{symbol}_{int(now_ts)}",
+            source='okx_rci_1h',
+        )
+    elif tf == '4h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
         relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
         if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
@@ -2206,7 +2310,7 @@ def relay_bias_to_scalp(symbol, value, tf):
 
 
 def update_okx_bias_2h(symbol):
-    """Bias 2H calcule en interne pour SCALP et DAILY."""
+    """Bias 2H calcule en interne pour les usages scalp."""
     if not is_trade_symbol(symbol):
         return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=100), 120)
@@ -2271,14 +2375,6 @@ def update_okx_bias_htf(symbol):
     relay_bias_to_scalp(symbol, bias_4h, '4h')
     relay_bias_to_scalp(symbol, bias_1d, '1d')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
-    evaluate_daily(
-        symbol,
-        trigger_dir=None,
-        price=daily_price,
-        exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
-        event_id=f"okx_bias_1d_{symbol}_{int(now_ts)}",
-        source='okx_bias_1d',
-    )
     if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
         evaluate_swing(
             symbol,
@@ -2535,7 +2631,7 @@ def _st_context_veto(m, tf, exp_ctx):
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """DAILY: Bias 2D + RCI 1D extreme favorable + CTX 4H."""
+    """DAILY: PREP ZALT 2D + RCI 1D + CTX 4H; entree RCI 1H + CTX 30m."""
     if not CONFIG.get('ENABLE_DAILY', True) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -2547,7 +2643,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     if current_pos:
         current_ctx = _trade_direction_to_ctx(current_pos.get('direction'))
         position_valid = (
-            _bias_condition(m, '2d', current_ctx)[2]
+            _zalt_condition(m, '2d', current_ctx)[2]
             and _rci_extreme_quality(m, '1d', current_ctx)[2]
             and _st_context_condition(m, '4h', current_ctx)[2]
         )
@@ -2555,32 +2651,76 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
     directions = ['buy', 'sell']
     opened = False
+    state_changed = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
 
-        bias2d, bias2d_fresh, bias2d_ok = _bias_condition(m, '2d', exp_ctx)
+        zalt2d, zalt2d_fresh, zalt2d_ok = _zalt_condition(m, '2d', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+        ctx30m, ctx30m_fresh, ctx30m_ok = _st_context_condition(m, '30m', exp_ctx)
         rci1d, rci1d_fresh, rci1d_ok = _rci_extreme_quality(m, '1d', exp_ctx)
-        entry_ok = bias2d_ok and rci1d_ok and ctx4h_ok
+        rci1h, rci1h_fresh, rci1h_ok = _rci_extreme_quality(m, '1h', exp_ctx)
+        armed = zalt2d_ok and rci1d_ok and ctx4h_ok
+
+        with STATE_LOCK:
+            daily_position_open = bool(SCALP_POSITIONS.get(f"{symbol}_DAILY"))
+            prep_dir = m.get('daily_prep_dir')
+            if armed and prep_dir != exp_ctx:
+                m['daily_prep_dir'] = exp_ctx
+                m['daily_prep_ts'] = time.time()
+                state_changed = True
+                send_prep = not daily_position_open
+            else:
+                send_prep = False
+            if not armed and prep_dir == exp_ctx:
+                m['daily_prep_dir'] = None
+                m['daily_prep_ts'] = None
+                state_changed = True
+
+        entry_ok = armed and rci1h_ok and ctx30m_ok and not daily_position_open
+
+        if send_prep:
+            prep_message = (
+                f"<b>[PREP DAILY]</b> {symbol}\n"
+                "--------------------\n"
+                f"Direction: {direction}\n"
+                f"Price: ${format_price(price)}\n"
+                f"[OK] ZALT 2D: {_ctx_label(zalt2d)} (80 / 1.5)\n"
+                f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}\n"
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
+                "[ATTENTE] RCI court 1H extreme + ST Context 30m alignes"
+            )
+            send_notification(
+                notification_title_from_message(prep_message), prep_message,
+                priority=5, tags=[], telegram=True, ntfy=False,
+                telegram_channel='telegram_alerts',
+            )
+            logger.info(f"[PREP DAILY] {symbol} {direction}")
 
         logger.info(
             f"[DAILY CHECK] {symbol} source={source} dir={direction} "
-            f"bias2d={bias2d}/{exp_ctx} ok={bias2d_ok} [CTX 4H]={ctx4h} ok={ctx4h_ok} "
-            f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} entry={entry_ok}"
+            f"zalt2d={zalt2d}/{exp_ctx} fresh={zalt2d_fresh} ok={zalt2d_ok} "
+            f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
+            f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
+            f"rci1h={rci1h} fresh={rci1h_fresh} ok={rci1h_ok} "
+            f"ctx30m={ctx30m}/{ctx30m_ok} ctx30m_fresh={ctx30m_fresh} "
+            f"armed={armed} entry={entry_ok}"
         )
         if entry_ok:
             event_key = event_id or f"daily_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = [
                 "[OK] Entree DAILY",
-                f"[OK] Bias 2D: {_ctx_label(bias2d)}",
+                f"[OK] ZALT 2D: {_ctx_label(zalt2d)} (80 / 1.5)",
                 f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}",
                 f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+                f"[TRIGGER] RCI court 1H extreme favorable: {rci1h:.1f}",
+                f"[TRIGGER] ST Context 30m: {_ctx_label(ctx30m)}",
             ]
             opened = _open_strategy_entry(
                 symbol,
                 'DAILY',
                 direction,
-                'daily_bias2d_rci1d_ctx4h',
+                'daily_zalt2d_rci1d_ctx4h_rci1h_ctx30m',
                 event_key,
                 price,
                 exchange_name,
@@ -2588,6 +2728,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 cooldown=14400,
                 quality=True,
             ) or opened
+    if state_changed:
+        persist_runtime_state()
     return opened
 
 
@@ -2805,12 +2947,14 @@ def update_indicators_for_symbol(symbol):
             return
         update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)
+        update_okx_rci_quality(symbol, '1h', 60)
         update_okx_rci_2h(symbol)
         update_okx_rci_quality(symbol, '4h', 4 * 60)
         update_okx_rci_quality(symbol, '12h', 12 * 60)
         update_okx_rci_quality(symbol, '1d', 24 * 60)
         update_okx_zalt_htf(symbol)
         update_okx_zalt_12h(symbol)
+        update_okx_zalt_2d(symbol)
         update_okx_bias_htf(symbol)
     except Exception as e:
         logger.error(f"[OKX] update_indicators {symbol}: {e}")

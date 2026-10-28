@@ -115,6 +115,7 @@ CONFIG = {
     'ENABLE_PULSE_V7': os.environ.get('ENABLE_PULSE_V7', os.environ.get('ENABLE_PULSE_V6', '1')) == '1',
     'ENABLE_DAILY': True,
     'ENABLE_SWING': True,
+    'ENABLE_REVERSAL': True,
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -1357,6 +1358,7 @@ def process_webhook(data):
         # SWING : PREP ZALT 12H + RCI 4H extreme + CTX 30m;
         #         entree RCI 30m extreme + CTX 5m.
         # PULSE : PREP Bias 1D + RCI 12H; entree CTX 1H + CTX 5m.
+        # REVERSAL : PREP CTX 1D + CTX 4H + RCI 4H; entree sur nouveau CTX 1H.
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf in ('5m', '30m', '4h')
@@ -1380,6 +1382,17 @@ def process_webhook(data):
                 exchange_name=exchange_name,
                 event_id=event_id,
                 source=f"{alert_type}_{tf}",
+            )
+
+        if CONFIG.get('ENABLE_REVERSAL', True) and is_trade_symbol(symbol) and (
+            alert_type == 'st_context' and tf in ('1h', '4h', '1d')
+        ):
+            evaluate_reversal(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+                source=f"st_context_{tf}",
             )
 
         # PULSE : PREP HTF, puis CTX 1H + CTX 5m.
@@ -2289,6 +2302,13 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
                 event_id=f"okx_rci4h_{symbol}_{int(now_ts)}",
                 source='okx_rci_4h',
             )
+        if CONFIG.get('ENABLE_REVERSAL', True):
+            evaluate_reversal(
+                symbol, price=price or 0.0,
+                exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                event_id=f"okx_reversal_rci4h_{symbol}_{int(now_ts)}",
+                source='okx_rci_4h',
+            )
     elif tf == '12h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
         if is_pulse_enabled() and is_pulse_symbol(symbol):
@@ -2654,6 +2674,97 @@ def _st_context_veto(m, tf, exp_ctx):
     return value, fresh, veto
 
 
+
+
+def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+    """REVERSAL: PREP CTX 1D + CTX 4H + RCI 4H; entree sur nouveau CTX 1H."""
+    if not CONFIG.get('ENABLE_REVERSAL', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    opened = False
+    state_changed = False
+
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(f"{symbol}_REVERSAL")
+    if pos:
+        exp = _trade_direction_to_ctx(pos.get('direction'))
+        position_valid = (
+            _st_context_condition(m, '1d', exp)[2]
+            and _st_context_condition(m, '4h', exp)[2]
+            and _rci_extreme_quality(m, '4h', exp)[2]
+        )
+        _refresh_logical_position(symbol, 'REVERSAL', position_valid, 4 * 3600, 'confluence Reversal absente')
+
+    for exp_ctx in ('buy', 'sell'):
+        direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
+        ctx1d, ctx1d_fresh, ctx1d_ok = _st_context_condition(m, '1d', exp_ctx)
+        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+        ctx1h, ctx1h_fresh, ctx1h_ok = _st_context_condition(m, '1h', exp_ctx)
+        rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
+        armed = ctx1d_ok and ctx4h_ok and rci4h_ok
+
+        with STATE_LOCK:
+            position_open = bool(SCALP_POSITIONS.get(f"{symbol}_REVERSAL"))
+            prep_dir = m.get('reversal_prep_dir')
+            if armed and prep_dir != exp_ctx:
+                m['reversal_prep_dir'] = exp_ctx
+                m['reversal_prep_ts'] = time.time()
+                state_changed = True
+                send_prep = not position_open
+            else:
+                send_prep = False
+            if not armed and prep_dir == exp_ctx:
+                m['reversal_prep_dir'] = None
+                m['reversal_prep_ts'] = None
+                state_changed = True
+
+        entry_ok = armed and ctx1h_ok and source == 'st_context_1h' and not position_open
+        if send_prep:
+            prep_message = (
+                f"<b>[PREP REVERSAL]</b> {symbol}\n"
+                "--------------------\n"
+                f"Direction: {direction}\n"
+                f"Price: ${format_price(price)}\n"
+                f"[OK] ST Context 1D: {_ctx_label(ctx1d)}\n"
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
+                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}\n"
+                "[ATTENTE] Nouvelle zone ST Context 1H alignee"
+            )
+            send_notification(
+                notification_title_from_message(prep_message), prep_message,
+                priority=5, tags=[], telegram=True, ntfy=False,
+                telegram_channel='telegram_alerts',
+            )
+            logger.info(f"[PREP REVERSAL] {symbol} {direction}")
+
+        logger.info(
+            f"[REVERSAL CHECK] {symbol} source={source} dir={direction} "
+            f"ctx1d={ctx1d}/{exp_ctx} fresh={ctx1d_fresh} ok={ctx1d_ok} "
+            f"ctx4h={ctx4h}/{exp_ctx} fresh={ctx4h_fresh} ok={ctx4h_ok} "
+            f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
+            f"ctx1h={ctx1h}/{exp_ctx} fresh={ctx1h_fresh} ok={ctx1h_ok} "
+            f"armed={armed} entry={entry_ok}"
+        )
+        if entry_ok:
+            event_key = event_id or f"reversal_{symbol}_{int(time.time())}_{exp_ctx}"
+            detail_lines = [
+                "[OK] Entree REVERSAL",
+                f"[OK] ST Context 1D: {_ctx_label(ctx1d)}",
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}",
+                f"[TRIGGER] Nouvelle zone ST Context 1H: {_ctx_label(ctx1h)}",
+            ]
+            opened = _open_strategy_entry(
+                symbol, 'REVERSAL', direction,
+                'reversal_ctx1d_ctx4h_rci4h_ctx1h',
+                event_key, price, exchange_name, detail_lines,
+                cooldown=14400, quality=True,
+            ) or opened
+    if state_changed:
+        persist_runtime_state()
+    return opened
 
 
 def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):

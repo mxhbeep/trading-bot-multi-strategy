@@ -282,6 +282,8 @@ def load_runtime_state():
                 new_key = key[:-len('_DAILY_B')] + '_DAILY'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
+            elif key.endswith('_SWING'):
+                SCALP_POSITIONS.pop(key, None)
         saved_bias_rci_reports = payload.get('last_bias_rci_reports', {})
         LAST_BIAS_RCI_REPORTS = {
             tf: {
@@ -723,7 +725,6 @@ def send_start_notification():
         f"{redis_status}\n\n"
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY: Bias 2D + CTX 4H + Bias 2H + CTX 5m, veto CTX 30m oppose\n"
-        "SWING A: Bias 12H + CTX 1H, veto CTX 2H oppose, trigger ZALT 30m\n"
         "SWING B: ZALT 12H + RCI 4H extreme + CTX 1H, trigger ZALT 30m\n"
         "PULSE: Bias 1D ou 2D + CTX 4H, entree extreme RCI 1H\n"
         "PULSE QUALITE: CTX 30m, Bias 1D + 2D et/ou RCI 1D extreme alignes\n"
@@ -748,14 +749,6 @@ def track_tv_signal(symbol, alert_type, tf):
 
 def tv_required_signals():
     return [
-        {
-            'label': 'ST Context 2H',
-            'alert_type': 'st_context',
-            'tf': '2h',
-            'max_age': 6 * 3600,
-            'warmup': 7 * 3600,
-            'scope': 'all',
-        },
         {
             'label': 'ST Context 4H (Daily / Pulse Confluence forte)',
             'alert_type': 'st_context',
@@ -1133,7 +1126,7 @@ def send_close_alert(symbol, strategy, direction, price, reason):
             f"💰 Price: ${format_price(price)}\n"
             f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
             f"📋 Raison: {reason}",
-            ntfy=(strategy == 'SWING'),
+            ntfy=False,
         )
         persist_runtime_state()
         logger.info(f"[{strategy}] Position clôturée: {symbol} {direction} —{reason}")
@@ -1349,7 +1342,6 @@ def process_webhook(data):
         # ========================================================================
         # STRATEGIES ACTIVES
         # DAILY : Bias 2D + CTX 4H + Bias 2H + CTX 5m; veto CTX 30m oppose
-        # SWING A : Bias 12H + ST Context 1H; veto ST Context 2H oppose
         # SWING B : ZALT 12H + RCI 4H extreme + CTX 1H, puis flip ZALT 30m
         # PULSE : Bias 1D ou 2D + CTX 4H; entree extreme RCI 1H. CTX 30m/biais doubles = qualite.
         # ========================================================================
@@ -1713,7 +1705,7 @@ def reset_state_symbol(symbol):
     with STATE_LOCK:
         MOMENTUM_STATE.pop(symbol, None)
 
-        for strat in ['PULSE', 'PULSE_CONFLUENCE', 'DAILY', 'SWING', 'SWING_B', 'TREND2D']:
+        for strat in ['PULSE', 'PULSE_CONFLUENCE', 'DAILY', 'SWING_B', 'TREND2D']:
             SCALP_POSITIONS.pop(f'{symbol}_{strat}', None)
 
         keys_to_remove = [k for k in LAST_SIGNALS if k.startswith(f"{symbol}:")]
@@ -2405,7 +2397,7 @@ def _open_strategy_entry(
     telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
-    ntfy_enabled = strategy == 'SWING'
+    ntfy_enabled = False
     message = (
         f"{emoji} <b>[{strategy_label} - {alert_kind}]</b> {symbol}\n"
         f"--------------------\nDirection: {direction}\n"
@@ -2580,21 +2572,6 @@ def check_rci30m_strategy_preps(symbol, exp_ctx, price, event_ts):
 
     candidates = []
     if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
-        swing_a_ready = bool(
-            _bias_condition(m, '12h', exp_ctx)[2]
-            and _st_context_condition(m, '1h', exp_ctx)[2]
-            and not _st_context_veto(m, '2h', exp_ctx)[2]
-            and not _rci_extreme_veto(m, '12h', exp_ctx)[2]
-        )
-        if swing_a_ready:
-            candidates.append((
-                'SWING', 'telegram_alerts',
-                [
-                    f"[OK] Bias 12H: {_ctx_label(exp_ctx)}",
-                    f"[OK] ST Context 1H: {_ctx_label(exp_ctx)}",
-                ],
-            ))
-
         swing_b_ready = bool(
             _zalt_condition(m, '12h', exp_ctx)[2]
             and _rci_extreme_quality(m, '4h', exp_ctx)[2]
@@ -2628,7 +2605,7 @@ def check_rci30m_strategy_preps(symbol, exp_ctx, price, event_ts):
         )
         result = send_notification(
             notification_title_from_message(message), message, priority=5, tags=[],
-            telegram=True, ntfy=(strategy == 'SWING'), telegram_channel=telegram_channel,
+            telegram=True, ntfy=False, telegram_channel=telegram_channel,
         )
         if result.get(telegram_channel):
             sent = True
@@ -2739,31 +2716,23 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING A/B armes par les HTF, entree sur flip ZALT 30m."""
+    """SWING B: confluence HTF, entree sur flip ZALT 30m."""
     if not CONFIG.get('ENABLE_SWING', False) or not get_symbol_config(symbol).get('scalp'):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
     exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
 
-    for strategy, grace, validator in (
-        ('SWING', 3600, lambda exp: (
-            _bias_condition(m, '12h', exp)[2]
-            and _st_context_condition(m, '1h', exp)[2]
-            and not _st_context_veto(m, '2h', exp)[2]
-            and not _rci_extreme_veto(m, '12h', exp)[2]
-        )),
-        ('SWING_B', 3600, lambda exp: (
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(f"{symbol}_SWING_B")
+    if pos:
+        exp = _trade_direction_to_ctx(pos.get('direction'))
+        position_valid = (
             _zalt_condition(m, '12h', exp)[2]
             and _rci_extreme_quality(m, '4h', exp)[2]
             and _st_context_condition(m, '1h', exp)[2]
-        )),
-    ):
-        with STATE_LOCK:
-            pos = SCALP_POSITIONS.get(f"{symbol}_{strategy}")
-        if pos:
-            exp = _trade_direction_to_ctx(pos.get('direction'))
-            _refresh_logical_position(symbol, strategy, validator(exp), grace, 'confluence Swing absente')
+        )
+        _refresh_logical_position(symbol, 'SWING_B', position_valid, 3600, 'confluence Swing B absente')
 
     is_entry_trigger = bool(
         trigger_dir in ('buy', 'sell')
@@ -2773,15 +2742,8 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     opened = False
     for exp_ctx in directions:
         direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
-        bias12h, bias12h_fresh, bias12h_ok = _bias_condition(m, '12h', exp_ctx)
         ctx1h, ctx1h_fresh, ctx1h_ok = _st_context_condition(m, '1h', exp_ctx)
-        ctx2h, ctx2h_fresh, ctx2h_veto = _st_context_veto(m, '2h', exp_ctx)
-        rci12h, rci12h_fresh, rci12h_quality = _rci_extreme_quality(m, '12h', exp_ctx)
-        _, _, rci12h_veto = _rci_extreme_veto(m, '12h', exp_ctx)
         rci30m, rci30m_fresh, rci30m_trigger_ok = _rci_trigger_zone(m, '30m', exp_ctx)
-        armed_a = bias12h_ok and ctx1h_ok and not ctx2h_veto and not rci12h_veto
-        entry_a_ok = armed_a and is_entry_trigger
-
         zalt12h, zalt12h_fresh, zalt12h_ok = _zalt_condition(m, '12h', exp_ctx)
         rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
         armed_b = bool(zalt12h_ok and rci4h_ok and ctx1h_ok)
@@ -2789,40 +2751,13 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
         logger.info(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
-            f"bias12h={bias12h}/{exp_ctx} fresh={bias12h_fresh} ok={bias12h_ok} "
             f"ctx1h={ctx1h}/{exp_ctx} fresh={ctx1h_fresh} ok={ctx1h_ok} "
-            f"ctx2h={ctx2h} fresh={ctx2h_fresh} veto={ctx2h_veto} armed_a={armed_a} "
             f"zalt12h={zalt12h}/{exp_ctx} fresh={zalt12h_fresh} ok={zalt12h_ok} "
             f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
-            f"rci12h={rci12h} fresh={rci12h_fresh} quality={rci12h_quality} veto={rci12h_veto} "
             f"rci30m={rci30m} fresh={rci30m_fresh} trigger_ok={rci30m_trigger_ok} "
             f"armed_b={armed_b} "
-            f"trigger_zalt30m={is_entry_trigger} entry_a={entry_a_ok} entry_b={entry_b_ok}"
+            f"trigger_zalt30m={is_entry_trigger} entry_b={entry_b_ok}"
         )
-
-        if entry_a_ok:
-            event_key = event_id or f"swing_a_{symbol}_{int(time.time())}_{exp_ctx}"
-            detail_lines = [
-                "[OK] Entree SWING A",
-                f"[OK] Bias 12H: {_ctx_label(bias12h)}",
-                f"[OK] ST Context 1H: {_ctx_label(ctx1h)}",
-                f"[ANTI-CHOP OK] ST Context 2H non oppose: {_ctx_label(ctx2h)}",
-                f"[TRIGGER] Flip ZALT 30m: {_ctx_label(exp_ctx)} (34 / 1.20)",
-                _rci_trigger_info_line(m, '30m', exp_ctx),
-                _rci_quality_line(m, '12h', exp_ctx),
-            ]
-            opened = _open_strategy_entry(
-                symbol,
-                'SWING',
-                direction,
-                'swing_a_bias12h_ctx1h',
-                event_key,
-                price,
-                exchange_name,
-                detail_lines,
-                cooldown=14400,
-                quality=rci12h_quality,
-            ) or opened
         if entry_b_ok:
             event_key = event_id or f"swing_b_{symbol}_{int(time.time())}_{exp_ctx}"
             detail_lines = [

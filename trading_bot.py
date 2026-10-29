@@ -1273,6 +1273,11 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
+            if tf == '4h' and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+                evaluate_swing(
+                    symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
+                    event_id=event_id, source='bias_4h',
+                )
             if tf == '2d':
                 evaluate_daily(
                     symbol, price=price, exchange_name=exchange_name,
@@ -2475,6 +2480,13 @@ def update_okx_bias_htf(symbol):
         event_id=f"okx_bias2d_{symbol}_{int(now_ts)}",
         source='okx_bias_2d',
     )
+    if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+        evaluate_swing(
+            symbol, trigger_dir=None, price=daily_price,
+            exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+            event_id=f"okx_swing_bias4h_{symbol}_{int(now_ts)}",
+            source='okx_bias_4h',
+        )
     if is_pulse_symbol(symbol):
         pulse_price = daily_price
         evaluate_pulse_v3(
@@ -2981,10 +2993,12 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         ctx5m, ctx5m_fresh, ctx5m_ok = _st_context_condition(m, '5m', exp_ctx)
         zalt12h, zalt12h_fresh, zalt12h_ok = _zalt_condition(m, '12h', exp_ctx)
         rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
+        bias4h, bias4h_fresh, bias4h_ok = _bias_condition(m, '4h', exp_ctx)
         armed = bool(zalt12h_ok and rci4h_ok and ctx30m_ok)
 
         with STATE_LOCK:
             prep_dir = m.get('swing_prep_dir')
+            quality_dir = m.get('swing_quality_dir')
             position_open = bool(SCALP_POSITIONS.get(f"{symbol}_SWING"))
             if armed and prep_dir != exp_ctx:
                 m['swing_prep_dir'] = exp_ctx
@@ -2993,21 +3007,40 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 send_prep = not position_open
             else:
                 send_prep = False
+            send_quality = bool(
+                armed and bias4h_ok and quality_dir != exp_ctx
+                and prep_dir == exp_ctx and not position_open
+            )
+            if armed and bias4h_ok and quality_dir != exp_ctx:
+                m['swing_quality_dir'] = exp_ctx
+                state_changed = True
+            elif quality_dir == exp_ctx and not (armed and bias4h_ok):
+                m['swing_quality_dir'] = None
+                state_changed = True
             if not armed and prep_dir == exp_ctx:
                 m['swing_prep_dir'] = None
                 m['swing_prep_ts'] = None
+                if m.get('swing_quality_dir') == exp_ctx:
+                    m['swing_quality_dir'] = None
                 state_changed = True
         entry_ok = armed and ctx5m_ok and source == 'st_context_5m' and not position_open
 
         if send_prep:
+            prep_level = " - QUALITE" if bias4h_ok else ""
+            bias4h_line = (
+                f"[QUALITE] Bias 4H aligne: {_ctx_label(bias4h)}"
+                if bias4h_ok else
+                f"[INFO NON BLOQUANTE] Bias 4H: {_ctx_label(bias4h) if bias4h_fresh else 'absent ou perime'}"
+            )
             prep_message = (
-                f"<b>[PREP SWING]</b> {symbol}\n"
+                f"<b>[PREP SWING{prep_level}]</b> {symbol}\n"
                 "--------------------\n"
                 f"Direction: {direction}\n"
                 f"Price: ${format_price(price)}\n"
                 f"[OK] ZALT 12H: {_ctx_label(zalt12h)}\n"
                 f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}\n"
                 f"[OK] ST Context 30m: {_ctx_label(ctx30m)}\n"
+                f"{bias4h_line}\n"
                 "[ATTENTE] Nouvelle zone ST Context 5m alignee"
             )
             send_notification(
@@ -3017,12 +3050,32 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             )
             logger.info(f"[PREP SWING] {symbol} {direction}")
 
+        if send_quality:
+            quality_message = (
+                f"<b>[QUALITE SWING]</b> {symbol}\n"
+                "--------------------\n"
+                f"Direction: {direction}\n"
+                f"Price: ${format_price(price)}\n"
+                f"[OK] ZALT 12H: {_ctx_label(zalt12h)}\n"
+                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}\n"
+                f"[OK] ST Context 30m: {_ctx_label(ctx30m)}\n"
+                f"[QUALITE] Bias 4H aligne: {_ctx_label(bias4h)}\n"
+                "[ATTENTE] Nouvelle zone ST Context 5m alignee"
+            )
+            send_notification(
+                notification_title_from_message(quality_message), quality_message,
+                priority=5, tags=[], telegram=True, ntfy=False,
+                telegram_channel='telegram_scalp2h',
+            )
+            logger.info(f"[QUALITE SWING] {symbol} {direction} Bias 4H aligne")
+
         logger.info(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
             f"ctx30m={ctx30m}/{exp_ctx} fresh={ctx30m_fresh} ok={ctx30m_ok} "
             f"ctx5m={ctx5m}/{exp_ctx} fresh={ctx5m_fresh} ok={ctx5m_ok} "
             f"zalt12h={zalt12h}/{exp_ctx} fresh={zalt12h_fresh} ok={zalt12h_ok} "
             f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
+            f"bias4h={bias4h}/{exp_ctx} fresh={bias4h_fresh} ok={bias4h_ok} "
             f"armed={armed} entry={entry_ok}"
         )
         if entry_ok:
@@ -3033,6 +3086,11 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}",
                 f"[OK] ST Context 30m: {_ctx_label(ctx30m)}",
                 f"[TRIGGER] Nouvelle zone ST Context 5m: {_ctx_label(ctx5m)}",
+                (
+                    f"[QUALITE] Bias 4H aligne: {_ctx_label(bias4h)}"
+                    if bias4h_ok else
+                    f"[INFO NON BLOQUANTE] Bias 4H: {_ctx_label(bias4h) if bias4h_fresh else 'absent ou perime'}"
+                ),
             ]
             opened = _open_strategy_entry(
                 symbol,
@@ -3044,7 +3102,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 exchange_name,
                 detail_lines,
                 cooldown=14400,
-                quality=True,
+                quality=bias4h_ok,
             ) or opened
     if state_changed:
         persist_runtime_state()

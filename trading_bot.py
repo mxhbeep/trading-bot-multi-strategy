@@ -763,7 +763,7 @@ def send_start_notification():
         "DAILY A: gestion manuelle apres PREP\n"
         "DAILY B ENTREE: CTX 30m; RCI 1D / 12H = bonus qualite\n"
         "SWING: PREP ZALT 12H + RCI 4H extreme + CTX 30m\n"
-        "SWING CONFIRMATION: Bias 4H ou CTX 4H ou Bias 12H aligne\n"
+        "SWING CONFIRMATION: Bias 4H ou CTX 4H aligne\n"
         "SWING ENTREE: nouvelle zone CTX 5m alignee\n"
         "PULSE PREP: Bias 1D + RCI 12H extreme\n"
         "PULSE ENTREE: CTX 1H + CTX 5m; CTX 12H = bonus/avertissement\n"
@@ -1274,7 +1274,7 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
-            if tf in ('4h', '12h') and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+            if tf == '4h' and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
                 evaluate_swing(
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f'bias_{tf}',
@@ -1368,7 +1368,7 @@ def process_webhook(data):
         # DAILY B : PREP ZALT 2D + CTX 4H, puis entree CTX 30m.
         # RCI 1D / 12H : bonus qualite non bloquants.
         # SWING : PREP ZALT 12H + RCI 4H extreme + CTX 30m,
-        #         confirme par Bias 4H, CTX 4H ou Bias 12H.
+        #         confirme par Bias 4H ou CTX 4H.
         #         entree sur nouvelle zone CTX 5m alignee.
         # PULSE : PREP Bias 1D + RCI 12H; entree CTX 1H + CTX 5m.
         # REVERSAL : PREP CTX 1D + CTX 4H + RCI 4H; entree sur nouveau CTX 1H.
@@ -2982,7 +2982,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         confirmation_valid = (
             _bias_condition(m, '4h', exp)[2]
             or _st_context_condition(m, '4h', exp)[2]
-            or _bias_condition(m, '12h', exp)[2]
         )
         position_valid = (
             _zalt_condition(m, '12h', exp)[2]
@@ -3003,18 +3002,15 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
         bias4h, bias4h_fresh, bias4h_ok = _bias_condition(m, '4h', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
-        bias12h, bias12h_fresh, bias12h_ok = _bias_condition(m, '12h', exp_ctx)
-        confirmation_ok = bool(bias4h_ok or ctx4h_ok or bias12h_ok)
+        confirmation_ok = bool(bias4h_ok or ctx4h_ok)
         armed = bool(zalt12h_ok and rci4h_ok and ctx30m_ok and confirmation_ok)
 
         if bias4h_ok:
             confirmation_line = f"[QUALITE] Bias 4H aligne: {_ctx_label(bias4h)}"
         elif ctx4h_ok:
             confirmation_line = f"[OK] Exception ST Context 4H alignee: {_ctx_label(ctx4h)}"
-        elif bias12h_ok:
-            confirmation_line = f"[OK] Exception Bias 12H aligne: {_ctx_label(bias12h)}"
         else:
-            confirmation_line = "[BLOQUE] Bias 4H, ST Context 4H ou Bias 12H aligne requis"
+            confirmation_line = "[BLOQUE] Bias 4H ou ST Context 4H aligne requis"
 
         with STATE_LOCK:
             prep_dir = m.get('swing_prep_dir')
@@ -3092,7 +3088,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
             f"bias4h={bias4h}/{exp_ctx} fresh={bias4h_fresh} ok={bias4h_ok} "
             f"ctx4h={ctx4h}/{exp_ctx} fresh={ctx4h_fresh} ok={ctx4h_ok} "
-            f"bias12h={bias12h}/{exp_ctx} fresh={bias12h_fresh} ok={bias12h_ok} "
             f"confirmation={confirmation_ok} "
             f"armed={armed} entry={entry_ok}"
         )

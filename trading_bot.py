@@ -109,7 +109,8 @@ CONFIG = {
     'PRIORITY_SCALP_CHAT_ID': os.environ.get('PRIORITY_SCALP_CHAT_ID', '-1003706862644'),
     'NTFY_TOPIC': os.environ.get('NTFY_TOPIC', 'maxence-trading-3f8a72'),
     'TAPBIT_BOT_URL': os.environ.get('TAPBIT_BOT_URL', ''),  # ex: https://tapbit-bot.up.railway.app
-    'JOURNAL_BOT_URL': os.environ.get('JOURNAL_BOT_URL', ''),  # ex: https://journal-bot.up.railway.app
+    'ENABLE_JOURNAL_BOT': False,
+    'JOURNAL_BOT_URL': '',
     'WEBHOOK_PORT': int(os.environ.get("PORT", 5000)),
     'WEBHOOK_HOST': '0.0.0.0',
     'ENABLE_PULSE_V7': os.environ.get('ENABLE_PULSE_V7', os.environ.get('ENABLE_PULSE_V6', '1')) == '1',
@@ -616,7 +617,11 @@ def send_telegram_with_buttons(msg, token=None, chat_id=None,
                                telegram_channel='telegram_alerts', ntfy=False):
     """Envoie un message Telegram avec bouton Journal (optionnel)."""
     rows = []
-    if journal_symbol and journal_strategy and journal_direction and journal_price is not None and CONFIG.get('JOURNAL_BOT_URL'):
+    if (
+        CONFIG.get('ENABLE_JOURNAL_BOT', False)
+        and journal_symbol and journal_strategy and journal_direction
+        and journal_price is not None and CONFIG.get('JOURNAL_BOT_URL')
+    ):
         sym_safe = str(journal_symbol).replace('|', '')
         jdata = f"journal_log:{sym_safe}|{journal_strategy}|{journal_direction}|{journal_price}"
         if len(jdata.encode()) <= 64:
@@ -1497,6 +1502,9 @@ def telegram_callback():
 
         if callback_data.startswith('journal_log:'):
             # Relai vers le Journal Bot
+            if not CONFIG.get('ENABLE_JOURNAL_BOT', False):
+                logger.info("[JOURNAL] Integration desactivee")
+                return jsonify({'ok': True})
             payload_str = callback_data[len('journal_log:'):]
             parts = payload_str.split('|')
             if len(parts) == 4:

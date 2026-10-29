@@ -37,6 +37,7 @@ from flask import Flask, request, jsonify
 # ============================================================================ #
 
 CONFIG = {
+    'ENABLED': False,
     'SCALP_BOT_TOKEN': os.environ.get('SCALP_BOT_TOKEN', ''),
     'TELEGRAM_CHAT_ID': os.environ.get('TELEGRAM_CHAT_ID', ''),
     'REDIS_URL': os.environ.get('REDIS_URL', ''),
@@ -786,6 +787,8 @@ def handle_callback(uid: str, cid: str, cbq_id: str, cbq_data: str):
 
 @app.route('/')
 def home():
+    if not CONFIG['ENABLED']:
+        return "<h1>Journal Bot desactive</h1>", 503
     n_open = len(_get_open_ids())
     return f"<h1>Journal Bot</h1><p>Trades ouverts: {n_open}</p>"
 
@@ -798,6 +801,8 @@ def log_entry():
     Body JSON attendu :
       { symbol, strategy, direction, price, user_id, chat_id }
     """
+    if not CONFIG['ENABLED']:
+        return jsonify({'ok': False, 'error': 'journal_disabled'}), 503
     data = request.get_json(silent=True)
     if not data:
         return jsonify({'ok': False, 'error': 'no data'}), 400
@@ -845,6 +850,8 @@ def log_entry():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    if not CONFIG['ENABLED']:
+        return jsonify({'ok': False, 'error': 'journal_disabled'}), 503
     update = request.get_json(silent=True)
     if not update:
         return jsonify({'ok': True})
@@ -924,7 +931,27 @@ def register_webhook():
     except Exception as e:
         logger.error(f"❌ register_webhook: {e}")
 
+
+def unregister_webhook():
+    """Supprime l'ancien webhook Telegram sans toucher aux donnees Redis."""
+    token = CONFIG['SCALP_BOT_TOKEN']
+    if not token:
+        return
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{token}/deleteWebhook',
+            json={'drop_pending_updates': True},
+            timeout=10,
+        )
+        logger.info("Journal Bot desactive: webhook Telegram supprime")
+    except Exception as e:
+        logger.warning(f"Suppression webhook Journal impossible: {e}")
+
 def startup():
+    if not CONFIG['ENABLED']:
+        unregister_webhook()
+        logger.info("Journal Bot desactive - historique Redis conserve")
+        return
     init_redis()
     time.sleep(3)
     register_webhook()

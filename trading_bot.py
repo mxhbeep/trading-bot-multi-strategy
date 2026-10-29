@@ -1417,7 +1417,11 @@ def process_webhook(data):
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
         should_relay_scalp = (
             CONFIG.get('ENABLE_SCALP_RELAY', False)
-            and alert_type == 'st_context' and tf == '30m'
+            and alert_type == 'st_context'
+            and (
+                tf == '30m'
+                or (symbol == 'BTC/USDT' and tf in ('5m', '2h'))
+            )
         )
         if scalp_url and should_relay_scalp:
             scalp_symbols = get_scalpbot_symbols()
@@ -1635,7 +1639,9 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
-        for rci_tf in ('30m', '2h', '4h'):
+        for rci_tf in ('30m', '1h', '2h', '4h'):
+            if rci_tf == '1h' and symbol != 'BTC/USDT':
+                continue
             rci_dir = m.get(f'rci_{rci_tf}_dir')
             rci10 = m.get(f'rci_{rci_tf}_10')
             if rci10 is None:
@@ -1698,6 +1704,28 @@ def sync_scalp():
                 errors.append(f"{symbol}: CTX30M HTTP {resp.status_code}")
         except Exception as e:
             errors.append(f"{symbol}: CTX30M {e}")
+
+        if symbol == 'BTC/USDT':
+            for ctx_tf in ('5m', '2h'):
+                ctx_value = m.get(f'st_context_{ctx_tf}')
+                try:
+                    payload = {
+                        'symbol': symbol,
+                        'strategy': 'scalp_btc',
+                        'tf': ctx_tf,
+                        'type': 'st_context',
+                        'sync': True,
+                        'value': ctx_to_sync_value(ctx_value),
+                        'price': 0,
+                        'event_id': f"sync_scalp_btc_ctx{ctx_tf}_{symbol}_{int(time.time())}",
+                    }
+                    resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                    if resp.status_code == 200:
+                        symbol_sent.append(f'ctx{ctx_tf}')
+                    else:
+                        errors.append(f"{symbol}: CTX{ctx_tf.upper()} HTTP {resp.status_code}")
+                except Exception as e:
+                    errors.append(f"{symbol}: CTX{ctx_tf.upper()} {e}")
 
         if symbol_sent:
             sent.append(f"{symbol}:{','.join(symbol_sent)}")
@@ -2287,6 +2315,8 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
     )
     if tf == '1h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+        if symbol == 'BTC/USDT':
+            relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
         evaluate_daily(
             symbol, price=price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),

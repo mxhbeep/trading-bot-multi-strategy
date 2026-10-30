@@ -3023,32 +3023,40 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         else:
             confirmation_line = "[BLOQUE] Bias 4H, ST Context 4H ou RCI 12H extreme favorable requis"
 
+        swing_route_version = 'telegram_alerts_v1'
         with STATE_LOCK:
             prep_dir = m.get('swing_prep_dir')
             quality_dir = m.get('swing_quality_dir')
             position_open = bool(SCALP_POSITIONS.get(f"{symbol}_SWING"))
-            if armed and prep_dir != exp_ctx:
+            prep_route_changed = m.get('swing_prep_route') != swing_route_version
+            if armed and (prep_dir != exp_ctx or prep_route_changed):
                 m['swing_prep_dir'] = exp_ctx
                 m['swing_prep_ts'] = time.time()
+                m['swing_prep_route'] = swing_route_version
                 state_changed = True
                 send_prep = not position_open
             else:
                 send_prep = False
+            quality_route_changed = m.get('swing_quality_route') != swing_route_version
             send_quality = bool(
-                armed and bias4h_ok and quality_dir != exp_ctx
-                and prep_dir == exp_ctx and not position_open
+                armed and bias4h_ok and (quality_dir != exp_ctx or quality_route_changed)
+                and prep_dir == exp_ctx and not send_prep and not position_open
             )
-            if armed and bias4h_ok and quality_dir != exp_ctx:
+            if armed and bias4h_ok and (quality_dir != exp_ctx or quality_route_changed):
                 m['swing_quality_dir'] = exp_ctx
+                m['swing_quality_route'] = swing_route_version
                 state_changed = True
             elif quality_dir == exp_ctx and not (armed and bias4h_ok):
                 m['swing_quality_dir'] = None
+                m['swing_quality_route'] = None
                 state_changed = True
             if not armed and prep_dir == exp_ctx:
                 m['swing_prep_dir'] = None
                 m['swing_prep_ts'] = None
+                m['swing_prep_route'] = None
                 if m.get('swing_quality_dir') == exp_ctx:
                     m['swing_quality_dir'] = None
+                    m['swing_quality_route'] = None
                 state_changed = True
         entry_ok = armed and ctx5m_ok and source == 'st_context_5m' and not position_open
 

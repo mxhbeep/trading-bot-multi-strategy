@@ -2549,7 +2549,7 @@ def _open_strategy_entry(
     telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
-    ntfy_enabled = False
+    ntfy_enabled = strategy in ('PULSE', 'SWING', 'REVERSAL')
     message = (
         f"{emoji} <b>[{strategy_label} - {alert_kind}]</b> {symbol}\n"
         f"--------------------\nDirection: {direction}\n"
@@ -2800,7 +2800,7 @@ def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, sour
             )
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
-                priority=5, tags=[], telegram=True, ntfy=False,
+                priority=5, tags=[], telegram=True, ntfy=True,
                 telegram_channel='telegram_alerts',
             )
             logger.info(f"[PREP REVERSAL] {symbol} {direction}")
@@ -2922,7 +2922,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 )
                 send_notification(
                     notification_title_from_message(prep_message), prep_message,
-                    priority=5, tags=[], telegram=True, ntfy=False,
+                    priority=5, tags=[], telegram=True,
+                    ntfy=bool(path == 'A' and prep_quality),
                     telegram_channel='telegram_alerts',
                 )
                 logger.info(f"[PREP DAILY {path}] {symbol} {direction}")
@@ -2939,7 +2940,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 )
                 send_notification(
                     notification_title_from_message(quality_message), quality_message,
-                    priority=5, tags=[], telegram=True, ntfy=False,
+                    priority=5, tags=[], telegram=True, ntfy=bool(path == 'A'),
                     telegram_channel='telegram_alerts',
                 )
                 logger.info(f"[QUALITE DAILY {path}] {symbol} {direction}")
@@ -3075,7 +3076,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             )
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
-                priority=5, tags=[], telegram=True, ntfy=False,
+                priority=5, tags=[], telegram=True, ntfy=True,
                 telegram_channel='telegram_alerts',
             )
             logger.info(f"[PREP SWING] {symbol} {direction}")
@@ -3094,7 +3095,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             )
             send_notification(
                 notification_title_from_message(quality_message), quality_message,
-                priority=5, tags=[], telegram=True, ntfy=False,
+                priority=5, tags=[], telegram=True, ntfy=True,
                 telegram_channel='telegram_alerts',
             )
             logger.info(f"[QUALITE SWING] {symbol} {direction} Bias 4H aligne")
@@ -3195,7 +3196,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             )
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
-                priority=5, tags=[], telegram=True, ntfy=False,
+                priority=5, tags=[], telegram=True, ntfy=True,
                 telegram_channel='telegram_scalp2h',
             )
             logger.info(f"[PREP PULSE] {symbol} {direction}")

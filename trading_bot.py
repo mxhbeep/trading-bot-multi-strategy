@@ -2546,7 +2546,7 @@ def _open_strategy_entry(
             'opened_at': time.time(), 'invalid_since': None,
         }
     emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
-    telegram_channel = 'telegram_scalp2h' if strategy.startswith(('PULSE', 'SWING')) else 'telegram_alerts'
+    telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
     ntfy_enabled = False
@@ -3068,7 +3068,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
                 priority=5, tags=[], telegram=True, ntfy=False,
-                telegram_channel='telegram_scalp2h',
+                telegram_channel='telegram_alerts',
             )
             logger.info(f"[PREP SWING] {symbol} {direction}")
 
@@ -3087,7 +3087,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             send_notification(
                 notification_title_from_message(quality_message), quality_message,
                 priority=5, tags=[], telegram=True, ntfy=False,
-                telegram_channel='telegram_scalp2h',
+                telegram_channel='telegram_alerts',
             )
             logger.info(f"[QUALITE SWING] {symbol} {direction} Bias 4H aligne")
 

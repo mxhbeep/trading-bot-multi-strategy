@@ -767,8 +767,8 @@ def send_start_notification():
         "DAILY A: gestion manuelle apres PREP\n"
         "DAILY B ENTREE: CTX 30m; RCI 1D / 12H = bonus qualite\n"
         "SWING: PREP ZALT 12H + RCI 4H/1H extremes + CTX 30m\n"
-        "SWING CONFIRMATION: Bias 4H, CTX 4H ou RCI 12H extreme favorable\n"
-        "SWING ENTREE: nouvelle zone CTX 5m; CTX 1H = bonus qualite\n"
+        "SWING CONFIRMATION: Bias 4H, CTX 4H, CTX 1H ou RCI 12H extreme favorable\n"
+        "SWING ENTREE: nouvelle zone CTX 5m; Bias 4H = qualite\n"
         "PULSE PREP: Bias 1D + RCI 12H extreme; CTX 4H oppose = veto\n"
         "PULSE ENTREE: CTX 1H + CTX 5m; RCI 1D / CTX 4H alignes = qualite\n"
         "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
@@ -810,20 +810,20 @@ def tv_required_signals():
             'scope': 'pulse',
         },
         {
-            'label': 'ST Context 5m (Pulse)',
+            'label': 'ST Context 5m (Pulse / Swing)',
             'alert_type': 'st_context',
             'tf': '5m',
             'max_age': 20 * 60,
             'warmup': 30 * 60,
-            'scope': 'pulse',
+            'scope': 'trade',
         },
         {
-            'label': 'ST Context 1H (Pulse)',
+            'label': 'ST Context 1H (Pulse / Swing / RCI Context)',
             'alert_type': 'st_context',
             'tf': '1h',
             'max_age': 3 * 3600,
             'warmup': 4 * 3600,
-            'scope': 'pulse',
+            'scope': 'trade',
         },
         {
             'label': 'ST Context 12H (bonus Pulse)',
@@ -1281,7 +1281,7 @@ def process_webhook(data):
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f"bias_{tf}",
                 )
-            if tf == '4h' and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+            if tf == '4h' and CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol):
                 evaluate_swing(
                     symbol, trigger_dir=None, price=price, exchange_name=exchange_name,
                     event_id=event_id, source=f'bias_{tf}',
@@ -1375,7 +1375,7 @@ def process_webhook(data):
         # DAILY B : PREP ZALT 2D + CTX 4H, puis entree CTX 30m.
         # RCI 1D / 12H : bonus qualite non bloquants.
         # SWING : PREP ZALT 12H + RCI 4H/1H extremes + CTX 30m,
-        #         confirme par Bias 4H, CTX 4H ou RCI 12H extreme favorable.
+        #         confirme par Bias 4H, CTX 4H, CTX 1H ou RCI 12H extreme favorable.
         #         entree sur nouvelle zone CTX 5m alignee.
         # PULSE : PREP Bias 1D + RCI 12H; CTX 4H oppose = veto; entree CTX 1H + CTX 5m.
         # REVERSAL : PREP CTX 1D + CTX 4H + RCI 4H/1D; entree sur nouveau CTX 1H.
@@ -1393,7 +1393,7 @@ def process_webhook(data):
                 source=f"{alert_type}_{tf}",
             )
 
-        if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp') and (
+        if CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf in ('5m', '30m', '1h', '4h')
         ):
             evaluate_swing(
@@ -2293,7 +2293,7 @@ def update_okx_rci_30m(symbol):
         persist_runtime_state()
     logger.info(f"[RCI OKX 30m] {symbol} 10={rci_values.get(10)} 30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}")
     relay_rci_to_scalp(symbol, '30m', rci_values, direction, is_chop, False, price=price)
-    if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+    if CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol):
         evaluate_swing(
             symbol, price=price or 0.0,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -2357,7 +2357,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
             event_id=f"okx_rci1h_{symbol}_{int(now_ts)}",
             source='okx_rci_1h',
         )
-        if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+        if CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol):
             evaluate_swing(
                 symbol, price=price,
                 exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -2374,7 +2374,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
     elif tf == '4h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
         relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
-        if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+        if CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol):
             evaluate_swing(
                 symbol, price=price or 0.0,
                 exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -2403,7 +2403,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
                 event_id=f"okx_rci12h_{symbol}_{int(now_ts)}",
                 source='okx_rci_12h',
             )
-        if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+        if CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol):
             evaluate_swing(
                 symbol, price=price,
                 exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -2498,7 +2498,7 @@ def update_okx_bias_htf(symbol):
     df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240) if trade_symbol else None
     bias_4h = calc_bias_okx(df_4h, ema_len=21, sma_len=55) if df_4h is not None else None
     bias_12h = None
-    if trade_symbol and CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+    if trade_symbol and CONFIG.get('ENABLE_SWING', False):
         df_12h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=200), 720)
         bias_12h = calc_bias_okx(df_12h, ema_len=21, sma_len=55) if df_12h is not None else None
     df_1d = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1d', limit=200), 1440)
@@ -2543,7 +2543,7 @@ def update_okx_bias_htf(symbol):
         event_id=f"okx_bias2d_{symbol}_{int(now_ts)}",
         source='okx_bias_2d',
     )
-    if CONFIG.get('ENABLE_SWING', False) and get_symbol_config(symbol).get('scalp'):
+    if CONFIG.get('ENABLE_SWING', False) and is_trade_symbol(symbol):
         evaluate_swing(
             symbol, trigger_dir=None, price=daily_price,
             exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -3129,8 +3129,8 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
 
 def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING: fond ZALT/RCI 4H/1H/CTX, confirmation 4H/12H, entree sur nouveau CTX 5m."""
-    if not CONFIG.get('ENABLE_SWING', False) or not get_symbol_config(symbol).get('scalp'):
+    """SWING: fond ZALT/RCI/CTX, confirmation Bias/CTX/RCI, entree sur nouveau CTX 5m."""
+    if not CONFIG.get('ENABLE_SWING', False) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]
@@ -3143,6 +3143,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         confirmation_valid = (
             _bias_condition(m, '4h', exp)[2]
             or _st_context_condition(m, '4h', exp)[2]
+            or _st_context_condition(m, '1h', exp)[2]
             or _rci_extreme_quality(m, '12h', exp)[2]
         )
         position_valid = (
@@ -3168,21 +3169,21 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
         bias4h, bias4h_fresh, bias4h_ok = _bias_condition(m, '4h', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         rci12h, rci12h_fresh, rci12h_ok = _rci_extreme_quality(m, '12h', exp_ctx)
-        confirmation_ok = bool(bias4h_ok or ctx4h_ok or rci12h_ok)
+        confirmation_ok = bool(bias4h_ok or ctx4h_ok or ctx1h_ok or rci12h_ok)
         armed = bool(zalt12h_ok and rci4h_ok and rci1h_ok and ctx30m_ok and confirmation_ok)
-        swing_quality_ok = bool(bias4h_ok or ctx1h_ok)
-        swing_quality_signature = '+'.join(
-            name for name, enabled in (('bias4h', bias4h_ok), ('ctx1h', ctx1h_ok)) if enabled
-        )
+        swing_quality_ok = bool(bias4h_ok)
+        swing_quality_signature = 'bias4h' if bias4h_ok else ''
 
         if bias4h_ok:
             confirmation_line = f"[QUALITE] Bias 4H aligne: {_ctx_label(bias4h)}"
         elif ctx4h_ok:
             confirmation_line = f"[OK] Exception ST Context 4H alignee: {_ctx_label(ctx4h)}"
+        elif ctx1h_ok:
+            confirmation_line = f"[OK] Exception ST Context 1H alignee: {_ctx_label(ctx1h)}"
         elif rci12h_ok:
             confirmation_line = f"[OK] Exception RCI court 12H extreme favorable: {rci12h:.1f}"
         else:
-            confirmation_line = "[BLOQUE] Bias 4H, ST Context 4H ou RCI 12H extreme favorable requis"
+            confirmation_line = "[BLOQUE] Bias 4H, ST Context 4H, ST Context 1H ou RCI 12H favorable requis"
 
         swing_route_version = 'telegram_alerts_v1'
         with STATE_LOCK:
@@ -3231,10 +3232,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
 
         if send_prep:
             prep_level = " - QUALITE" if swing_quality_ok else ""
-            ctx1h_bonus_line = (
-                f"\n[BONUS QUALITE] ST Context 1H aligne: {_ctx_label(ctx1h)}"
-                if ctx1h_ok else ""
-            )
             prep_message = (
                 f"<b>[PREP SWING{prep_level}]</b> {symbol}\n"
                 "--------------------\n"
@@ -3244,7 +3241,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}\n"
                 f"[OK] RCI court 1H extreme favorable: {rci1h:.1f}\n"
                 f"[OK] ST Context 30m: {_ctx_label(ctx30m)}\n"
-                f"{confirmation_line}{ctx1h_bonus_line}\n"
+                f"{confirmation_line}\n"
                 "[ATTENTE] Nouvelle zone ST Context 5m alignee"
             )
             send_notification(
@@ -3258,8 +3255,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             quality_lines = []
             if bias4h_ok:
                 quality_lines.append(f"[QUALITE] Bias 4H aligne: {_ctx_label(bias4h)}")
-            if ctx1h_ok:
-                quality_lines.append(f"[BONUS QUALITE] ST Context 1H aligne: {_ctx_label(ctx1h)}")
             quality_message = (
                 f"<b>[QUALITE SWING]</b> {symbol}\n"
                 "--------------------\n"
@@ -3277,7 +3272,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 priority=5, tags=[], telegram=True, ntfy=True,
                 telegram_channel='telegram_alerts',
             )
-            logger.info(f"[QUALITE SWING] {symbol} {direction} bias4h={bias4h_ok} ctx1h={ctx1h_ok}")
+            logger.info(f"[QUALITE SWING] {symbol} {direction} bias4h={bias4h_ok}")
 
         logger.info(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
@@ -3304,8 +3299,6 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 f"[TRIGGER] Nouvelle zone ST Context 5m: {_ctx_label(ctx5m)}",
                 confirmation_line,
             ]
-            if ctx1h_ok:
-                detail_lines.append(f"[BONUS QUALITE] ST Context 1H aligne: {_ctx_label(ctx1h)}")
             opened = _open_strategy_entry(
                 symbol,
                 'SWING',

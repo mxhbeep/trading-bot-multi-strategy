@@ -117,6 +117,7 @@ CONFIG = {
     'ENABLE_DAILY': True,
     'ENABLE_SWING': True,
     'ENABLE_REVERSAL': True,
+    'ENABLE_RCI_CONTEXT': True,
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -137,7 +138,6 @@ LAST_BIAS_RCI_REPORTS = {
     '12h': {'long': [], 'short': []},
     '1d': {'long': [], 'short': []},
 }
-LAST_RCI_CONTEXT_REPORT = {'long': [], 'short': []}
 
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
@@ -223,7 +223,6 @@ def persist_runtime_state():
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
             'last_bias_rci_reports': LAST_BIAS_RCI_REPORTS,
-            'last_rci_context_report': LAST_RCI_CONTEXT_REPORT,
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -268,7 +267,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_BIAS_RCI_REPORTS, LAST_RCI_CONTEXT_REPORT
+    global LAST_BIAS_RCI_REPORTS
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -316,6 +315,9 @@ def load_runtime_state():
             if 'swing_prep_dir' not in state:
                 state['swing_prep_dir'] = state.pop('swing_b_prep_dir', None)
                 state['swing_prep_ts'] = state.pop('swing_b_prep_ts', None)
+            if 'rci_context_prep_dir' not in state:
+                state['rci_context_prep_dir'] = None
+                state['rci_context_prep_ts'] = None
         saved_bias_rci_reports = payload.get('last_bias_rci_reports', {})
         LAST_BIAS_RCI_REPORTS = {
             tf: {
@@ -323,11 +325,6 @@ def load_runtime_state():
                 'short': sorted(saved_bias_rci_reports.get(tf, {}).get('short', [])),
             }
             for tf in ('4h', '12h', '1d')
-        }
-        saved_rci_context_report = payload.get('last_rci_context_report', {})
-        LAST_RCI_CONTEXT_REPORT = {
-            'long': sorted(saved_rci_context_report.get('long', [])),
-            'short': sorted(saved_rci_context_report.get('short', [])),
         }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
@@ -756,51 +753,6 @@ def update_bias_rci_reports(timeframes=('4h', '12h', '1d')):
     return changed
 
 
-def update_rci_context_report():
-    """Liste les actifs avec RCI 1D/1H et CTX 4H/1H alignes."""
-    global LAST_RCI_CONTEXT_REPORT
-    long_symbols = []
-    short_symbols = []
-
-    with STATE_LOCK:
-        for symbol in sorted(get_tracked_symbols()):
-            state = MOMENTUM_STATE.get(symbol, {})
-            short_symbol = symbol.replace('/USDT', '')
-            if (
-                _rci_extreme_quality(state, '1d', 'buy')[2]
-                and _st_context_condition(state, '4h', 'buy')[2]
-                and _st_context_condition(state, '1h', 'buy')[2]
-                and _rci_extreme_quality(state, '1h', 'buy')[2]
-            ):
-                long_symbols.append(short_symbol)
-            elif (
-                _rci_extreme_quality(state, '1d', 'sell')[2]
-                and _st_context_condition(state, '4h', 'sell')[2]
-                and _st_context_condition(state, '1h', 'sell')[2]
-                and _rci_extreme_quality(state, '1h', 'sell')[2]
-            ):
-                short_symbols.append(short_symbol)
-
-        report = {'long': long_symbols, 'short': short_symbols}
-        if report == LAST_RCI_CONTEXT_REPORT:
-            return False
-        LAST_RCI_CONTEXT_REPORT = report
-
-    long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
-    short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
-    send_info(
-        "<b>[CONFLUENCE RCI + CONTEXT]</b>\n"
-        "--------------------\n"
-        f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
-        f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-        "RCI 1D + ST Context 4H + ST Context 1H + RCI 1H alignes. "
-        "Liste mise a jour uniquement apres un changement."
-    )
-    logger.info(f"[RCI CONTEXT REPORT] LONG={long_symbols} SHORT={short_symbols}")
-    persist_runtime_state()
-    return True
-
-
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     redis_status = "Redis connecte" if REDIS_CLIENT else "Redis non disponible"
@@ -821,7 +773,7 @@ def send_start_notification():
         "PULSE ENTREE: CTX 1H + CTX 5m; RCI 1D / CTX 4H alignes = qualite\n"
         "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
         "RAPPORTS INFO: Bias + RCI extreme alignes en 4H, 12H et 1D\n"
-        "RAPPORT CONFLUENCE: RCI 1D + CTX 4H + CTX 1H + RCI 1H alignes\n"
+        "RCI CONTEXT PREP: RCI 1D + CTX 4H + RCI 1H; entree nouveau CTX 1H\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
         f"{now}"
@@ -1195,6 +1147,7 @@ def init_symbol_states(symbol):
             'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
             'swing_prep_dir': None, 'swing_prep_ts': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
+            'rci_context_prep_dir': None, 'rci_context_prep_ts': None,
         }
 
 
@@ -1312,8 +1265,6 @@ def process_webhook(data):
             elif tf == '12h':
                 m['st_context_12h'] = parsed_ctx
                 m['st_context_12h_ts'] = now_ts
-            if tf in ('1h', '4h'):
-                update_rci_context_report()
 
         if alert_type == 'bias' and tf in ('30m', '2h', '4h', '12h', '1d', '2d'):
             parsed_bias = parse_bias_value(val)
@@ -1428,6 +1379,7 @@ def process_webhook(data):
         #         entree sur nouvelle zone CTX 5m alignee.
         # PULSE : PREP Bias 1D + RCI 12H; CTX 4H oppose = veto; entree CTX 1H + CTX 5m.
         # REVERSAL : PREP CTX 1D + CTX 4H + RCI 4H/1D; entree sur nouveau CTX 1H.
+        # RCI CONTEXT : PREP RCI 1D + CTX 4H + RCI 1H; entree sur nouveau CTX 1H.
         # ========================================================================
         if CONFIG.get('ENABLE_DAILY', True) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf in ('30m', '4h')
@@ -1457,6 +1409,17 @@ def process_webhook(data):
             alert_type == 'st_context' and tf in ('1h', '4h', '1d')
         ):
             evaluate_reversal(
+                symbol,
+                price=price,
+                exchange_name=exchange_name,
+                event_id=event_id,
+                source=f"st_context_{tf}",
+            )
+
+        if CONFIG.get('ENABLE_RCI_CONTEXT', True) and is_trade_symbol(symbol) and (
+            alert_type == 'st_context' and tf in ('1h', '4h')
+        ):
+            evaluate_rci_context(
                 symbol,
                 price=price,
                 exchange_name=exchange_name,
@@ -2401,7 +2364,13 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
                 event_id=f"okx_swing_rci1h_{symbol}_{int(now_ts)}",
                 source='okx_rci_1h',
             )
-        update_rci_context_report()
+        if CONFIG.get('ENABLE_RCI_CONTEXT', True):
+            evaluate_rci_context(
+                symbol, price=price,
+                exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                event_id=f"okx_rci_context_1h_{symbol}_{int(now_ts)}",
+                source='okx_rci_1h',
+            )
     elif tf == '4h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
         relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
@@ -2463,7 +2432,13 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
                 event_id=f"okx_pulse_rci1d_{symbol}_{int(now_ts)}",
                 source='okx_rci_1d',
             )
-        update_rci_context_report()
+        if CONFIG.get('ENABLE_RCI_CONTEXT', True):
+            evaluate_rci_context(
+                symbol, price=price,
+                exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
+                event_id=f"okx_rci_context_1d_{symbol}_{int(now_ts)}",
+                source='okx_rci_1d',
+            )
 
 
 def relay_bias_to_scalp(symbol, value, tf):
@@ -2628,7 +2603,7 @@ def _open_strategy_entry(
     telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
-    ntfy_enabled = strategy in ('PULSE', 'SWING', 'REVERSAL')
+    ntfy_enabled = strategy in ('PULSE', 'SWING', 'REVERSAL', 'RCI_CONTEXT')
     message = (
         f"{emoji} <b>[{strategy_label} - {alert_kind}]</b> {symbol}\n"
         f"--------------------\nDirection: {direction}\n"
@@ -2911,6 +2886,100 @@ def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, sour
                 'reversal_ctx1d_ctx4h_rci4h_rci1d_ctx1h',
                 event_key, price, exchange_name, detail_lines,
                 cooldown=14400, quality=True,
+            ) or opened
+    if state_changed:
+        persist_runtime_state()
+    return opened
+
+
+def evaluate_rci_context(symbol, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+    """RCI CONTEXT: PREP RCI 1D + CTX 4H + RCI 1H; entree sur nouveau CTX 1H."""
+    if not CONFIG.get('ENABLE_RCI_CONTEXT', True) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    opened = False
+    state_changed = False
+
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(f"{symbol}_RCI_CONTEXT")
+    if pos:
+        exp = _trade_direction_to_ctx(pos.get('direction'))
+        position_valid = (
+            _rci_extreme_quality(m, '1d', exp)[2]
+            and _st_context_condition(m, '4h', exp)[2]
+            and _rci_extreme_quality(m, '1h', exp)[2]
+        )
+        _refresh_logical_position(
+            symbol, 'RCI_CONTEXT', position_valid, 2 * 3600,
+            'confluence RCI Context absente',
+        )
+
+    for exp_ctx in ('buy', 'sell'):
+        direction = 'LONG' if exp_ctx == 'buy' else 'SHORT'
+        rci1d, rci1d_fresh, rci1d_ok = _rci_extreme_quality(m, '1d', exp_ctx)
+        ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
+        rci1h, rci1h_fresh, rci1h_ok = _rci_extreme_quality(m, '1h', exp_ctx)
+        ctx1h, ctx1h_fresh, ctx1h_ok = _st_context_condition(m, '1h', exp_ctx)
+        armed = rci1d_ok and ctx4h_ok and rci1h_ok
+
+        with STATE_LOCK:
+            position_open = bool(SCALP_POSITIONS.get(f"{symbol}_RCI_CONTEXT"))
+            prep_dir = m.get('rci_context_prep_dir')
+            if armed and prep_dir != exp_ctx:
+                m['rci_context_prep_dir'] = exp_ctx
+                m['rci_context_prep_ts'] = time.time()
+                state_changed = True
+                send_prep = not position_open
+            else:
+                send_prep = False
+            if not armed and prep_dir == exp_ctx:
+                m['rci_context_prep_dir'] = None
+                m['rci_context_prep_ts'] = None
+                state_changed = True
+
+        entry_ok = armed and ctx1h_ok and source == 'st_context_1h' and not position_open
+        if send_prep:
+            prep_message = (
+                f"<b>[PREP RCI CONTEXT]</b> {symbol}\n"
+                "--------------------\n"
+                f"Direction: {direction}\n"
+                f"Price: ${format_price(price)}\n"
+                f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}\n"
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}\n"
+                f"[OK] RCI court 1H extreme favorable: {rci1h:.1f}\n"
+                "[ATTENTE] Nouvelle zone ST Context 1H alignee"
+            )
+            send_notification(
+                notification_title_from_message(prep_message), prep_message,
+                priority=5, tags=[], telegram=True, ntfy=False,
+                telegram_channel='telegram_alerts',
+            )
+            logger.info(f"[PREP RCI CONTEXT] {symbol} {direction}")
+
+        logger.info(
+            f"[RCI CONTEXT CHECK] {symbol} source={source} dir={direction} "
+            f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
+            f"ctx4h={ctx4h}/{exp_ctx} fresh={ctx4h_fresh} ok={ctx4h_ok} "
+            f"rci1h={rci1h} fresh={rci1h_fresh} ok={rci1h_ok} "
+            f"ctx1h={ctx1h}/{exp_ctx} fresh={ctx1h_fresh} ok={ctx1h_ok} "
+            f"armed={armed} entry={entry_ok}"
+        )
+        if entry_ok:
+            event_key = event_id or f"rci_context_{symbol}_{int(time.time())}_{exp_ctx}"
+            detail_lines = [
+                "[OK] Entree RCI CONTEXT",
+                f"[OK] RCI court 1D extreme favorable: {rci1d:.1f}",
+                f"[OK] ST Context 4H: {_ctx_label(ctx4h)}",
+                f"[OK] RCI court 1H extreme favorable: {rci1h:.1f}",
+                f"[TRIGGER] Nouvelle zone ST Context 1H: {_ctx_label(ctx1h)}",
+            ]
+            opened = _open_strategy_entry(
+                symbol, 'RCI_CONTEXT', direction,
+                'rci1d_ctx4h_rci1h_ctx1h',
+                event_key, price, exchange_name, detail_lines,
+                cooldown=14400, quality=False,
             ) or opened
     if state_changed:
         persist_runtime_state()

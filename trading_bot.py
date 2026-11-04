@@ -138,6 +138,7 @@ LAST_BIAS_RCI_REPORTS = {
     '12h': {'long': [], 'short': []},
     '1d': {'long': [], 'short': []},
 }
+LAST_ZALT12H_RCI4H_REPORT = {'long': [], 'short': []}
 
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
@@ -223,6 +224,7 @@ def persist_runtime_state():
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
             'last_bias_rci_reports': LAST_BIAS_RCI_REPORTS,
+            'last_zalt12h_rci4h_report': LAST_ZALT12H_RCI4H_REPORT,
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -267,7 +269,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_BIAS_RCI_REPORTS
+    global LAST_BIAS_RCI_REPORTS, LAST_ZALT12H_RCI4H_REPORT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -325,6 +327,11 @@ def load_runtime_state():
                 'short': sorted(saved_bias_rci_reports.get(tf, {}).get('short', [])),
             }
             for tf in ('4h', '12h', '1d')
+        }
+        saved_zalt_rci_report = payload.get('last_zalt12h_rci4h_report', {})
+        LAST_ZALT12H_RCI4H_REPORT = {
+            'long': sorted(saved_zalt_rci_report.get('long', [])),
+            'short': sorted(saved_zalt_rci_report.get('short', [])),
         }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
@@ -753,6 +760,49 @@ def update_bias_rci_reports(timeframes=('4h', '12h', '1d')):
     return changed
 
 
+def update_zalt12h_rci4h_report():
+    """Liste LONG/SHORT quand ZALT 12H et RCI court 4H extreme sont alignes."""
+    global LAST_ZALT12H_RCI4H_REPORT
+    long_symbols = []
+    short_symbols = []
+
+    with STATE_LOCK:
+        for symbol in sorted(get_tracked_symbols()):
+            if not is_trade_symbol(symbol):
+                continue
+            state = MOMENTUM_STATE.get(symbol, {})
+            short_symbol = symbol.replace('/USDT', '')
+            if (
+                _zalt_condition(state, '12h', 'buy')[2]
+                and _rci_extreme_quality(state, '4h', 'buy')[2]
+            ):
+                long_symbols.append(short_symbol)
+            elif (
+                _zalt_condition(state, '12h', 'sell')[2]
+                and _rci_extreme_quality(state, '4h', 'sell')[2]
+            ):
+                short_symbols.append(short_symbol)
+
+        report = {'long': long_symbols, 'short': short_symbols}
+        if report == LAST_ZALT12H_RCI4H_REPORT:
+            return False
+        LAST_ZALT12H_RCI4H_REPORT = report
+
+    long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
+    short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
+    send_info(
+        "<b>[CONFLUENCE ZALT 12H + RCI 4H]</b>\n"
+        "--------------------\n"
+        f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
+        f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
+        "ZALT 12H et RCI court 4H extreme favorable alignes. "
+        "Liste mise a jour uniquement apres un changement."
+    )
+    logger.info(f"[ZALT12H RCI4H REPORT] LONG={long_symbols} SHORT={short_symbols}")
+    persist_runtime_state()
+    return True
+
+
 def send_start_notification():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     redis_status = "Redis connecte" if REDIS_CLIENT else "Redis non disponible"
@@ -773,6 +823,7 @@ def send_start_notification():
         "PULSE ENTREE: CTX 1H + CTX 5m; RCI 1D / CTX 4H alignes = qualite\n"
         "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
         "RAPPORTS INFO: Bias + RCI extreme alignes en 4H, 12H et 1D\n"
+        "RAPPORT INFO: ZALT 12H + RCI 4H extreme alignes\n"
         "RCI CONTEXT PREP: RCI 1D + CTX 4H + RCI 1H; entree nouveau CTX 1H\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
@@ -3537,6 +3588,7 @@ def indicators_scheduler():
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
         update_bias_rci_reports()
+        update_zalt12h_rci4h_report()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m

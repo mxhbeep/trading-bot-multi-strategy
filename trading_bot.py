@@ -115,7 +115,7 @@ CONFIG = {
     'ENABLE_DAILY': True,
     'ENABLE_SWING': True,
     'ENABLE_REVERSAL': True,
-    'ENABLE_RCI_CONTEXT': True,
+    'ENABLE_RCI_CONTEXT': False,
     'ENABLE_SCALP_RELAY': True,
 }
 
@@ -816,7 +816,7 @@ def send_start_notification():
         "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
         "RAPPORTS INFO: ST Context 1H actif; Bias + RCI alignes en 12H et 1D\n"
         "RAPPORT INFO: ZALT 12H + RCI 4H extreme alignes\n"
-        "RCI CONTEXT PREP: RCI 1D + CTX 4H + RCI 1H; entree nouveau CTX 1H\n"
+        "RCI CONTEXT: strategie en pause\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
         f"{now}"
@@ -1464,7 +1464,7 @@ def process_webhook(data):
                 source=f"st_context_{tf}",
             )
 
-        if CONFIG.get('ENABLE_RCI_CONTEXT', True) and is_trade_symbol(symbol) and (
+        if CONFIG.get('ENABLE_RCI_CONTEXT', False) and is_trade_symbol(symbol) and (
             alert_type == 'st_context' and tf in ('1h', '4h')
         ):
             evaluate_rci_context(
@@ -2392,7 +2392,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
                 event_id=f"okx_swing_rci1h_{symbol}_{int(now_ts)}",
                 source='okx_rci_1h',
             )
-        if CONFIG.get('ENABLE_RCI_CONTEXT', True):
+        if CONFIG.get('ENABLE_RCI_CONTEXT', False):
             evaluate_rci_context(
                 symbol, price=price,
                 exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -2460,7 +2460,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
                 event_id=f"okx_pulse_rci1d_{symbol}_{int(now_ts)}",
                 source='okx_rci_1d',
             )
-        if CONFIG.get('ENABLE_RCI_CONTEXT', True):
+        if CONFIG.get('ENABLE_RCI_CONTEXT', False):
             evaluate_rci_context(
                 symbol, price=price,
                 exchange_name=get_symbol_config(symbol).get('exchange', 'okx'),
@@ -2868,7 +2868,7 @@ def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, sour
 
 def evaluate_rci_context(symbol, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """RCI CONTEXT: PREP RCI 1D + CTX 4H + RCI 1H; entree sur nouveau CTX 1H."""
-    if not CONFIG.get('ENABLE_RCI_CONTEXT', True) or not is_trade_symbol(symbol):
+    if not CONFIG.get('ENABLE_RCI_CONTEXT', False) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
     m = MOMENTUM_STATE[symbol]

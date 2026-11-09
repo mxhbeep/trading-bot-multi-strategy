@@ -1180,8 +1180,6 @@ def init_symbol_states(symbol):
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
             'rci_1h_10': None, 'rci_1h_30': None, 'rci_1h_50': None,
             'rci_1h_dir': None, 'rci_1h_chop': None, 'rci_1h_ts': None,
-            'rci_15m_10': None, 'rci_15m_30': None, 'rci_15m_50': None,
-            'rci_15m_dir': None, 'rci_15m_chop': None, 'rci_15m_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
             'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Swing + qualite/veto Scalp B
@@ -1718,10 +1716,8 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
-        for rci_tf in ('15m', '30m', '1h', '2h', '4h'):
-            if rci_tf == '15m' and symbol not in DAILY_B_SYMBOLS:
-                continue
-            if rci_tf == '1h' and symbol != 'BTC/USDT':
+        for rci_tf in ('30m', '1h', '2h', '4h'):
+            if rci_tf == '1h' and symbol not in DAILY_B_SYMBOLS:
                 continue
             rci_dir = m.get(f'rci_{rci_tf}_dir')
             rci10 = m.get(f'rci_{rci_tf}_10')
@@ -2429,29 +2425,6 @@ def update_okx_rci_2h(symbol):
         )
 
 
-def update_okx_rci_15m(symbol):
-    """RCI court 15m interne pour les 10 actifs de la strategie Scalp."""
-    if symbol not in DAILY_B_SYMBOLS:
-        return
-    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=100), 15)
-    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
-    direction, is_chop = classify_rci_zone(rci_values.get(30), rci_values.get(50))
-    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
-    now_ts = time.time()
-    with STATE_LOCK:
-        init_symbol_states(symbol)
-        m = MOMENTUM_STATE[symbol]
-        m['rci_15m_10'] = rci_values.get(10)
-        m['rci_15m_30'] = rci_values.get(30)
-        m['rci_15m_50'] = rci_values.get(50)
-        m['rci_15m_dir'] = direction
-        m['rci_15m_chop'] = is_chop
-        m['rci_15m_ts'] = now_ts
-        persist_runtime_state()
-    logger.info(f"[RCI OKX 15m] {symbol} 10={rci_values.get(10)}")
-    relay_rci_to_scalp(symbol, '15m', rci_values, direction, is_chop, False, price=price)
-
-
 def update_okx_rci_quality(symbol, tf, timeframe_minutes):
     """Calcule le RCI 10/30/50 HTF utilise par les filtres de qualite/veto."""
     if not is_trade_symbol(symbol):
@@ -2476,7 +2449,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
     )
     if tf == '1h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
-        if symbol == 'BTC/USDT':
+        if symbol in DAILY_B_SYMBOLS:
             relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
         evaluate_daily(
             symbol, price=price,
@@ -3568,7 +3541,6 @@ def update_indicators_for_symbol(symbol):
             update_okx_bias_htf(symbol)
             return
         update_okx_bias_2h(symbol)
-        update_okx_rci_15m(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_quality(symbol, '1h', 60)
         update_okx_rci_2h(symbol)

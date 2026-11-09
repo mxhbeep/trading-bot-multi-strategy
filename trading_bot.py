@@ -1180,6 +1180,8 @@ def init_symbol_states(symbol):
             'rci_30m_10_prev': None, 'rci_30m_extreme_entry_dir': None, 'rci_30m_extreme_entry_ts': None,
             'rci_1h_10': None, 'rci_1h_30': None, 'rci_1h_50': None,
             'rci_1h_dir': None, 'rci_1h_chop': None, 'rci_1h_ts': None,
+            'rci_15m_10': None, 'rci_15m_30': None, 'rci_15m_50': None,
+            'rci_15m_dir': None, 'rci_15m_chop': None, 'rci_15m_ts': None,
             'rci_2h_10': None, 'rci_2h_30': None, 'rci_2h_50': None,  # Info confluence 2H
             'rci_2h_dir': None, 'rci_2h_chop': None, 'rci_2h_ts': None,
             'rci_4h_10': None, 'rci_4h_30': None, 'rci_4h_50': None,  # Swing + qualite/veto Scalp B
@@ -1193,6 +1195,7 @@ def init_symbol_states(symbol):
             'bias_4h': None, 'bias_4h_ts': None,    # Etat interne historique
             'bias_2d': None, 'bias_2d_ts': None,    # Daily (interne OKX, agregation 1D par paires)
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
+            'zalt_5m': None, 'zalt_5m_ts': None, 'last_zalt_5m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
             'zalt_12h_tv_ts': None, 'zalt_12h_source': None,
@@ -1497,6 +1500,7 @@ def process_webhook(data):
             and alert_type == 'st_context'
             and (
                 tf == '30m'
+                or (symbol in DAILY_B_SYMBOLS and tf in ('5m', '15m'))
                 or (symbol == 'BTC/USDT' and tf in ('5m', '2h'))
             )
         )
@@ -1693,6 +1697,7 @@ def sync_scalp():
         symbol_sent = []
 
         for sync_tf, sync_field, sync_label in (
+            ('1h', 'bias_1h', 'bias1h'),
             ('2h', 'bias_2h', 'bias2h'),
             ('4h', 'bias_4h', 'bias4h'),
             ('1d', 'bias_1d', 'bias1d'),
@@ -1713,7 +1718,9 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
-        for rci_tf in ('30m', '1h', '2h', '4h'):
+        for rci_tf in ('15m', '30m', '1h', '2h', '4h'):
+            if rci_tf == '15m' and symbol not in DAILY_B_SYMBOLS:
+                continue
             if rci_tf == '1h' and symbol != 'BTC/USDT':
                 continue
             rci_dir = m.get(f'rci_{rci_tf}_dir')
@@ -1760,6 +1767,23 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: ZALT12H {e}")
 
+        if symbol in DAILY_B_SYMBOLS:
+            zalt5m = m.get('zalt_5m')
+            try:
+                payload = {
+                    'symbol': symbol, 'strategy': 'scalp', 'tf': '5m', 'type': 'zalt',
+                    'value': zalt5m if zalt5m in ('buy', 'sell') else 'neutral',
+                    'sync': True, 'price': 0,
+                    'event_id': f"sync_scalp_zalt5m_{symbol}_{int(time.time())}",
+                }
+                resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                if resp.status_code == 200:
+                    symbol_sent.append('zalt5m')
+                else:
+                    errors.append(f"{symbol}: ZALT5M HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{symbol}: ZALT5M {e}")
+
         ctx30 = m.get('st_context_30m')
         try:
             payload = {
@@ -1779,8 +1803,8 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: CTX30M {e}")
 
-        if symbol == 'BTC/USDT':
-            for ctx_tf in ('5m', '2h'):
+        if symbol in DAILY_B_SYMBOLS:
+            for ctx_tf in ('5m', '15m'):
                 ctx_value = m.get(f'st_context_{ctx_tf}')
                 try:
                     payload = {
@@ -1939,6 +1963,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 
 ZALT_HTF_SETTINGS = {
+    '5m': {'length': 21, 'mult': 1.0},
     '30m': {'length': 34, 'mult': 1.2},
     '12h': {'length': 50, 'mult': 1.15},
     '2d': {'length': 80, 'mult': 1.5},
@@ -2070,6 +2095,57 @@ def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
             logger.warning(f"[RELAY OKX ZALT 30m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         logger.warning(f"[RELAY OKX ZALT 30m] Erreur: {e}")
+
+
+def relay_zalt_5m_to_scalp(symbol, direction, price, is_flip):
+    """Relaie le ZALT 5m 21/1.0 aux 10 actifs de la strategie Scalp."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False) or symbol not in DAILY_B_SYMBOLS:
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    payload = {
+        'symbol': symbol, 'strategy': 'scalp', 'tf': '5m', 'type': 'zalt',
+        'value': direction, 'price': price,
+        'event_id': f"okx_zalt_5m_{symbol}_{int(time.time())}",
+    }
+    if is_flip:
+        payload['signal'] = 'trend_flip'
+    try:
+        resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=6)
+        if 200 <= resp.status_code < 300:
+            logger.info(f"[RELAY OKX ZALT 5m] {symbol}={direction} flip={is_flip} -> scalpbot OK")
+        else:
+            logger.warning(f"[RELAY OKX ZALT 5m] scalpbot HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT 5m] Erreur: {e}")
+
+
+def update_okx_zalt_5m(symbol):
+    """ZALT 5m interne 21/1.0, declencheur de la strategie Scalp."""
+    if symbol not in DAILY_B_SYMBOLS:
+        return
+    cfg = ZALT_HTF_SETTINGS['5m']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '5m', limit=200), 5)
+    payload = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        if not payload:
+            direction, is_flip, price = None, False, 0.0
+        else:
+            old = m.get('zalt_5m')
+            direction = payload['trend']
+            m['zalt_5m'] = direction
+            m['zalt_5m_ts'] = now_ts
+            is_flip = bool(payload['flip'] and old != direction)
+            if is_flip:
+                m['last_zalt_5m_signal_ts'] = now_ts
+            price = payload['close']
+        persist_runtime_state()
+    if direction in ('buy', 'sell'):
+        relay_zalt_5m_to_scalp(symbol, direction, price, is_flip)
 
 
 def relay_zalt_12h_to_scalp(symbol, direction, price, is_flip):
@@ -2353,6 +2429,29 @@ def update_okx_rci_2h(symbol):
         )
 
 
+def update_okx_rci_15m(symbol):
+    """RCI court 15m interne pour les 10 actifs de la strategie Scalp."""
+    if symbol not in DAILY_B_SYMBOLS:
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=100), 15)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    direction, is_chop = classify_rci_zone(rci_values.get(30), rci_values.get(50))
+    price = float(df['close'].iloc[-1]) if df is not None and not df.empty else None
+    now_ts = time.time()
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['rci_15m_10'] = rci_values.get(10)
+        m['rci_15m_30'] = rci_values.get(30)
+        m['rci_15m_50'] = rci_values.get(50)
+        m['rci_15m_dir'] = direction
+        m['rci_15m_chop'] = is_chop
+        m['rci_15m_ts'] = now_ts
+        persist_runtime_state()
+    logger.info(f"[RCI OKX 15m] {symbol} 10={rci_values.get(10)}")
+    relay_rci_to_scalp(symbol, '15m', rci_values, direction, is_chop, False, price=price)
+
+
 def update_okx_rci_quality(symbol, tf, timeframe_minutes):
     """Calcule le RCI 10/30/50 HTF utilise par les filtres de qualite/veto."""
     if not is_trade_symbol(symbol):
@@ -2522,7 +2621,7 @@ def update_okx_bias_htf(symbol):
         return
     trade_symbol = is_trade_symbol(symbol)
     df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=200), 60) if trade_symbol else None
-    bias_1h = calc_bias_okx(df_1h, ema_len=21, sma_len=55) if df_1h is not None else None
+    bias_1h = calc_bias_okx(df_1h, ema_len=17, sma_len=40) if df_1h is not None else None
     df_4h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '4h', limit=200), 240) if trade_symbol else None
     bias_4h = calc_bias_okx(df_4h, ema_len=21, sma_len=55) if df_4h is not None else None
     bias_12h = None
@@ -2559,6 +2658,8 @@ def update_okx_bias_htf(symbol):
     logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 12h={bias_12h} 1d={bias_1d} 2d={bias_2d}")
     if not trade_symbol:
         return
+    if is_daily_b_symbol(symbol):
+        relay_bias_to_scalp(symbol, bias_1h, '1h')
     relay_bias_to_scalp(symbol, bias_4h, '4h')
     relay_bias_to_scalp(symbol, bias_1d, '1d')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
@@ -3467,6 +3568,7 @@ def update_indicators_for_symbol(symbol):
             update_okx_bias_htf(symbol)
             return
         update_okx_bias_2h(symbol)
+        update_okx_rci_15m(symbol)
         update_okx_rci_30m(symbol)
         update_okx_rci_quality(symbol, '1h', 60)
         update_okx_rci_2h(symbol)
@@ -3506,6 +3608,23 @@ def indicators_scheduler():
         time.sleep(max(60, wait))
 
 
+def scalp_zalt_5m_scheduler():
+    """Calcule le ZALT 5m juste apres chaque cloture pour les 10 actifs Scalp."""
+    logger.info("[OKX] Scheduler ZALT 5m demarre (21/1.0)")
+    time.sleep(20)
+    while True:
+        for symbol in sorted(DAILY_B_SYMBOLS):
+            try:
+                update_okx_zalt_5m(symbol)
+            except Exception as e:
+                logger.error(f"[ZALT 5m] {symbol}: {e}")
+            time.sleep(0.3)
+        now = datetime.now(timezone.utc)
+        minutes_to_next = 5 - (now.minute % 5)
+        next_5m = (now + timedelta(minutes=minutes_to_next)).replace(second=10, microsecond=0)
+        time.sleep(max(30, (next_5m - now).total_seconds()))
+
+
 def startup():
     try:
         logger.info("🚀 Démarrage du bot...")
@@ -3540,6 +3659,9 @@ def startup():
 
         indicators_thread = threading.Thread(target=indicators_scheduler, daemon=True)
         indicators_thread.start()
+
+        scalp_5m_thread = threading.Thread(target=scalp_zalt_5m_scheduler, daemon=True)
+        scalp_5m_thread.start()
 
         signal_watchdog_thread = threading.Thread(target=tv_signal_watchdog, daemon=True)
         signal_watchdog_thread.start()

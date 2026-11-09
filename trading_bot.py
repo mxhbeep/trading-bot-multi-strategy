@@ -146,6 +146,7 @@ exchanges = {}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
+VERBOSE_CHECKS = os.environ.get('VERBOSE_CHECKS', '0') == '1'
 
 app = Flask(__name__)
 
@@ -323,6 +324,9 @@ def load_runtime_state():
             if 'zalt_12h_tv_ts' not in state:
                 state['zalt_12h_tv_ts'] = None
                 state['zalt_12h_source'] = None
+            if 'zalt_2d_tv_ts' not in state:
+                state['zalt_2d_tv_ts'] = None
+                state['zalt_2d_source'] = None
         saved_bias_rci_reports = payload.get('last_bias_rci_reports', {})
         LAST_BIAS_RCI_REPORTS = {
             tf: {
@@ -817,6 +821,7 @@ def send_start_notification():
         "<b>STRATEGIES ACTIVES</b>\n\n"
         "DAILY A PREP: Bias 2D + CTX 4H (38 actifs)\n"
         "DAILY B PREP: ZALT 2D (80/1.5) + CTX 4H (10 actifs)\n"
+        "ZALT 2D: TradingView prioritaire; OKX reprend apres 72H sans webhook\n"
         "DAILY A: gestion manuelle apres PREP\n"
         "DAILY B ENTREE: CTX 30m; RCI 1D / 12H = bonus qualite\n"
         "SWING: PREP ZALT 12H + RCI 1H + RCI 4H ou 12H extremes + CTX 1H\n"
@@ -848,6 +853,14 @@ def track_tv_signal(symbol, alert_type, tf):
 
 def tv_required_signals():
     return [
+        {
+            'label': 'ZALT 2D (source prioritaire Daily B)',
+            'alert_type': 'zalt',
+            'tf': '2d',
+            'max_age': 72 * 3600,
+            'warmup': 73 * 3600,
+            'scope': 'daily_b',
+        },
         {
             'label': 'ZALT 12H (source prioritaire Swing)',
             'alert_type': 'zalt',
@@ -915,6 +928,8 @@ def tv_watchdog_symbols(req):
         symbols = {s for s in CONFIG['SYMBOLS'] if is_trade_symbol(s)}
     elif scope == 'pulse':
         symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('pulse')}
+    elif scope == 'daily_b':
+        symbols = set(DAILY_B_SYMBOLS)
     else:
         symbols = {s for s, cfg in CONFIG['SYMBOLS'].items() if cfg.get('scalp')}
     return sorted(symbols - WATCHDOG_EXCLUDED_SYMBOLS)
@@ -1207,6 +1222,7 @@ def init_symbol_states(symbol):
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
             'zalt_12h_tv_ts': None, 'zalt_12h_source': None,
             'zalt_2d': None, 'zalt_2d_ts': None,
+            'zalt_2d_tv_ts': None, 'zalt_2d_source': None,
             'daily_a_prep_dir': None, 'daily_a_prep_ts': None,
             'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
             'swing_prep_dir': None, 'swing_prep_ts': None,
@@ -1387,10 +1403,12 @@ def process_webhook(data):
                     if tf == '12h':
                         m['zalt_12h_tv_ts'] = now_ts
                         m['zalt_12h_source'] = 'tradingview'
+                    elif tf == '2d':
+                        m['zalt_2d_tv_ts'] = now_ts
+                        m['zalt_2d_source'] = 'tradingview'
                     if zalt_signal in ('trend_flip', 'flip'):
                         m[f'last_zalt_{tf}_signal_ts'] = now_ts
                     logger.info(f"[ZALT {tf.upper()}] {symbol} = {parsed_zalt} signal={zalt_signal or 'state'}")
-                    is_zalt_flip = zalt_signal in ('trend_flip', 'flip')
                     if tf == '2d':
                         evaluate_daily(
                             symbol, price=price, exchange_name=exchange_name,
@@ -2243,12 +2261,16 @@ def update_okx_zalt_12h(symbol):
 
 
 def update_okx_zalt_2d(symbol):
-    """ZALT 2D interne en 80/1.5, direction de DAILY B sur 10 actifs historiques."""
+    """Fallback ZALT 2D OKX quand TradingView est silencieux depuis plus de 72 h."""
     if not is_trade_symbol(symbol) or not is_daily_b_symbol(symbol):
         return
     with STATE_LOCK:
         init_symbol_states(symbol)
+        tv_ts = MOMENTUM_STATE[symbol].get('zalt_2d_tv_ts')
         last_update = MOMENTUM_STATE[symbol].get('zalt_2d_ts')
+    if is_signal_fresh(tv_ts, 72 * 3600):
+        logger.info(f"[ZALT OKX] {symbol} 2d ignore: webhook TradingView prioritaire")
+        return
     if is_signal_fresh(last_update, 6 * 3600):
         return
     cfg = ZALT_HTF_SETTINGS['2d']
@@ -2265,6 +2287,7 @@ def update_okx_zalt_2d(symbol):
         else:
             m['zalt_2d'] = payload['trend']
             m['zalt_2d_ts'] = now_ts
+            m['zalt_2d_source'] = 'okx_fallback'
             price = payload['close']
             logger.info(f"[ZALT OKX] {symbol} 2d={payload['trend']} (80/1.5)")
         persist_runtime_state()
@@ -2585,10 +2608,7 @@ def update_okx_bias_htf(symbol):
     bias_2d = None
     if trade_symbol and df_1d is not None and len(df_1d) >= 80:
         try:
-            df_2d = df_1d.groupby(df_1d.index // 2).agg({
-                'open': 'first', 'high': 'max', 'low': 'min',
-                'close': 'last', 'volume': 'sum'
-            }).reset_index(drop=True)
+            df_2d = aggregate_ohlcv_2d(df_1d)
             bias_2d = calc_bias_okx(df_2d)
         except Exception as e:
             logger.error(f"[BIAS OKX] agregation 2D {symbol}: {e}")
@@ -2941,7 +2961,7 @@ def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, sour
             )
             logger.info(f"[PREP REVERSAL] {symbol} {direction}")
 
-        logger.info(
+        (logger.info if VERBOSE_CHECKS or armed or entry_ok else logger.debug)(
             f"[REVERSAL CHECK] {symbol} source={source} dir={direction} "
             f"ctx1d={ctx1d}/{exp_ctx} fresh={ctx1d_fresh} ok={ctx1d_ok} "
             f"ctx4h={ctx4h}/{exp_ctx} fresh={ctx4h_fresh} ok={ctx4h_ok} "
@@ -3037,7 +3057,7 @@ def evaluate_rci_context(symbol, price=0.0, exchange_name=None, event_id=None, s
             )
             logger.info(f"[PREP RCI CONTEXT] {symbol} {direction}")
 
-        logger.info(
+        (logger.info if VERBOSE_CHECKS or armed or entry_ok else logger.debug)(
             f"[RCI CONTEXT CHECK] {symbol} source={source} dir={direction} "
             f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
             f"ctx4h={ctx4h}/{exp_ctx} fresh={ctx4h_fresh} ok={ctx4h_ok} "
@@ -3177,7 +3197,7 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
                 )
                 logger.info(f"[QUALITE DAILY {path}] {symbol} {direction}")
 
-            logger.info(
+            (logger.info if VERBOSE_CHECKS or armed or entry_ok else logger.debug)(
                 f"[DAILY {path} CHECK] {symbol} source={source} dir={direction} "
                 f"foundation={foundation}/{exp_ctx} fresh={foundation_fresh} ok={foundation_ok} "
                 f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
@@ -3358,7 +3378,7 @@ def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
             )
             logger.info(f"[QUALITE SWING] {symbol} {direction} rci12h={rci12h_ok}")
 
-        logger.info(
+        (logger.info if VERBOSE_CHECKS or armed or entry_ok else logger.debug)(
             f"[SWING CHECK] {symbol} source={source} dir={direction} "
             f"ctx1h={ctx1h}/{exp_ctx} fresh={ctx1h_fresh} ok={ctx1h_ok} "
             f"ctx5m={ctx5m}/{exp_ctx} fresh={ctx5m_fresh} ok={ctx5m_ok} "
@@ -3522,7 +3542,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             logger.info(
                 f"[QUALITE PULSE] {symbol} {direction} rci1d={rci1d_ok} ctx4h={ctx4h_ok}"
             )
-        logger.info(
+        (logger.info if VERBOSE_CHECKS or armed or entry_ok else logger.debug)(
             f"[PULSE CHECK] {symbol} source={source} dir={direction} "
             f"bias1d={bias1d}/{exp_ctx} fresh={bias1d_fresh} ok={bias1d_ok} "
             f"ctx1h={ctx1h}/{ctx1h_ok} ctx1h_fresh={ctx1h_fresh} "

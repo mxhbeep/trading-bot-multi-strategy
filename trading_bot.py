@@ -102,8 +102,6 @@ CONFIG = {
     },
 
     'MIN_TIME_BETWEEN_SAME_ALERT': 1800,
-    'HEARTBEAT_INTERVAL_SECONDS': int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", 21600)),
-    'BARK_TOKEN': os.environ.get('BARK_TOKEN', ''),  # legacy
     'SCALP_BOT_TOKEN': os.environ.get('SCALP_BOT_TOKEN', ''),
     'PRIORITY_SCALP_BOT_TOKEN': os.environ.get('PRIORITY_SCALP_BOT_TOKEN', ''),
     'PRIORITY_SCALP_CHAT_ID': os.environ.get('PRIORITY_SCALP_CHAT_ID', '-1003706862644'),
@@ -141,8 +139,6 @@ LAST_BIAS_RCI_REPORTS = {
 LAST_ZALT12H_RCI4H_REPORT = {'long': [], 'short': []}
 
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
-
-exchanges = {}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -358,18 +354,11 @@ def load_runtime_state():
 # INITIALISATION EXCHANGES
 # ============================================================================ #
 
-def init_exchanges():
-    global exchanges
-    exchanges['okx'] = 'okx'
-    logger.info("✅ Exchange OKX configuré (webhook mode — pas d'API)")
 
 # ============================================================================ #
 # FONCTIONS TELEGRAM
 # ============================================================================ #
 
-def escape_html(text):
-    """Échappe les caractères HTML dans le texte (hors balises intentionnelles)."""
-    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 def format_price(price: float) -> str:
     """Formate un prix en évitant les zéros pour les très petits assets."""
@@ -591,44 +580,6 @@ def send_notification(title: str, message: str, priority=5, tags=None,
                               channels=channels, reply_markup=reply_markup)
 
 
-def send_bark(title: str, body: str, group: str = "TradingBot"):
-    """Legacy wrapper kept for compatibility."""
-    send_ntfy(title, body)
-
-
-def sanitize_scalp_notification(msg: str) -> str:
-    """Retire les emojis et normalise le titre directionnel des alertes scalp."""
-    import re
-    cleaned = re.sub(r'[^\x00-\x7F\u00C0-\u024F\n\r\t]', '', str(msg or ''))
-    lines = [re.sub(r'^\?+\s*', '', line.strip()) for line in cleaned.splitlines() if line.strip()]
-    text = '\n'.join(lines)
-    direction_match = re.search(r'\b(LONG|SHORT)\b', text, re.IGNORECASE)
-    symbol_match = re.search(r'\b[A-Z0-9]+/USDT\b', text, re.IGNORECASE)
-    if lines and direction_match:
-        direction = direction_match.group(1).upper()
-        symbol = f" {symbol_match.group(0).upper()}" if symbol_match else ''
-        suffix = ' - PYRAMIDING' if 'PYRAMIDING' in text.upper() else ''
-        lines[0] = f"<b>SCALP {direction}{suffix}</b>{symbol}"
-    return '\n'.join(lines)
-
-
-def send_telegram_scalp(msg):
-    """Envoie une alerte sur le bot Telegram dedie SCALP."""
-    msg = sanitize_scalp_notification(msg)
-    direction = 'SHORT' if 'SHORT' in msg.upper() else 'LONG'
-    result = send_notification(
-        f'SCALP {direction}',
-        msg,
-        priority=5,
-        tags=[],
-        telegram=True,
-        ntfy=False,
-        telegram_channel='telegram_scalp',
-    )
-    if not result.get('telegram_scalp'):
-        send_telegram(msg, ntfy=False)
-
-
 def send_telegram_with_buttons(msg, token=None, chat_id=None,
                                journal_symbol=None, journal_strategy=None,
                                journal_direction=None, journal_price=None,
@@ -667,35 +618,12 @@ def send_telegram_with_buttons(msg, token=None, chat_id=None,
     return bool(result.get(telegram_channel))
 
 
-def send_telegram_ttmtf(msg):
-    """Envoie une alerte trading sur le bot Telegram principal + ntfy."""
-    return send_telegram(msg)
-
-
-def send_ntfy(title: str, body: str, priority=5, tags=None):
-    """Envoie uniquement une notification ntfy."""
-    return send_notification(title, body, priority=priority, tags=tags, telegram=False, ntfy=True)
-
-
 def normalize_base_url(url):
     """Normalise une URL en ajoutant https:// si absent."""
     url = str(url or '').strip().rstrip('/')
     if url and not url.startswith(('https://', 'http://')):
         url = f'https://{url}'
     return url
-
-
-def send_telegram(msg, ntfy=False):
-    result = send_notification(
-        notification_title_from_message(msg),
-        msg,
-        priority=5,
-        tags=notification_tags_from_text(msg),
-        telegram=True,
-        ntfy=ntfy,
-        telegram_channel='telegram_alerts',
-    )
-    return bool(result.get('telegram_alerts'))
 
 
 def send_info(msg):
@@ -726,7 +654,6 @@ def send_info(msg):
 
 def update_bias_rci_reports(timeframes=('4h', '12h', '1d')):
     """Listes LONG/SHORT quand le Bias et le RCI extreme de la meme TF sont alignes."""
-    global LAST_BIAS_RCI_REPORTS
     changed = False
 
     for tf in timeframes:
@@ -981,9 +908,6 @@ def tv_signal_watchdog():
             logger.warning(f"[TV SIGNAL WATCHDOG] Issues: {issues}")
 
 
-def heartbeat_scheduler():
-    logger.info("Heartbeat Telegram desactive")
-    return
 
 # ============================================================================ #
 # UTILITAIRES
@@ -1007,11 +931,6 @@ def format_tv_symbol(s):
             return f"{s.replace(q, '')}/{q}"
     return s
 
-def get_exchange_for_symbol(symbol):
-    sym_cfg = get_symbol_config(symbol)
-    if not sym_cfg:
-        return None
-    return exchanges.get(sym_cfg.get('exchange'))
 
 def parse_st_context_value(val, trend_level=1.96):
     """
@@ -1240,24 +1159,6 @@ def check_swing(symbol, price=0.0):
 # WEBHOOK HANDLER
 # ============================================================================ #
 
-def send_close_alert(symbol, strategy, direction, price, reason):
-    """Envoie une alerte de clôture, supprime la position et persiste l'état."""
-    pos_key = f"{symbol}_{strategy}"
-    with STATE_LOCK:
-        pos = SCALP_POSITIONS.pop(pos_key, None)
-    if pos:
-        emoji = "🔴" if direction == "LONG" else "🟢"
-        send_telegram(
-            f"{emoji} <b>[{strategy} - CLÔTURE RAPPEL]</b> {symbol}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📈 Direction était: {direction}\n"
-            f"💰 Price: ${format_price(price)}\n"
-            f"⏰{datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M (Shanghai)')}\n\n"
-            f"📋 Raison: {reason}",
-            ntfy=False,
-        )
-        persist_runtime_state()
-        logger.info(f"[{strategy}] Position clôturée: {symbol} {direction} —{reason}")
 
 
 @app.route('/webhook', methods=['POST'])
@@ -1531,8 +1432,6 @@ def process_webhook(data):
             )
 
 
-
-
         persist_runtime_state()
         # ━━ Relay vers le Scalping Bot ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
@@ -1673,12 +1572,6 @@ def telegram_callback():
     except Exception as e:
         logger.error(f"[CALLBACK] Erreur: {e}")
     return jsonify({'ok': True}), 200
-
-
-@app.route('/prep_report', methods=['GET', 'POST'])
-def force_prep_report():
-    """Endpoint conserve pour compatibilite; Pulse n'a pas de PREP separee."""
-    return jsonify({'status': 'ok', 'message': 'Pulse: pas de PREP separee a scanner'}), 200
 
 
 @app.route('/refresh', methods=['POST'])
@@ -1899,9 +1792,6 @@ def reset_state_symbol(symbol):
     return jsonify({'status': 'reset', 'symbol': symbol, 'message': f'État de {symbol} remis à zéro'}), 200
 
 
-
-
-
 def fetch_ohlcv_okx(symbol, timeframe, limit=250):
     """Fetch OHLCV depuis l API publique OKX (sans cle API)."""
     try:
@@ -1979,28 +1869,6 @@ def aggregate_ohlcv_2d(df):
     return grouped.reset_index(drop=True) if not grouped.empty else None
 
 
-
-
-
-
-
-
-
-
-
-
-def fmt_sig(value):
-    if value in ('buy', 'bull'):
-        return 'BUY'
-    if value in ('sell', 'bear'):
-        return 'SELL'
-    return 'NEUTRE'
-
-
-
-
-
-
 def keep_confirmed_candles(df, timeframe_minutes):
     """Retourne uniquement les bougies dont la cloture est deja passee."""
     if df is None or df.empty:
@@ -2022,8 +1890,6 @@ ZALT_HTF_SETTINGS = {
 
 def _rma(series, length):
     return series.ewm(alpha=1 / length, adjust=False).mean()
-
-
 
 
 def calc_zalt_from_ohlcv(df, length=50, mult=1.2):
@@ -2110,10 +1976,6 @@ def classify_rci_zone(rci30, rci50):
     is_chop = (rci30 > 0) != (rci50 > 0)
     direction = None if is_chop else ('buy' if rci50 > 0 else 'sell')
     return direction, is_chop
-
-
-
-
 
 
 def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
@@ -2661,12 +2523,6 @@ def update_okx_bias_htf(symbol):
         )
 
 
-
-
-
-
-
-
 def _open_strategy_entry(
     symbol, strategy, direction, signal_type, event_id, price, exchange_name,
     detail_lines, cooldown=3600, quality=False,
@@ -2806,13 +2662,6 @@ def _bias_condition(m, tf, exp_ctx):
     return value, fresh, bool(fresh and value == exp_ctx)
 
 
-def _rci_condition(m, tf, exp_ctx):
-    max_age = {'30m': 90 * 60, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
-    value = m.get(f'rci_{tf}_dir')
-    fresh = is_signal_fresh(m.get(f'rci_{tf}_ts'), max_age)
-    return value, fresh, bool(fresh and value == exp_ctx)
-
-
 def _rci_extreme_quality(m, tf, exp_ctx):
     """Extreme contrarien: LONG <= -75, SHORT >= +75; usage decide par la strategie."""
     max_age = {'30m': 90 * 60, '1h': 3 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600}.get(tf, 0)
@@ -2827,42 +2676,6 @@ def _rci_extreme_quality(m, tf, exp_ctx):
         and ((exp_ctx == 'buy' and value <= -75) or (exp_ctx == 'sell' and value >= 75))
     )
     return value, fresh, aligned
-
-
-def _rci_extreme_veto(m, tf, exp_ctx):
-    """Veto contrarien seulement si le RCI court est en extreme oppose."""
-    value, fresh, _ = _rci_extreme_quality(m, tf, exp_ctx)
-    veto = bool(
-        fresh and value is not None
-        and ((exp_ctx == 'buy' and value >= 75) or (exp_ctx == 'sell' and value <= -75))
-    )
-    return value, fresh, veto
-
-
-def _rci_trigger_zone(m, tf, exp_ctx):
-    """Filtre directionnel du trigger: LONG sous zero, SHORT au-dessus de zero."""
-    max_age = {'30m': 90 * 60, '1h': 3 * 3600}.get(tf, 0)
-    value = m.get(f'rci_{tf}_10')
-    fresh = is_signal_fresh(m.get(f'rci_{tf}_ts'), max_age)
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        value = None
-    aligned = bool(
-        fresh and value is not None
-        and ((exp_ctx == 'buy' and value < 0) or (exp_ctx == 'sell' and value > 0))
-    )
-    return value, fresh, aligned
-
-
-def _rci_trigger_info_line(m, tf, exp_ctx):
-    value, fresh, aligned = _rci_trigger_zone(m, tf, exp_ctx)
-    label = tf.upper()
-    if not fresh or value is None:
-        return f"[INFO NON BLOQUANTE] RCI court {label}: absent ou perime"
-    if aligned:
-        return f"[RCI FAVORABLE - NON BLOQUANT] RCI court {label}: {value:.1f}"
-    return f"[AVERTISSEMENT NON BLOQUANT] RCI court {label}: {value:.1f} a deja franchi zero"
 
 
 def _rci_quality_line(m, tf, exp_ctx):
@@ -2891,8 +2704,6 @@ def _st_context_veto(m, tf, exp_ctx):
     opp = 'sell' if exp_ctx == 'buy' else 'buy'
     veto = bool(fresh and value == opp)
     return value, fresh, veto
-
-
 
 
 def evaluate_reversal(symbol, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
@@ -3613,13 +3424,8 @@ def update_indicators_for_symbol(symbol):
         logger.error(f"[OKX] update_indicators {symbol}: {e}")
 
 
-
-
-
-
-
 def indicators_scheduler():
-    """Recalcule tous les indicateurs depuis OKX toutes les heures."""
+    """Recalcule tous les indicateurs depuis OKX toutes les 15 minutes."""
     logger.info("[OKX] Scheduler indicateurs démarré (toutes les 15 minutes)")
     # Premier calcul au démarrage après 30s
     time.sleep(30)
@@ -3642,21 +3448,13 @@ def indicators_scheduler():
         time.sleep(max(60, wait))
 
 
-
-
-
-
-
-
 def startup():
     try:
         logger.info("🚀 Démarrage du bot...")
         init_redis()
         load_runtime_state()
-        init_exchanges()
         send_start_notification()
 
-        logger.info("Heartbeat Telegram desactive")
         # Configurer le webhook Telegram pour les boutons inline
         try:
             tok = CONFIG.get('TELEGRAM_BOT_TOKEN', '')

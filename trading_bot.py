@@ -320,6 +320,9 @@ def load_runtime_state():
             if 'rci_context_prep_dir' not in state:
                 state['rci_context_prep_dir'] = None
                 state['rci_context_prep_ts'] = None
+            if 'zalt_12h_tv_ts' not in state:
+                state['zalt_12h_tv_ts'] = None
+                state['zalt_12h_source'] = None
         saved_bias_rci_reports = payload.get('last_bias_rci_reports', {})
         LAST_BIAS_RCI_REPORTS = {
             tf: {
@@ -817,6 +820,7 @@ def send_start_notification():
         "DAILY A: gestion manuelle apres PREP\n"
         "DAILY B ENTREE: CTX 30m; RCI 1D / 12H = bonus qualite\n"
         "SWING: PREP ZALT 12H + RCI 1H + RCI 4H ou 12H extremes + CTX 1H\n"
+        "ZALT 12H: TradingView prioritaire; OKX reprend apres 18H sans webhook\n"
         "SWING CONFIRMATION: Bias 4H, CTX 4H ou RCI 12H extreme favorable\n"
         "SWING ENTREE: nouvelle zone CTX 5m; RCI 12H = qualite\n"
         "PULSE PREP: Bias 1D + RCI 12H extreme; CTX 4H oppose = veto\n"
@@ -844,6 +848,14 @@ def track_tv_signal(symbol, alert_type, tf):
 
 def tv_required_signals():
     return [
+        {
+            'label': 'ZALT 12H (source prioritaire Swing)',
+            'alert_type': 'zalt',
+            'tf': '12h',
+            'max_age': 18 * 3600,
+            'warmup': 19 * 3600,
+            'scope': 'trade',
+        },
         {
             'label': 'ST Context 4H (Daily)',
             'alert_type': 'st_context',
@@ -1193,6 +1205,7 @@ def init_symbol_states(symbol):
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
+            'zalt_12h_tv_ts': None, 'zalt_12h_source': None,
             'zalt_2d': None, 'zalt_2d_ts': None,
             'daily_a_prep_dir': None, 'daily_a_prep_ts': None,
             'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
@@ -1371,6 +1384,9 @@ def process_webhook(data):
                 if tf in ('5m', '10m', '30m', '12h', '2d'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
+                    if tf == '12h':
+                        m['zalt_12h_tv_ts'] = now_ts
+                        m['zalt_12h_source'] = 'tradingview'
                     if zalt_signal in ('trend_flip', 'flip'):
                         m[f'last_zalt_{tf}_signal_ts'] = now_ts
                     logger.info(f"[ZALT {tf.upper()}] {symbol} = {parsed_zalt} signal={zalt_signal or 'state'}")
@@ -1379,6 +1395,11 @@ def process_webhook(data):
                         evaluate_daily(
                             symbol, price=price, exchange_name=exchange_name,
                             event_id=event_id, source='tv_zalt_2d',
+                        )
+                    elif tf == '12h' and CONFIG.get('ENABLE_SWING', False):
+                        evaluate_swing(
+                            symbol, price=price, exchange_name=exchange_name,
+                            event_id=event_id, source='tv_zalt_12h',
                         )
                 else:
                     logger.info(f"[ZALT] {symbol} tf={tf} ignore: timeframe non utilise")
@@ -2181,8 +2202,14 @@ def update_okx_zalt_htf(symbol):
 
 
 def update_okx_zalt_12h(symbol):
-    """ZALT 12H interne OKX en 50/1.15 pour SWING et SCALP B."""
+    """Fallback ZALT 12H OKX; TradingView reste prioritaire pendant 18 heures."""
     if not is_trade_symbol(symbol):
+        return
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        tv_ts = MOMENTUM_STATE[symbol].get('zalt_12h_tv_ts')
+    if is_signal_fresh(tv_ts, 18 * 3600):
+        logger.info(f"[ZALT OKX] {symbol} 12h ignore: webhook TradingView prioritaire")
         return
     cfg = ZALT_HTF_SETTINGS['12h']
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '12h', limit=300), 720)
@@ -2200,6 +2227,7 @@ def update_okx_zalt_12h(symbol):
             old = m.get('zalt_12h')
             m['zalt_12h'] = payload['trend']
             m['zalt_12h_ts'] = now_ts
+            m['zalt_12h_source'] = 'okx_fallback'
             is_flip = bool(payload['flip'] and old in ('buy', 'sell', None) and old != payload['trend'])
             price = payload['close']
             if is_flip:

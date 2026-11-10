@@ -24,15 +24,15 @@ CONFIG = {
     
     'SYMBOLS': {
         'AAVE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'ADA/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'APT/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'ADA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'APT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'ARB/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'ASTER/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'AVAX/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'AXS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'BB/USDT':     {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
-        'BCH/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'BNB/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'BCH/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'BNB/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'BONK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'BTC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'CHZ/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -42,11 +42,12 @@ CONFIG = {
         'CYS/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'DASH/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'DOGE/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'DOT/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'DUSK/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'DYDX/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'EGLD/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'EIGEN/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'ENA/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'ENA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'ETC/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
         'ETHFI/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': True},
@@ -69,14 +70,14 @@ CONFIG = {
         'NEIRO/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'NEO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ONT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'PENGU/USDT':  {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'PENGU/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'PEPE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'PIXEL/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'QNT/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'RAY/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'LTC/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'NEAR/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'ONDO/USDT':   {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'NEAR/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
+        'ONDO/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'RENDER/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'ROSE/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'SAND/USDT':   {'exchange': 'okx', 'scalp': False, 'pulse': False},
@@ -86,14 +87,14 @@ CONFIG = {
         'SONIC/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'STX/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'SUI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'TAO/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True, 'okx_inst_id': 'TAO-USDT-SWAP'},
+        'TAO/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'TAO-USDT-SWAP'},
         'TIA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
-        'UNI/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
+        'UNI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'USELESS/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'USELESS-USDT-SWAP'},
         'VET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'VIRTUAL/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'XAI/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
-        'XLM/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
+        'XLM/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'XMR/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False, 'okx_market_data': False},
         'XPL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'XPL-USDT-SWAP'},
         'XRP/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
@@ -138,7 +139,7 @@ LAST_BIAS_RCI_REPORTS = {
     '12h': {'long': [], 'short': []},
     '1d': {'long': [], 'short': []},
 }
-LAST_ZALT12H_RCI4H_REPORT = {'long': [], 'short': []}
+LAST_ZALT12H_REPORT = {'long': [], 'short': []}
 LAST_CONTEXT_1H_REPORT = {'long': [], 'short': []}
 CONTEXT_1H_REPORT_TIMER = None
 
@@ -225,7 +226,7 @@ def persist_runtime_state():
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
             'last_bias_rci_reports': LAST_BIAS_RCI_REPORTS,
-            'last_zalt12h_rci4h_report': LAST_ZALT12H_RCI4H_REPORT,
+            'last_zalt12h_report': LAST_ZALT12H_REPORT,
             'last_context_1h_report': LAST_CONTEXT_1H_REPORT,
         }
         try:
@@ -271,7 +272,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_BIAS_RCI_REPORTS, LAST_ZALT12H_RCI4H_REPORT, LAST_CONTEXT_1H_REPORT
+    global LAST_BIAS_RCI_REPORTS, LAST_ZALT12H_REPORT, LAST_CONTEXT_1H_REPORT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -336,10 +337,12 @@ def load_runtime_state():
             }
             for tf in ('12h', '1d')
         }
-        saved_zalt_rci_report = payload.get('last_zalt12h_rci4h_report', {})
-        LAST_ZALT12H_RCI4H_REPORT = {
-            'long': sorted(saved_zalt_rci_report.get('long', [])),
-            'short': sorted(saved_zalt_rci_report.get('short', [])),
+        saved_zalt_report = payload.get(
+            'last_zalt12h_report', payload.get('last_zalt12h_rci4h_report', {})
+        )
+        LAST_ZALT12H_REPORT = {
+            'long': sorted(saved_zalt_report.get('long', [])),
+            'short': sorted(saved_zalt_report.get('short', [])),
         }
         saved_context_1h_report = payload.get('last_context_1h_report', {})
         LAST_CONTEXT_1H_REPORT = {
@@ -753,9 +756,9 @@ def schedule_context_1h_report(delay=60):
         timer.start()
 
 
-def update_zalt12h_rci4h_report():
-    """Liste LONG/SHORT quand ZALT 12H et RCI court 4H extreme sont alignes."""
-    global LAST_ZALT12H_RCI4H_REPORT
+def update_zalt12h_report():
+    """Listes LONG/SHORT selon le dernier etat ZALT 12H frais."""
+    global LAST_ZALT12H_REPORT
     long_symbols = []
     short_symbols = []
 
@@ -765,33 +768,26 @@ def update_zalt12h_rci4h_report():
                 continue
             state = MOMENTUM_STATE.get(symbol, {})
             short_symbol = symbol.replace('/USDT', '')
-            if (
-                _zalt_condition(state, '12h', 'buy')[2]
-                and _rci_extreme_quality(state, '4h', 'buy')[2]
-            ):
+            if _zalt_condition(state, '12h', 'buy')[2]:
                 long_symbols.append(short_symbol)
-            elif (
-                _zalt_condition(state, '12h', 'sell')[2]
-                and _rci_extreme_quality(state, '4h', 'sell')[2]
-            ):
+            elif _zalt_condition(state, '12h', 'sell')[2]:
                 short_symbols.append(short_symbol)
 
         report = {'long': long_symbols, 'short': short_symbols}
-        if report == LAST_ZALT12H_RCI4H_REPORT:
+        if report == LAST_ZALT12H_REPORT:
             return False
-        LAST_ZALT12H_RCI4H_REPORT = report
+        LAST_ZALT12H_REPORT = report
 
     long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
     short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
     send_info(
-        "<b>[CONFLUENCE ZALT 12H + RCI 4H]</b>\n"
+        "<b>[ETAT ZALT 12H]</b>\n"
         "--------------------\n"
         f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
         f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-        "ZALT 12H et RCI court 4H extreme favorable alignes. "
-        "Liste mise a jour uniquement apres un changement."
+        "Liste mise a jour uniquement lorsqu'un actif change d'etat."
     )
-    logger.info(f"[ZALT12H RCI4H REPORT] LONG={long_symbols} SHORT={short_symbols}")
+    logger.info(f"[ZALT12H REPORT] LONG={long_symbols} SHORT={short_symbols}")
     persist_runtime_state()
     return True
 
@@ -818,7 +814,7 @@ def send_start_notification():
         "PULSE ENTREE: CTX 1H + CTX 5m; RCI 1D / CTX 4H alignes = qualite\n"
         "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
         "RAPPORTS INFO: ST Context 1H actif; Bias + RCI alignes en 12H et 1D\n"
-        "RAPPORT INFO: ZALT 12H + RCI 4H extreme alignes\n"
+        "RAPPORT INFO: listes ZALT 12H LONG / SHORT\n"
         "RCI CONTEXT: strategie en pause\n"
         f"SCALP: gere par le scalpbot actif ({sum(1 for cfg in CONFIG['SYMBOLS'].values() if cfg.get('scalp'))} assets)\n"
         "--------------------\n"
@@ -3570,7 +3566,7 @@ def indicators_scheduler():
             time.sleep(0.5)  # rate limit OKX
         update_bias_rci_reports()
         update_context_1h_report()
-        update_zalt12h_rci4h_report()
+        update_zalt12h_report()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")
         # Attendre la prochaine bougie 15m

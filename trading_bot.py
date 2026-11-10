@@ -131,6 +131,9 @@ DAILY_B_SYMBOLS = {
     'BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'LTC/USDT', 'ADA/USDT',
     'DOGE/USDT', 'LINK/USDT', 'BNB/USDT', 'SOL/USDT', 'AVAX/USDT',
 }
+SCALP_SYMBOLS = {
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'LINK/USDT',
+}
 LAST_BIAS_RCI_REPORTS = {
     '12h': {'long': [], 'short': []},
     '1d': {'long': [], 'short': []},
@@ -1498,7 +1501,7 @@ def process_webhook(data):
             and alert_type == 'st_context'
             and (
                 tf == '30m'
-                or (symbol in DAILY_B_SYMBOLS and tf in ('5m', '15m'))
+                or (symbol in SCALP_SYMBOLS and tf in ('5m', '15m'))
                 or (symbol == 'BTC/USDT' and tf in ('5m', '2h'))
             )
         )
@@ -1717,7 +1720,7 @@ def sync_scalp():
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
         for rci_tf in ('30m', '1h', '2h', '4h'):
-            if rci_tf == '1h' and symbol not in DAILY_B_SYMBOLS:
+            if rci_tf == '1h' and symbol not in SCALP_SYMBOLS:
                 continue
             rci_dir = m.get(f'rci_{rci_tf}_dir')
             rci10 = m.get(f'rci_{rci_tf}_10')
@@ -1763,7 +1766,7 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: ZALT12H {e}")
 
-        if symbol in DAILY_B_SYMBOLS:
+        if symbol in SCALP_SYMBOLS:
             zalt5m = m.get('zalt_5m')
             try:
                 payload = {
@@ -1799,7 +1802,7 @@ def sync_scalp():
         except Exception as e:
             errors.append(f"{symbol}: CTX30M {e}")
 
-        if symbol in DAILY_B_SYMBOLS:
+        if symbol in SCALP_SYMBOLS:
             for ctx_tf in ('5m', '15m'):
                 ctx_value = m.get(f'st_context_{ctx_tf}')
                 try:
@@ -2094,8 +2097,8 @@ def relay_zalt_30m_to_scalp(symbol, direction, price, is_flip):
 
 
 def relay_zalt_5m_to_scalp(symbol, direction, price, is_flip):
-    """Relaie le ZALT 5m 21/1.0 aux 10 actifs de la strategie Scalp."""
-    if not CONFIG.get('ENABLE_SCALP_RELAY', False) or symbol not in DAILY_B_SYMBOLS:
+    """Relaie le ZALT 5m 21/1.0 aux cinq actifs de la strategie Scalp."""
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False) or symbol not in SCALP_SYMBOLS:
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
@@ -2119,7 +2122,7 @@ def relay_zalt_5m_to_scalp(symbol, direction, price, is_flip):
 
 def update_okx_zalt_5m(symbol):
     """ZALT 5m interne 21/1.0, declencheur de la strategie Scalp."""
-    if symbol not in DAILY_B_SYMBOLS:
+    if symbol not in SCALP_SYMBOLS:
         return
     cfg = ZALT_HTF_SETTINGS['5m']
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '5m', limit=200), 5)
@@ -2449,7 +2452,7 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
     )
     if tf == '1h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
-        if symbol in DAILY_B_SYMBOLS:
+        if symbol in SCALP_SYMBOLS:
             relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
         evaluate_daily(
             symbol, price=price,
@@ -2631,7 +2634,7 @@ def update_okx_bias_htf(symbol):
     logger.info(f"[BIAS OKX] {symbol} 1h={bias_1h} 4h={bias_4h} 12h={bias_12h} 1d={bias_1d} 2d={bias_2d}")
     if not trade_symbol:
         return
-    if is_daily_b_symbol(symbol):
+    if symbol in SCALP_SYMBOLS:
         relay_bias_to_scalp(symbol, bias_1h, '1h')
     relay_bias_to_scalp(symbol, bias_4h, '4h')
     relay_bias_to_scalp(symbol, bias_1d, '1d')
@@ -3581,11 +3584,11 @@ def indicators_scheduler():
 
 
 def scalp_zalt_5m_scheduler():
-    """Calcule le ZALT 5m juste apres chaque cloture pour les 10 actifs Scalp."""
+    """Calcule le ZALT 5m juste apres chaque cloture pour les cinq actifs Scalp."""
     logger.info("[OKX] Scheduler ZALT 5m demarre (21/1.0)")
     time.sleep(20)
     while True:
-        for symbol in sorted(DAILY_B_SYMBOLS):
+        for symbol in sorted(SCALP_SYMBOLS):
             try:
                 update_okx_zalt_5m(symbol)
             except Exception as e:

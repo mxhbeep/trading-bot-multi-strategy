@@ -585,7 +585,7 @@ def send_notification(title: str, message: str, priority=5, tags=None,
     channels = []
     if telegram:
         channels.append(telegram_channel)
-    if ntfy:
+    if ntfy and ('[SWING -' in str(message) or '[PREP SWING' in str(message) or '[QUALITE SWING]' in str(message)):
         channels.append('ntfy')
     if tags is None:
         tags = notification_tags_from_text(f"{title}\n{message}")
@@ -2829,7 +2829,7 @@ def _rci_quality_line(m, tf, exp_ctx):
 
 
 def _st_context_condition(m, tf, exp_ctx):
-    max_age = {'1m': 5 * 60, '3m': 10 * 60, '5m': 20 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '1h': 3 * 3600, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 3 * 24 * 3600, '2d': 5 * 24 * 3600}.get(tf, 0)
+    max_age = {'1m': 5 * 60, '3m': 10 * 60, '5m': 20 * 60, '10m': 30 * 60, '15m': 45 * 60, '30m': 90 * 60, '1h': 3 * 3600, '2h': 6 * 3600, '4h': 12 * 3600, '12h': 24 * 3600, '1d': 25 * 3600, '2d': 5 * 24 * 3600}.get(tf, 0)
     value, fresh = _state_signal(m, f'st_context_{tf}', max_age)
     return value, fresh, bool(fresh and value == exp_ctx)
 

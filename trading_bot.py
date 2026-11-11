@@ -304,7 +304,7 @@ def load_runtime_state():
                 new_key = key[:-len('_PULSE_CONFLUENCE')] + '_PULSE'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
-            elif key.endswith('_SWING_B'):
+            elif key.endswith('_SWING_B') and SCALP_POSITIONS[key].get('signal_type') != 'swing_zalt1d_rci12h_rci2h_ctx30m_ctx5m':
                 new_key = key[:-len('_SWING_B')] + '_SWING'
                 SCALP_POSITIONS.setdefault(new_key, SCALP_POSITIONS[key])
                 SCALP_POSITIONS.pop(key, None)
@@ -585,7 +585,7 @@ def send_notification(title: str, message: str, priority=5, tags=None,
     channels = []
     if telegram:
         channels.append(telegram_channel)
-    if ntfy and ('[SWING -' in str(message) or '[PREP SWING' in str(message) or '[QUALITE SWING]' in str(message)):
+    if ntfy and ('[SWING -' in str(message) or '[SWING B -' in str(message) or '[PREP SWING' in str(message) or '[QUALITE SWING]' in str(message)):
         channels.append('ntfy')
     if tags is None:
         tags = notification_tags_from_text(f"{title}\n{message}")
@@ -810,6 +810,7 @@ def send_start_notification():
         "ZALT 12H: TradingView prioritaire; OKX reprend apres 18H sans webhook\n"
         "SWING CONFIRMATION: Bias 4H, CTX 4H ou RCI 12H extreme favorable\n"
         "SWING ENTREE: nouvelle zone CTX 5m; RCI 12H = qualite\n"
+        "SWING B: ZALT 1D + RCI 12H et 2H extremes + CTX 30m; entree nouvelle zone CTX 5m\n"
         "PULSE PREP: Bias 1D + RCI 12H extreme; CTX 4H oppose = veto\n"
         "PULSE ENTREE: CTX 1H + CTX 5m; RCI 1D / CTX 4H alignes = qualite\n"
         "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
@@ -1276,6 +1277,7 @@ def process_webhook(data):
                 m['st_context_1m'] = parsed_ctx
                 m['st_context_1m_ts'] = now_ts
             elif tf == '5m':
+                new_swing_b_zone = parsed_ctx in ('buy', 'sell') and parsed_ctx != m.get('st_context_5m')
                 m['st_context_5m'] = parsed_ctx
                 m['st_context_5m_ts'] = now_ts
             elif tf == '15m':
@@ -1355,7 +1357,7 @@ def process_webhook(data):
             parsed_zalt = parse_zalt_value(val)
             zalt_signal = str(data.get('signal') or data.get('event') or '').strip().lower()
             if parsed_zalt in ('buy', 'sell'):
-                if tf in ('5m', '10m', '30m', '12h', '2d'):
+                if tf in ('5m', '10m', '30m', '12h', '1d', '2d'):
                     m[f'zalt_{tf}'] = parsed_zalt
                     m[f'zalt_{tf}_ts'] = now_ts
                     if tf == '12h':
@@ -1372,10 +1374,10 @@ def process_webhook(data):
                             symbol, price=price, exchange_name=exchange_name,
                             event_id=event_id, source='tv_zalt_2d',
                         )
-                    elif tf == '12h' and CONFIG.get('ENABLE_SWING', False):
+                    elif tf in ('12h', '1d') and CONFIG.get('ENABLE_SWING', False):
                         evaluate_swing(
                             symbol, price=price, exchange_name=exchange_name,
-                            event_id=event_id, source='tv_zalt_12h',
+                            event_id=event_id, source=f"tv_zalt_{tf}",
                         )
                 else:
                     logger.info(f"[ZALT] {symbol} tf={tf} ignore: timeframe non utilise")
@@ -1451,6 +1453,7 @@ def process_webhook(data):
                 exchange_name=exchange_name,
                 event_id=event_id,
                 source=f"{alert_type}_{tf}",
+                new_swing_b_zone=tf == '5m' and new_swing_b_zone,
             )
 
         if CONFIG.get('ENABLE_REVERSAL', True) and is_trade_symbol(symbol) and (
@@ -2695,7 +2698,7 @@ def _open_strategy_entry(
     telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
-    ntfy_enabled = strategy in ('PULSE', 'SWING', 'REVERSAL', 'RCI_CONTEXT')
+    ntfy_enabled = strategy in ('PULSE', 'SWING', 'SWING_B', 'REVERSAL', 'RCI_CONTEXT')
     message = (
         f"{emoji} <b>[{strategy_label} - {alert_kind}]</b> {symbol}\n"
         f"--------------------\nDirection: {direction}\n"
@@ -3175,7 +3178,53 @@ def evaluate_daily(symbol, trigger_dir=None, price=0.0, exchange_name=None, even
     return opened
 
 
-def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
+def evaluate_swing(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None,
+                   source='state_refresh', new_swing_b_zone=False):
+    opened_a = _evaluate_swing_a(symbol, trigger_dir, price, exchange_name, event_id, source)
+    opened_b = _evaluate_swing_b(symbol, price, exchange_name, event_id, new_swing_b_zone)
+    return opened_a or opened_b
+
+
+def _evaluate_swing_b(symbol, price, exchange_name, event_id, new_zone):
+    if not CONFIG.get('ENABLE_SWING', False) or not is_trade_symbol(symbol):
+        return False
+    init_symbol_states(symbol)
+    m = MOMENTUM_STATE[symbol]
+    exchange_name = exchange_name or get_symbol_config(symbol).get('exchange', 'okx')
+    strategy = 'SWING_B'
+
+    def aligned(exp):
+        return (
+            _zalt_condition(m, '1d', exp)[2]
+            and _rci_extreme_quality(m, '12h', exp)[2]
+            and _rci_extreme_quality(m, '2h', exp)[2]
+            and _st_context_condition(m, '30m', exp)[2]
+        )
+
+    with STATE_LOCK:
+        pos = SCALP_POSITIONS.get(f'{symbol}_{strategy}')
+    if pos:
+        exp = _trade_direction_to_ctx(pos.get('direction'))
+        _refresh_logical_position(symbol, strategy, aligned(exp), 3600, 'confluence Swing B absente')
+        return False
+    if not new_zone:
+        return False
+    exp = m.get('st_context_5m')
+    if exp not in ('buy', 'sell') or not aligned(exp) or not _st_context_condition(m, '5m', exp)[2]:
+        return False
+    direction = 'LONG' if exp == 'buy' else 'SHORT'
+    return _open_strategy_entry(
+        symbol, strategy, direction, 'swing_zalt1d_rci12h_rci2h_ctx30m_ctx5m',
+        event_id, price, exchange_name,
+        [
+            '[OK] ZALT 1D, RCI 12H et RCI 2H extremes, ST Context 30m alignes',
+            '[TRIGGER] Nouvelle zone ST Context 5m alignee',
+        ],
+        cooldown=14400,
+    )
+
+
+def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
     """SWING: PREP ZALT 12H + CTX 30m + RCI 2H + RCI 4H/12H; entree CTX 5m."""
     if not CONFIG.get('ENABLE_SWING', False) or not is_trade_symbol(symbol):
         return False

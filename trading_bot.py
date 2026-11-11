@@ -1202,6 +1202,7 @@ def init_symbol_states(symbol):
             'daily_a_prep_dir': None, 'daily_a_prep_ts': None,
             'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
             'swing_prep_dir': None, 'swing_prep_ts': None,
+            'swing_b_prep_dir': None, 'swing_b_prep_ts': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
             'rci_context_prep_dir': None, 'rci_context_prep_ts': None,
         }
@@ -3207,10 +3208,31 @@ def _evaluate_swing_b(symbol, price, exchange_name, event_id, new_zone):
         exp = _trade_direction_to_ctx(pos.get('direction'))
         _refresh_logical_position(symbol, strategy, aligned(exp), 3600, 'confluence Swing B absente')
         return False
-    if not new_zone:
-        return False
+    ready_dir = next((exp for exp in ('buy', 'sell') if aligned(exp)), None)
+    with STATE_LOCK:
+        previous_dir = m.get('swing_b_prep_dir')
+        if ready_dir != previous_dir:
+            m['swing_b_prep_dir'] = ready_dir
+            m['swing_b_prep_ts'] = time.time() if ready_dir else None
+    if ready_dir != previous_dir:
+        persist_runtime_state()
+    if ready_dir and ready_dir != previous_dir:
+        direction = 'LONG' if ready_dir == 'buy' else 'SHORT'
+        prep_message = (
+            f"<b>[PREP SWING B]</b> {symbol}\n"
+            "--------------------\n"
+            f"Direction: {direction}\n"
+            f"Price: ${format_price(price)}\n"
+            "[OK] ZALT 1D, RCI 12H et RCI 2H extremes, ST Context 30m alignes\n"
+            "[ATTENTE] Prochaine nouvelle zone ST Context 5m alignee"
+        )
+        send_notification(
+            notification_title_from_message(prep_message), prep_message,
+            priority=5, tags=[], telegram=True, ntfy=True,
+            telegram_channel='telegram_alerts',
+        )
     exp = m.get('st_context_5m')
-    if exp not in ('buy', 'sell') or not aligned(exp) or not _st_context_condition(m, '5m', exp)[2]:
+    if not new_zone or ready_dir != previous_dir or exp != ready_dir or not _st_context_condition(m, '5m', exp)[2]:
         return False
     direction = 'LONG' if exp == 'buy' else 'SHORT'
     return _open_strategy_entry(

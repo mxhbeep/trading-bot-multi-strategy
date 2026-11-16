@@ -1194,6 +1194,7 @@ def init_symbol_states(symbol):
             'bias_2d': None, 'bias_2d_ts': None,    # Daily (interne OKX, agregation 1D par paires)
             'zalt_30m': None, 'zalt_30m_ts': None, 'last_zalt_30m_signal_ts': None,
             'zalt_5m': None, 'zalt_5m_ts': None, 'last_zalt_5m_signal_ts': None,
+            'zalt_2h': None, 'zalt_2h_ts': None,
             'zalt_10m': None, 'zalt_10m_ts': None, 'last_zalt_10m_signal_ts': None,  # Relais scalpbot
             'zalt_12h': None, 'zalt_12h_ts': None, 'last_zalt_12h_signal_ts': None,
             'zalt_12h_tv_ts': None, 'zalt_12h_source': None,
@@ -1767,6 +1768,21 @@ def sync_scalp():
                 errors.append(f"{symbol}: ZALT12H {e}")
 
         if symbol in SCALP_SYMBOLS:
+            zalt2h = m.get('zalt_2h')
+            if zalt2h in ('buy', 'sell'):
+                try:
+                    payload = {
+                        'symbol': symbol, 'strategy': 'scalp', 'tf': '2h', 'type': 'zalt',
+                        'value': zalt2h, 'sync': True, 'price': 0,
+                        'event_id': f"sync_scalp_zalt2h_{symbol}_{int(time.time())}",
+                    }
+                    resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=5)
+                    if resp.status_code == 200:
+                        symbol_sent.append('zalt2h')
+                    else:
+                        errors.append(f"{symbol}: ZALT2H HTTP {resp.status_code}")
+                except Exception as e:
+                    errors.append(f"{symbol}: ZALT2H {e}")
             zalt5m = m.get('zalt_5m')
             try:
                 payload = {
@@ -1963,6 +1979,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 ZALT_HTF_SETTINGS = {
     '5m': {'length': 21, 'mult': 1.0},
+    '2h': {'length': 60, 'mult': 1.2},
     '30m': {'length': 34, 'mult': 1.2},
     '12h': {'length': 50, 'mult': 1.15},
     '2d': {'length': 80, 'mult': 1.5},
@@ -2145,6 +2162,40 @@ def update_okx_zalt_5m(symbol):
         persist_runtime_state()
     if direction in ('buy', 'sell'):
         relay_zalt_5m_to_scalp(symbol, direction, price, is_flip)
+
+
+def update_okx_zalt_2h_for_scalp(symbol):
+    """Calcule et relaie le biais ZALT 2H de la strategie SCALP."""
+    if symbol not in SCALP_SYMBOLS:
+        return
+    cfg = ZALT_HTF_SETTINGS['2h']
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '2h', limit=250), 120)
+    result = calc_zalt_from_ohlcv(df, length=cfg['length'], mult=cfg['mult'])
+    if not result:
+        return
+    direction = result['trend']
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['zalt_2h'] = direction
+        m['zalt_2h_ts'] = time.time()
+        persist_runtime_state()
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    payload = {
+        'symbol': symbol, 'strategy': 'scalp', 'tf': '2h', 'type': 'zalt',
+        'value': direction, 'price': result['close'],
+        'event_id': f"okx_zalt_2h_{symbol}_{int(time.time())}",
+    }
+    try:
+        resp = requests.post(f"{scalp_url}/webhook", json=payload, timeout=6)
+        if not 200 <= resp.status_code < 300:
+            logger.warning(f"[RELAY OKX ZALT 2h] {symbol}: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[RELAY OKX ZALT 2h] {symbol}: {e}")
 
 
 def relay_zalt_12h_to_scalp(symbol, direction, price, is_flip):
@@ -3618,6 +3669,7 @@ def update_indicators_for_symbol(symbol):
         update_okx_rci_quality(symbol, '12h', 12 * 60)
         update_okx_rci_quality(symbol, '1d', 24 * 60)
         update_okx_zalt_htf(symbol)
+        update_okx_zalt_2h_for_scalp(symbol)
         update_okx_zalt_12h(symbol)
         update_okx_zalt_2d(symbol)
         update_okx_bias_htf(symbol)

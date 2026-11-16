@@ -1979,7 +1979,7 @@ def keep_confirmed_candles(df, timeframe_minutes):
 
 ZALT_HTF_SETTINGS = {
     '5m': {'length': 21, 'mult': 1.0},
-    '2h': {'length': 60, 'mult': 1.2},
+    '2h': {'length': 55, 'mult': 1.2},
     '30m': {'length': 34, 'mult': 1.2},
     '12h': {'length': 50, 'mult': 1.15},
     '2d': {'length': 80, 'mult': 1.5},

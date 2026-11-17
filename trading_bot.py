@@ -1204,6 +1204,7 @@ def init_symbol_states(symbol):
             'daily_b_prep_dir': None, 'daily_b_prep_ts': None,
             'swing_prep_dir': None, 'swing_prep_ts': None,
             'swing_b_prep_dir': None, 'swing_b_prep_ts': None,
+            'swing_b_quality_dir': None,
             'pulse_prep_dir': None, 'pulse_prep_ts': None,
             'rci_context_prep_dir': None, 'rci_context_prep_ts': None,
         }
@@ -3260,21 +3261,28 @@ def _evaluate_swing_b(symbol, price, exchange_name, event_id, new_zone):
         _refresh_logical_position(symbol, strategy, aligned(exp), 3600, 'confluence Swing B absente')
         return False
     ready_dir = next((exp for exp in ('buy', 'sell') if aligned(exp)), None)
+    rci1d, _, rci1d_quality = _rci_extreme_quality(m, '1d', ready_dir) if ready_dir else (None, False, False)
     with STATE_LOCK:
         previous_dir = m.get('swing_b_prep_dir')
+        previous_quality_dir = m.get('swing_b_quality_dir')
         if ready_dir != previous_dir:
             m['swing_b_prep_dir'] = ready_dir
             m['swing_b_prep_ts'] = time.time() if ready_dir else None
-    if ready_dir != previous_dir:
+        quality_dir = ready_dir if rci1d_quality else None
+        if quality_dir != previous_quality_dir:
+            m['swing_b_quality_dir'] = quality_dir
+    if ready_dir != previous_dir or quality_dir != previous_quality_dir:
         persist_runtime_state()
     if ready_dir and ready_dir != previous_dir:
         direction = 'LONG' if ready_dir == 'buy' else 'SHORT'
         prep_message = (
-            f"<b>[PREP SWING B]</b> {symbol}\n"
+            f"<b>[PREP SWING B{' - QUALITE' if rci1d_quality else ''}]</b> {symbol}\n"
             "--------------------\n"
             f"Direction: {direction}\n"
             f"Price: ${format_price(price)}\n"
             "[OK] ZALT 1D, RCI 12H et RCI 2H extremes, ST Context 30m alignes\n"
+            + (f"[QUALITE] RCI court 1D extreme favorable: {rci1d:.1f}\n" if rci1d_quality else "")
+            +
             "[ATTENTE] Prochaine nouvelle zone ST Context 5m alignee"
         )
         send_notification(
@@ -3282,18 +3290,36 @@ def _evaluate_swing_b(symbol, price, exchange_name, event_id, new_zone):
             priority=5, tags=[], telegram=True, ntfy=True,
             telegram_channel='telegram_alerts',
         )
+    elif ready_dir and rci1d_quality and previous_quality_dir != ready_dir:
+        direction = 'LONG' if ready_dir == 'buy' else 'SHORT'
+        quality_message = (
+            f"<b>[QUALITE SWING B]</b> {symbol}\n"
+            "--------------------\n"
+            f"Direction: {direction}\n"
+            f"[QUALITE] RCI court 1D extreme favorable: {rci1d:.1f}\n"
+            "[ATTENTE] Prochaine nouvelle zone ST Context 5m alignee"
+        )
+        send_notification(
+            notification_title_from_message(quality_message), quality_message,
+            priority=5, tags=[], telegram=True, ntfy=True,
+            telegram_channel='telegram_alerts',
+        )
     exp = m.get('st_context_5m')
     if not new_zone or ready_dir != previous_dir or exp != ready_dir or not _st_context_condition(m, '5m', exp)[2]:
         return False
     direction = 'LONG' if exp == 'buy' else 'SHORT'
+    details = [
+        '[OK] ZALT 1D, RCI 12H et RCI 2H extremes, ST Context 30m alignes',
+        '[TRIGGER] Nouvelle zone ST Context 5m alignee',
+    ]
+    if rci1d_quality:
+        details.append(f'[QUALITE] RCI court 1D extreme favorable: {rci1d:.1f}')
     return _open_strategy_entry(
         symbol, strategy, direction, 'swing_zalt1d_rci12h_rci2h_ctx30m_ctx5m',
         event_id, price, exchange_name,
-        [
-            '[OK] ZALT 1D, RCI 12H et RCI 2H extremes, ST Context 30m alignes',
-            '[TRIGGER] Nouvelle zone ST Context 5m alignee',
-        ],
+        details,
         cooldown=14400,
+        quality=rci1d_quality,
     )
 
 

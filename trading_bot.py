@@ -133,7 +133,7 @@ DAILY_B_SYMBOLS = {
     'DOGE/USDT', 'LINK/USDT', 'BNB/USDT', 'SOL/USDT', 'AVAX/USDT',
 }
 SCALP_SYMBOLS = {
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'LINK/USDT',
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'LINK/USDT', 'ZEC/USDT',
 }
 LAST_BIAS_RCI_REPORTS = {
     '12h': {'long': [], 'short': []},

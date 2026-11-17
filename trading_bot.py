@@ -3298,7 +3298,7 @@ def _evaluate_swing_b(symbol, price, exchange_name, event_id, new_zone):
 
 
 def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """SWING: PREP ZALT 12H + CTX 30m + RCI 2H + RCI 4H/12H; entree CTX 5m."""
+    """SWING: PREP ZALT 12H + CTX 30m + RCI 2H + RCI 4H/12H; veto RCI 12H oppose."""
     if not CONFIG.get('ENABLE_SWING', False) or not is_trade_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3318,6 +3318,7 @@ def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             and _st_context_condition(m, '30m', exp)[2]
             and _rci_extreme_quality(m, '2h', exp)[2]
             and rci_filter_valid
+            and not _rci_extreme_quality(m, '12h', 'sell' if exp == 'buy' else 'buy')[2]
         )
         _refresh_logical_position(symbol, 'SWING', position_valid, 3600, 'confluence Swing absente')
 
@@ -3334,8 +3335,18 @@ def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
         ctx4h, ctx4h_fresh, ctx4h_ok = _st_context_condition(m, '4h', exp_ctx)
         rci12h, rci12h_fresh, rci12h_ok = _rci_extreme_quality(m, '12h', exp_ctx)
+        rci12h_opposite = _rci_extreme_quality(m, '12h', 'sell' if exp_ctx == 'buy' else 'buy')[2]
+        rci12h_warning = bool(
+            rci12h_fresh and rci12h is not None
+            and ((exp_ctx == 'buy' and 0 < rci12h < 75)
+                 or (exp_ctx == 'sell' and -75 < rci12h < 0))
+        )
+        rci12h_warning_line = (
+            f"[ATTENTION] RCI court 12H du mauvais cote de zero: {rci12h:.1f} (non bloquant)"
+            if rci12h_warning else None
+        )
         rci_filter_ok = bool(rci4h_ok or rci12h_ok)
-        armed = bool(zalt12h_ok and ctx30m_ok and rci2h_ok and rci_filter_ok)
+        armed = bool(zalt12h_ok and ctx30m_ok and rci2h_ok and rci_filter_ok and not rci12h_opposite)
         swing_quality_ok = bool(ctx4h_ok or ctx1h_ok)
         swing_quality_signature = '+'.join(
             name for name, enabled in (('ctx4h', ctx4h_ok), ('ctx1h', ctx1h_ok)) if enabled
@@ -3346,6 +3357,8 @@ def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             quality_lines.append(f"[QUALITE] ST Context 4H aligne: {_ctx_label(ctx4h)}")
         if ctx1h_ok:
             quality_lines.append(f"[QUALITE] ST Context 1H aligne: {_ctx_label(ctx1h)}")
+        if rci12h_warning_line:
+            quality_lines.append(rci12h_warning_line)
 
         if rci4h_ok:
             rci_filter_line = f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}"
@@ -3451,6 +3464,7 @@ def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
             f"ctx4h={ctx4h}/{exp_ctx} fresh={ctx4h_fresh} ok={ctx4h_ok} "
             f"rci12h={rci12h} fresh={rci12h_fresh} ok={rci12h_ok} "
+            f"opposite_veto={rci12h_opposite} warning={rci12h_warning} "
             f"rci_filter={rci_filter_ok} quality={swing_quality_ok} "
             f"armed={armed} entry={entry_ok}"
         )

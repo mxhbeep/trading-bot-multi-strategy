@@ -135,13 +135,7 @@ DAILY_B_SYMBOLS = {
 SCALP_SYMBOLS = {
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'LINK/USDT', 'ZEC/USDT',
 }
-LAST_BIAS_RCI_REPORTS = {
-    '12h': {'long': [], 'short': []},
-    '1d': {'long': [], 'short': []},
-}
 LAST_ZALT12H_REPORT = {'long': [], 'short': []}
-LAST_CONTEXT_1H_REPORT = {'long': [], 'short': []}
-CONTEXT_1H_REPORT_TIMER = None
 
 STATE_LOCK = threading.RLock()  # RLock réentrant — évite deadlock should_send dans SCALP
 
@@ -225,9 +219,7 @@ def persist_runtime_state():
             'scalp_positions':    dict(SCALP_POSITIONS),
             'last_webhook_ts':     dict(LAST_WEBHOOK_TS),
             'last_webhook_signal_ts': dict(LAST_WEBHOOK_SIGNAL_TS),
-            'last_bias_rci_reports': LAST_BIAS_RCI_REPORTS,
             'last_zalt12h_report': LAST_ZALT12H_REPORT,
-            'last_context_1h_report': LAST_CONTEXT_1H_REPORT,
         }
         try:
             REDIS_CLIENT.set('bot_state', json.dumps(payload))
@@ -272,7 +264,7 @@ def audit_log(data, status="reçu"):
 
 def load_runtime_state():
     global MOMENTUM_STATE, LAST_SIGNALS, LAST_SIGNAL_EVENTS
-    global LAST_BIAS_RCI_REPORTS, LAST_ZALT12H_REPORT, LAST_CONTEXT_1H_REPORT
+    global LAST_ZALT12H_REPORT
     if not REDIS_CLIENT:
         logger.info("ℹ️ Redis non disponible — démarrage à froid")
         return
@@ -329,25 +321,12 @@ def load_runtime_state():
             if 'zalt_2d_tv_ts' not in state:
                 state['zalt_2d_tv_ts'] = None
                 state['zalt_2d_source'] = None
-        saved_bias_rci_reports = payload.get('last_bias_rci_reports', {})
-        LAST_BIAS_RCI_REPORTS = {
-            tf: {
-                'long': sorted(saved_bias_rci_reports.get(tf, {}).get('long', [])),
-                'short': sorted(saved_bias_rci_reports.get(tf, {}).get('short', [])),
-            }
-            for tf in ('12h', '1d')
-        }
         saved_zalt_report = payload.get(
             'last_zalt12h_report', payload.get('last_zalt12h_rci4h_report', {})
         )
         LAST_ZALT12H_REPORT = {
             'long': sorted(saved_zalt_report.get('long', [])),
             'short': sorted(saved_zalt_report.get('short', [])),
-        }
-        saved_context_1h_report = payload.get('last_context_1h_report', {})
-        LAST_CONTEXT_1H_REPORT = {
-            'long': sorted(saved_context_1h_report.get('long', [])),
-            'short': sorted(saved_context_1h_report.get('short', [])),
         }
         # Nettoyer les assets hors watchlist chargés depuis Redis
         stale = [s for s in list(MOMENTUM_STATE.keys()) if s not in get_tracked_symbols()]
@@ -663,97 +642,6 @@ def send_info(msg):
             logger.error(f"❌ Info bot erreur {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
         logger.error(f"❌ Erreur info bot: {e}")
-
-
-def update_bias_rci_reports(timeframes=('12h', '1d')):
-    """Listes LONG/SHORT quand le Bias et le RCI extreme de la meme TF sont alignes."""
-    changed = False
-
-    for tf in timeframes:
-        if tf not in LAST_BIAS_RCI_REPORTS:
-            continue
-        long_symbols = []
-        short_symbols = []
-        with STATE_LOCK:
-            for symbol in sorted(get_tracked_symbols()):
-                state = MOMENTUM_STATE.get(symbol, {})
-                short_symbol = symbol.replace('/USDT', '')
-                if _bias_condition(state, tf, 'buy')[2] and _rci_extreme_quality(state, tf, 'buy')[2]:
-                    long_symbols.append(short_symbol)
-                elif _bias_condition(state, tf, 'sell')[2] and _rci_extreme_quality(state, tf, 'sell')[2]:
-                    short_symbols.append(short_symbol)
-
-            report = {'long': long_symbols, 'short': short_symbols}
-            report_changed = report != LAST_BIAS_RCI_REPORTS[tf]
-            if report_changed:
-                LAST_BIAS_RCI_REPORTS[tf] = report
-
-        if not report_changed:
-            continue
-        changed = True
-        long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
-        short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
-        send_info(
-            f"<b>[CONFLUENCE BIAS + RCI {tf.upper()}]</b>\n"
-            "--------------------\n"
-            f"🟢 <b>LONG ({len(long_symbols)})</b> : {long_text}\n"
-            f"🔴 <b>SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-            "RCI court extreme favorable (seuil +/-75). Liste mise a jour uniquement apres un changement."
-        )
-        logger.info(f"[BIAS RCI {tf.upper()} REPORT] LONG={long_symbols} SHORT={short_symbols}")
-
-    if changed:
-        persist_runtime_state()
-    return changed
-
-
-def update_context_1h_report():
-    """Listes LONG/SHORT des zones ST Context 1H actives et encore fraiches."""
-    global LAST_CONTEXT_1H_REPORT
-    long_symbols = []
-    short_symbols = []
-
-    with STATE_LOCK:
-        for symbol in sorted(get_tracked_symbols()):
-            state = MOMENTUM_STATE.get(symbol, {})
-            value = state.get('st_context_1h')
-            if not is_signal_fresh(state.get('st_context_1h_ts'), 3 * 3600):
-                continue
-            short_symbol = symbol.replace('/USDT', '')
-            if value == 'buy':
-                long_symbols.append(short_symbol)
-            elif value == 'sell':
-                short_symbols.append(short_symbol)
-
-        report = {'long': long_symbols, 'short': short_symbols}
-        if report == LAST_CONTEXT_1H_REPORT:
-            return False
-        LAST_CONTEXT_1H_REPORT = report
-
-    long_text = '  '.join(long_symbols) if long_symbols else 'Aucun'
-    short_text = '  '.join(short_symbols) if short_symbols else 'Aucun'
-    send_info(
-        "<b>[ST CONTEXT 1H ACTIF]</b>\n"
-        "--------------------\n"
-        f"🟢 <b>CONTEXT 1H LONG ({len(long_symbols)})</b> : {long_text}\n"
-        f"🔴 <b>CONTEXT 1H SHORT ({len(short_symbols)})</b> : {short_text}\n\n"
-        "Liste mise a jour uniquement apres un changement."
-    )
-    logger.info(f"[CONTEXT 1H REPORT] LONG={long_symbols} SHORT={short_symbols}")
-    persist_runtime_state()
-    return True
-
-
-def schedule_context_1h_report(delay=60):
-    """Regroupe les webhooks 1H proches avant de publier une seule liste."""
-    global CONTEXT_1H_REPORT_TIMER
-    with STATE_LOCK:
-        if CONTEXT_1H_REPORT_TIMER is not None:
-            CONTEXT_1H_REPORT_TIMER.cancel()
-        timer = threading.Timer(delay, update_context_1h_report)
-        timer.daemon = True
-        CONTEXT_1H_REPORT_TIMER = timer
-        timer.start()
 
 
 def update_zalt12h_report():
@@ -1292,7 +1180,6 @@ def process_webhook(data):
             elif tf == '1h':
                 m['st_context_1h'] = parsed_ctx
                 m['st_context_1h_ts'] = now_ts
-                schedule_context_1h_report()
             elif tf == '2h':
                 m['st_context_2h'] = parsed_ctx
                 m['st_context_2h_ts'] = now_ts
@@ -1316,8 +1203,6 @@ def process_webhook(data):
             if tf in ('30m', '2h', '4h', '1d'):
                 relay_bias_to_scalp(symbol, parsed_bias, tf)
             logger.info(f"[BIAS TV] {symbol} {tf}={parsed_bias or 'neutral'}")
-            if tf in ('12h', '1d'):
-                update_bias_rci_reports((tf,))
 
             if tf == '1d' and is_pulse_enabled() and is_pulse_symbol(symbol):
                 evaluate_pulse_v3(
@@ -3729,8 +3614,6 @@ def indicators_scheduler():
         for symbol in CONFIG['SYMBOLS']:
             update_indicators_for_symbol(symbol)
             time.sleep(0.5)  # rate limit OKX
-        update_bias_rci_reports()
-        update_context_1h_report()
         update_zalt12h_report()
         persist_runtime_state()
         logger.info("[OKX] Mise a jour indicateurs terminée")

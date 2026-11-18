@@ -1721,8 +1721,8 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
-        for rci_tf in ('30m', '1h', '2h', '4h'):
-            if rci_tf == '1h' and symbol not in SCALP_SYMBOLS:
+        for rci_tf in ('15m', '30m', '1h', '2h', '4h'):
+            if rci_tf in ('15m', '1h') and symbol not in SCALP_SYMBOLS:
                 continue
             rci_dir = m.get(f'rci_{rci_tf}_dir')
             rci10 = m.get(f'rci_{rci_tf}_10')
@@ -2502,7 +2502,11 @@ def update_okx_rci_quality(symbol, tf, timeframe_minutes):
         f"[RCI OKX {tf.upper()}] {symbol} 10={rci_values.get(10)} "
         f"30={rci_values.get(30)} 50={rci_values.get(50)} zone={direction or 'chop'}"
     )
-    if tf == '1h':
+    if tf == '15m':
+        if symbol in SCALP_SYMBOLS:
+            price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+            relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
+    elif tf == '1h':
         price = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
         if symbol in SCALP_SYMBOLS:
             relay_rci_to_scalp(symbol, tf, rci_values, direction, is_chop, False, price=price)
@@ -3703,6 +3707,8 @@ def update_indicators_for_symbol(symbol):
             return
         update_okx_bias_2h(symbol)
         update_okx_rci_30m(symbol)
+        if symbol in SCALP_SYMBOLS:
+            update_okx_rci_quality(symbol, '15m', 15)
         update_okx_rci_quality(symbol, '1h', 60)
         update_okx_rci_2h(symbol)
         update_okx_rci_quality(symbol, '4h', 4 * 60)

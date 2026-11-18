@@ -1721,7 +1721,9 @@ def sync_scalp():
             except Exception as e:
                 errors.append(f"{symbol}: {sync_label.upper()} {e}")
 
-        for rci_tf in ('30m', '1h', '2h', '4h'):
+        for rci_tf in ('5m', '30m', '1h', '2h', '4h'):
+            if rci_tf == '5m' and symbol not in SCALP_SYMBOLS:
+                continue
             if rci_tf == '1h' and symbol not in SCALP_SYMBOLS:
                 continue
             rci_dir = m.get(f'rci_{rci_tf}_dir')
@@ -3742,14 +3744,40 @@ def indicators_scheduler():
         time.sleep(max(60, wait))
 
 
+def update_okx_rci_5m_for_scalp(symbol):
+    """Calcule le RCI court sur la derniere bougie OKX 5m cloturee et le relaie."""
+    if symbol not in SCALP_SYMBOLS:
+        return
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '5m', limit=100), 5)
+    rci_values = calc_rci_multi(df, lengths=(10, 30, 50))
+    if rci_values[10] is None:
+        logger.warning(f"[RCI OKX 5m] {symbol}: donnees insuffisantes")
+        return
+    direction, is_chop = classify_rci_zone(rci_values[30], rci_values[50])
+    price = float(df['close'].iloc[-1])
+    with STATE_LOCK:
+        init_symbol_states(symbol)
+        m = MOMENTUM_STATE[symbol]
+        m['rci_5m_10'] = rci_values[10]
+        m['rci_5m_30'] = rci_values[30]
+        m['rci_5m_50'] = rci_values[50]
+        m['rci_5m_dir'] = direction
+        m['rci_5m_chop'] = is_chop
+        m['rci_5m_ts'] = time.time()
+        persist_runtime_state()
+    logger.info(f"[RCI OKX 5m] {symbol} 10={rci_values[10]} 30={rci_values[30]} 50={rci_values[50]}")
+    relay_rci_to_scalp(symbol, '5m', rci_values, direction, is_chop, False, price=price)
+
+
 def scalp_zalt_5m_scheduler():
-    """Calcule le ZALT 5m juste apres chaque cloture pour les cinq actifs Scalp."""
-    logger.info("[OKX] Scheduler ZALT 5m demarre (21/1.0)")
+    """Met a jour les indicateurs Scalp juste apres chaque cloture 5m."""
+    logger.info("[OKX] Scheduler Scalp 5m demarre (ZALT + RCI)")
     time.sleep(20)
     while True:
         for symbol in sorted(SCALP_SYMBOLS):
             try:
                 update_okx_zalt_5m(symbol)
+                update_okx_rci_5m_for_scalp(symbol)
             except Exception as e:
                 logger.error(f"[ZALT 5m] {symbol}: {e}")
             time.sleep(0.3)

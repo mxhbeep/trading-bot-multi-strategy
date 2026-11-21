@@ -1389,7 +1389,7 @@ def process_webhook(data):
             and (
                 tf == '30m'
                 or (symbol in SCALP_SYMBOLS and tf in ('5m', '15m'))
-                or (symbol == 'BTC/USDT' and tf in ('5m', '2h'))
+                or (symbol == 'BTC/USDT' and tf in ('1m', '5m', '2h'))
             )
         )
         if scalp_url and should_relay_scalp:
@@ -3636,11 +3636,47 @@ def update_okx_rci_5m_for_scalp(symbol):
     relay_rci_to_scalp(symbol, '5m', rci_values, direction, is_chop, False, price=price)
 
 
+def update_okx_btc_scalp_15m():
+    """Calcule les confirmations BTC 15m sur les bougies cloturees."""
+    symbol = 'BTC/USDT'
+    df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=250), 15)
+    if df is None:
+        return
+    bias = calc_bias_okx(df, ema_len=21, sma_len=55)
+    zalt = calc_zalt_from_ohlcv(df, length=45, mult=1.3)
+    if bias not in ('buy', 'sell') or not zalt or zalt['trend'] not in ('buy', 'sell'):
+        return
+    if not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not scalp_url:
+        return
+    for signal_type, value in (('bias', bias), ('zalt', zalt['trend'])):
+        try:
+            resp = requests.post(f"{scalp_url}/webhook", json={
+                'symbol': symbol, 'tf': '15m', 'type': signal_type,
+                'value': value, 'price': zalt['close'],
+                'event_id': f"okx_btc_{signal_type}_15m_{int(df['ts'].iloc[-1])}",
+            }, timeout=6)
+            if not 200 <= resp.status_code < 300:
+                logger.warning(f"[BTC SCALP 15m] {signal_type} relais HTTP {resp.status_code}")
+        except requests.RequestException as exc:
+            logger.warning(f"[BTC SCALP 15m] {signal_type} relais: {exc}")
+
+
 def scalp_zalt_5m_scheduler():
     """Met a jour les indicateurs Scalp juste apres chaque cloture 5m."""
     logger.info("[OKX] Scheduler Scalp 5m demarre (ZALT + RCI)")
     time.sleep(20)
+    last_btc_15m_bucket = None
     while True:
+        bucket = int(time.time() // (15 * 60))
+        if bucket != last_btc_15m_bucket:
+            try:
+                update_okx_btc_scalp_15m()
+                last_btc_15m_bucket = bucket
+            except Exception as e:
+                logger.error(f"[BTC SCALP 15m] {e}")
         for symbol in sorted(SCALP_SYMBOLS):
             try:
                 update_okx_zalt_5m(symbol)

@@ -1388,7 +1388,7 @@ def process_webhook(data):
             and (
                 tf == '30m'
                 or (symbol in SCALP_SYMBOLS and tf in ('5m', '15m'))
-                or (symbol == 'BTC/USDT' and tf in ('1m', '5m', '2h'))
+                or (symbol == 'BTC/USDT' and tf in ('3m', '5m', '2h'))
             )
         )
         if scalp_url and should_relay_scalp:
@@ -3636,13 +3636,19 @@ def update_okx_rci_5m_for_scalp(symbol):
 
 
 def update_okx_btc_scalp_15m():
-    """Calcule les confirmations BTC 15m sur les bougies cloturees."""
+    """Calcule les confirmations BTC 1H et le RCI 15m sur bougies cloturees."""
     symbol = 'BTC/USDT'
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=250), 15)
     if df is None:
         return
-    bias = calc_bias_okx(df, ema_len=21, sma_len=55)
-    zalt = calc_zalt_from_ohlcv(df, length=45, mult=1.3)
+    rci = calc_rci_multi(df, lengths=(10, 30, 50))
+    if rci[10] is not None:
+        relay_rci_to_scalp(symbol, '15m', rci, None, False, False, price=float(df['close'].iloc[-1]))
+    df_1h = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '1h', limit=250), 60)
+    if df_1h is None:
+        return
+    bias = calc_bias_okx(df_1h, ema_len=21, sma_len=55)
+    zalt = calc_zalt_from_ohlcv(df_1h, length=45, mult=1.3)
     if bias not in ('buy', 'sell') or not zalt or zalt['trend'] not in ('buy', 'sell'):
         return
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
@@ -3653,9 +3659,9 @@ def update_okx_btc_scalp_15m():
     for signal_type, value in (('bias', bias), ('zalt', zalt['trend'])):
         try:
             resp = requests.post(f"{scalp_url}/webhook", json={
-                'symbol': symbol, 'tf': '15m', 'type': signal_type,
+                'symbol': symbol, 'tf': '1h', 'type': signal_type,
                 'value': value, 'price': zalt['close'],
-                'event_id': f"okx_btc_{signal_type}_15m_{int(df['ts'].iloc[-1])}",
+                'event_id': f"okx_btc_{signal_type}_1h_{int(df_1h['ts'].iloc[-1])}",
             }, timeout=6)
             if not 200 <= resp.status_code < 300:
                 logger.warning(f"[BTC SCALP 15m] {signal_type} relais HTTP {resp.status_code}")

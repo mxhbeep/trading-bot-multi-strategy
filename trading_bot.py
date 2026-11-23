@@ -50,7 +50,6 @@ CONFIG = {
         'ENA/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'ETC/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': False},
         'ETH/USDT':    {'exchange': 'okx', 'scalp': True, 'pulse': True},
-        'ETHFI/USDT':  {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'FARTCOIN/USDT': {'exchange': 'okx', 'scalp': False, 'pulse': True, 'okx_inst_id': 'FARTCOIN-USDT-SWAP'},
         'FET/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
         'FIL/USDT':    {'exchange': 'okx', 'scalp': False, 'pulse': True},
@@ -760,8 +759,8 @@ def tv_required_signals():
             'label': 'ST Context 5m (Pulse / Swing)',
             'alert_type': 'st_context',
             'tf': '5m',
-            'max_age': 20 * 60,
-            'warmup': 30 * 60,
+            'max_age': 60 * 60,
+            'warmup': 60 * 60,
             'scope': 'trade',
         },
         {

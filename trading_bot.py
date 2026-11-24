@@ -2513,6 +2513,26 @@ def relay_bias_to_scalp(symbol, value, tf):
         logger.warning(f"[RELAY OKX BIAS {tf.upper()}] Erreur: {e}")
 
 
+def relay_zalt_4h_to_scalp(symbol, df):
+    """Relaie le ZALT 4H 55/1.2 pour Continuation A/B."""
+    if symbol not in SCALP_SYMBOLS or not CONFIG.get('ENABLE_SCALP_RELAY', False):
+        return
+    payload = calc_zalt_from_ohlcv(df, length=55, mult=1.2)
+    scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
+    if not payload or payload['trend'] not in ('buy', 'sell') or not scalp_url:
+        return
+    try:
+        resp = requests.post(f"{scalp_url}/webhook", json={
+            'symbol': symbol, 'tf': '4h', 'type': 'zalt',
+            'value': payload['trend'], 'price': payload['close'],
+            'event_id': f"okx_scalp_zalt_4h_{int(df['ts'].iloc[-1])}",
+        }, timeout=6)
+        if not 200 <= resp.status_code < 300:
+            logger.warning(f"[RELAY OKX ZALT 4H] {symbol} HTTP {resp.status_code}")
+    except requests.RequestException as exc:
+        logger.warning(f"[RELAY OKX ZALT 4H] {symbol}: {exc}")
+
+
 def update_okx_bias_2h(symbol):
     """Bias 2H calcule en interne pour les usages scalp."""
     if not is_trade_symbol(symbol):
@@ -2576,6 +2596,8 @@ def update_okx_bias_htf(symbol):
     if symbol in SCALP_SYMBOLS:
         relay_bias_to_scalp(symbol, bias_1h, '1h')
     relay_bias_to_scalp(symbol, bias_4h, '4h')
+    if df_4h is not None:
+        relay_zalt_4h_to_scalp(symbol, df_4h)
     relay_bias_to_scalp(symbol, bias_1d, '1d')
     daily_price = float(df_1d['close'].iloc[-1]) if df_1d is not None and not df_1d.empty else 0.0
     evaluate_daily(

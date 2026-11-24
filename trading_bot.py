@@ -1388,7 +1388,8 @@ def process_webhook(data):
             and (
                 tf == '30m'
                 or (symbol in SCALP_SYMBOLS and tf in ('5m', '15m'))
-                or (symbol == 'BTC/USDT' and tf in ('3m', '5m', '2h'))
+                or (symbol in SCALP_SYMBOLS and tf == '3m')
+                or (symbol == 'BTC/USDT' and tf in ('5m', '2h'))
             )
         )
         if scalp_url and should_relay_scalp:
@@ -3635,9 +3636,10 @@ def update_okx_rci_5m_for_scalp(symbol):
     relay_rci_to_scalp(symbol, '5m', rci_values, direction, is_chop, False, price=price)
 
 
-def update_okx_btc_scalp_15m():
-    """Calcule les confirmations BTC 1H et le RCI 15m sur bougies cloturees."""
-    symbol = 'BTC/USDT'
+def update_okx_btc_scalp_15m(symbol):
+    """Calcule les confirmations Scalp 1H et le RCI 15m sur bougies cloturees."""
+    if symbol not in SCALP_SYMBOLS:
+        return
     df = keep_confirmed_candles(fetch_ohlcv_okx(symbol, '15m', limit=250), 15)
     if df is None:
         return
@@ -3661,7 +3663,7 @@ def update_okx_btc_scalp_15m():
             resp = requests.post(f"{scalp_url}/webhook", json={
                 'symbol': symbol, 'tf': '1h', 'type': signal_type,
                 'value': value, 'price': zalt['close'],
-                'event_id': f"okx_btc_{signal_type}_1h_{int(df_1h['ts'].iloc[-1])}",
+                'event_id': f"okx_scalp_{signal_type}_1h_{int(df_1h['ts'].iloc[-1])}",
             }, timeout=6)
             if not 200 <= resp.status_code < 300:
                 logger.warning(f"[BTC SCALP 15m] {signal_type} relais HTTP {resp.status_code}")
@@ -3678,7 +3680,11 @@ def scalp_zalt_5m_scheduler():
         bucket = int(time.time() // (15 * 60))
         if bucket != last_btc_15m_bucket:
             try:
-                update_okx_btc_scalp_15m()
+                for symbol in sorted(SCALP_SYMBOLS):
+                    try:
+                        update_okx_btc_scalp_15m(symbol)
+                    except Exception as e:
+                        logger.error(f"[SCALP 15m] {symbol}: {e}")
                 last_btc_15m_bucket = bucket
             except Exception as e:
                 logger.error(f"[BTC SCALP 15m] {e}")

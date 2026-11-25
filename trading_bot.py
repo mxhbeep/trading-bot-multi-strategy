@@ -3673,18 +3673,21 @@ def update_okx_btc_scalp_15m(symbol):
         return
     bias = calc_bias_okx(df_1h, ema_len=21, sma_len=55)
     zalt = calc_zalt_from_ohlcv(df_1h, length=45, mult=1.3)
-    if bias not in ('buy', 'sell') or not zalt or zalt['trend'] not in ('buy', 'sell'):
-        return
     if not CONFIG.get('ENABLE_SCALP_RELAY', False):
         return
     scalp_url = normalize_base_url(os.environ.get('SCALP_BOT_URL', ''))
     if not scalp_url:
         return
-    for signal_type, value in (('bias', bias), ('zalt', zalt['trend'])):
+    signals = []
+    if bias in ('buy', 'sell'):
+        signals.append(('bias', bias))
+    if zalt and zalt['trend'] in ('buy', 'sell'):
+        signals.append(('zalt', zalt['trend']))
+    for signal_type, value in signals:
         try:
             resp = requests.post(f"{scalp_url}/webhook", json={
                 'symbol': symbol, 'tf': '1h', 'type': signal_type,
-                'value': value, 'price': zalt['close'],
+                'value': value, 'price': float(df_1h['close'].iloc[-1]),
                 'event_id': f"okx_scalp_{signal_type}_1h_{int(df_1h['ts'].iloc[-1])}",
             }, timeout=6)
             if not 200 <= resp.status_code < 300:

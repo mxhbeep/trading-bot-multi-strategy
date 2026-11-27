@@ -114,7 +114,7 @@ CONFIG = {
     'ENABLE_PULSE_V7': os.environ.get('ENABLE_PULSE_V7', os.environ.get('ENABLE_PULSE_V6', '1')) == '1',
     'ENABLE_DAILY': True,
     'ENABLE_SWING': True,
-    'ENABLE_REVERSAL': True,
+    'ENABLE_REVERSAL': False,
     'ENABLE_RCI_CONTEXT': False,
     'ENABLE_SCALP_RELAY': True,
 }
@@ -698,9 +698,9 @@ def send_start_notification():
         "SWING CONFIRMATION: Bias 4H, CTX 4H ou RCI 12H extreme favorable\n"
         "SWING ENTREE: nouvelle zone CTX 5m; RCI 12H = qualite\n"
         "SWING B: ZALT 1D + RCI 12H et 2H extremes + CTX 30m; entree nouvelle zone CTX 5m\n"
-        "PULSE PREP: Bias 1D + RCI 4H extreme\n"
-        "PULSE ENTREE: CTX 30m/5m alignes; RCI 12H extreme ou CTX 4H = qualite\n"
-        "REVERSAL PREP: CTX 1D/4H + RCI 4H/1D extremes; entree CTX 1H\n"
+        "PULSE PREP: Bias 1D + RCI 12H ou 1D extreme\n"
+        "PULSE ENTREE: CTX 30m/5m alignes; RCI 1D extreme ou CTX 4H = qualite\n"
+        "REVERSAL: en pause\n"
         "RAPPORTS INFO: ST Context 1H actif; Bias + RCI alignes en 12H et 1D\n"
         "RAPPORT INFO: listes ZALT 12H LONG / SHORT\n"
         "RCI CONTEXT: strategie en pause\n"
@@ -1314,7 +1314,7 @@ def process_webhook(data):
         # SWING : PREP ZALT 12H + CTX 30m + RCI 4H extreme.
         #         CTX 4H ou CTX 1H aligne donne le niveau qualite.
         #         Entree sur nouvelle zone CTX 5m alignee.
-        # PULSE : PREP Bias 1D + RCI 4H; entree CTX 30m/5m.
+        # PULSE : PREP Bias 1D + RCI 12H ou 1D; entree CTX 30m/5m.
         # REVERSAL : PREP CTX 1D + CTX 4H + RCI 4H/1D; entree sur nouveau CTX 1H.
         # RCI CONTEXT : PREP RCI 1D + CTX 4H + RCI 1H; entree sur nouveau CTX 1H.
         # ========================================================================
@@ -2657,7 +2657,7 @@ def _open_strategy_entry(
             'opened_at': time.time(), 'invalid_since': None,
         }
     emoji = "\U0001f7e2" if direction == 'LONG' else "\U0001f534"
-    telegram_channel = 'telegram_scalp2h' if strategy.startswith('PULSE') else 'telegram_alerts'
+    telegram_channel = 'telegram_alerts'
     strategy_label = strategy.replace('_', ' ')
     alert_kind = 'QUALITE' if quality else 'ENTREE'
     ntfy_enabled = strategy in ('PULSE', 'SWING', 'SWING_B', 'REVERSAL', 'RCI_CONTEXT')
@@ -3416,7 +3416,7 @@ def _evaluate_swing_a(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
 
 
 def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, event_id=None, source='state_refresh'):
-    """PULSE: PREP Bias 1D + RCI 4H extreme; entree CTX 30m/5m."""
+    """PULSE: PREP Bias 1D + RCI 12H ou 1D extreme; entree CTX 30m/5m."""
     if not is_pulse_enabled() or not is_pulse_symbol(symbol):
         return False
     init_symbol_states(symbol)
@@ -3428,7 +3428,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         exp = _trade_direction_to_ctx(pos.get('direction'))
         position_valid = (
             _bias_condition(m, '1d', exp)[2]
-            and _rci_extreme_quality(m, '4h', exp)[2]
+            and (_rci_extreme_quality(m, '12h', exp)[2] or _rci_extreme_quality(m, '1d', exp)[2])
         )
         _refresh_logical_position(symbol, 'PULSE', position_valid, 2 * 3600, 'confluence Pulse absente')
 
@@ -3443,12 +3443,12 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         ctx12h, ctx12h_fresh, ctx12h_ok = _st_context_condition(m, '12h', exp_ctx)
         bias1d, bias1d_fresh, bias1d_ok = _bias_condition(m, '1d', exp_ctx)
         rci12h, rci12h_fresh, rci12h_ok = _rci_extreme_quality(m, '12h', exp_ctx)
-        rci4h, rci4h_fresh, rci4h_ok = _rci_extreme_quality(m, '4h', exp_ctx)
-        armed = bias1d_ok and rci4h_ok
+        rci1d, rci1d_fresh, rci1d_ok = _rci_extreme_quality(m, '1d', exp_ctx)
+        armed = bias1d_ok and (rci12h_ok or rci1d_ok)
         entry_ok = armed and ctx30m_ok and ctx5m_ok
-        pulse_quality_ok = bool(rci12h_ok or ctx4h_ok)
+        pulse_quality_ok = bool(rci1d_ok or ctx4h_ok)
         pulse_quality_signature = '+'.join(
-            name for name, enabled in (('rci12h', rci12h_ok), ('ctx4h', ctx4h_ok)) if enabled
+            name for name, enabled in (('rci1d', rci1d_ok), ('ctx4h', ctx4h_ok)) if enabled
         )
         with STATE_LOCK:
             pulse_position_open = bool(SCALP_POSITIONS.get(f"{symbol}_PULSE"))
@@ -3489,8 +3489,8 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
         if send_prep:
             prep_level = " - QUALITE" if pulse_quality_ok else ""
             quality_lines = []
-            if rci12h_ok:
-                quality_lines.append(f"[QUALITE] RCI court 12H extreme favorable: {rci12h:.1f}")
+            if rci1d_ok:
+                quality_lines.append(f"[QUALITE] RCI court 1D extreme favorable: {rci1d:.1f}")
             if ctx4h_ok:
                 quality_lines.append(f"[QUALITE] ST Context 4H aligne: {_ctx_label(ctx4h)}")
             quality_text = ("\n" + "\n".join(quality_lines)) if quality_lines else ""
@@ -3500,20 +3500,20 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 f"Direction: {direction}\n"
                 f"Price: ${format_price(price)}\n"
                 f"[OK] Bias 1D: {_ctx_label(bias1d)}\n"
-                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}\n"
+                f"[OK] RCI court 12H ou 1D extreme favorable: {'12H ' + format(rci12h, '.1f') if rci12h_ok else '1D ' + format(rci1d, '.1f')}\n"
                 f"{quality_text}\n"
                 "[ATTENTE] ST Context 30m/5m alignes"
             )
             send_notification(
                 notification_title_from_message(prep_message), prep_message,
                 priority=5, tags=[], telegram=True, ntfy=True,
-                telegram_channel='telegram_scalp2h',
+                telegram_channel='telegram_alerts',
             )
             logger.info(f"[PREP PULSE] {symbol} {direction}")
         if send_quality:
             quality_lines = []
-            if rci12h_ok:
-                quality_lines.append(f"[QUALITE] RCI court 12H extreme favorable: {rci12h:.1f}")
+            if rci1d_ok:
+                quality_lines.append(f"[QUALITE] RCI court 1D extreme favorable: {rci1d:.1f}")
             if ctx4h_ok:
                 quality_lines.append(f"[QUALITE] ST Context 4H aligne: {_ctx_label(ctx4h)}")
             quality_message = (
@@ -3522,17 +3522,17 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 f"Direction: {direction}\n"
                 f"Price: ${format_price(price)}\n"
                 f"[OK] Bias 1D: {_ctx_label(bias1d)}\n"
-                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}\n"
+                f"[OK] RCI court 12H ou 1D extreme favorable: {'12H ' + format(rci12h, '.1f') if rci12h_ok else '1D ' + format(rci1d, '.1f')}\n"
                 + "\n".join(quality_lines) + "\n"
                 "[ATTENTE] ST Context 30m/5m alignes"
             )
             send_notification(
                 notification_title_from_message(quality_message), quality_message,
                 priority=5, tags=[], telegram=True, ntfy=True,
-                telegram_channel='telegram_scalp2h',
+                telegram_channel='telegram_alerts',
             )
             logger.info(
-                f"[QUALITE PULSE] {symbol} {direction} rci12h={rci12h_ok} ctx4h={ctx4h_ok}"
+                f"[QUALITE PULSE] {symbol} {direction} rci1d={rci1d_ok} ctx4h={ctx4h_ok}"
             )
         (logger.info if VERBOSE_CHECKS or armed or entry_ok else logger.debug)(
             f"[PULSE CHECK] {symbol} source={source} dir={direction} "
@@ -3542,7 +3542,7 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             f"ctx4h={ctx4h}/{ctx4h_ok} ctx4h_fresh={ctx4h_fresh} "
             f"ctx12h={ctx12h}/{ctx12h_ok} ctx12h_fresh={ctx12h_fresh} "
             f"rci12h={rci12h} fresh={rci12h_fresh} ok={rci12h_ok} "
-            f"rci4h={rci4h} fresh={rci4h_fresh} ok={rci4h_ok} "
+            f"rci1d={rci1d} fresh={rci1d_fresh} ok={rci1d_ok} "
             f"armed={armed} entry={entry_ok}"
         )
 
@@ -3551,14 +3551,16 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
             detail_lines = [
                 "[OK] Entree PULSE",
                 f"[OK] Bias 1D: {_ctx_label(bias1d)}",
-                f"[OK] RCI court 4H extreme favorable: {rci4h:.1f}",
+                f"[OK] RCI court 12H ou 1D extreme favorable: {'12H ' + format(rci12h, '.1f') if rci12h_ok else '1D ' + format(rci1d, '.1f')}",
                 f"[TRIGGER] ST Context 30m: {_ctx_label(ctx30m)}",
                 f"[TRIGGER] ST Context 5m: {_ctx_label(ctx5m)}",
             ]
-            if rci12h_ok:
-                detail_lines.append(f"[QUALITE] RCI court 12H extreme favorable: {rci12h:.1f}")
+            if rci1d_ok:
+                detail_lines.append(f"[QUALITE] RCI court 1D extreme favorable: {rci1d:.1f}")
             if ctx4h_ok:
                 detail_lines.append(f"[QUALITE] ST Context 4H aligne: {_ctx_label(ctx4h)}")
+            elif ctx4h_fresh and ctx4h in ('buy', 'sell'):
+                detail_lines.append(f"[AVERTISSEMENT NON BLOQUANT] ST Context 4H: {_ctx_label(ctx4h)} oppose")
             if ctx12h_ok:
                 detail_lines.append(f"[FORTE CONFLUENCE] ST Context 12H: {_ctx_label(ctx12h)}")
             elif ctx12h_fresh and ctx12h in ('buy', 'sell'):
@@ -3569,13 +3571,13 @@ def evaluate_pulse_v3(symbol, trigger_dir=None, price=0.0, exchange_name=None, e
                 symbol,
                 'PULSE',
                 direction,
-                'pulse_bias1d_rci4h_ctx30m_ctx5m',
+                'pulse_bias1d_rci12h_or_1d_ctx30m_ctx5m',
                 event_key,
                 price,
                 exchange_name,
                 detail_lines,
                 cooldown=3600,
-                quality=bool(rci12h_ok or ctx4h_ok),
+                quality=pulse_quality_ok,
             ) or opened
     if state_changed:
         persist_runtime_state()
